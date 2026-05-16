@@ -658,3 +658,49 @@ Test (Arm B): test_single_in_dist=53.55, test_geom_camber_rc=56.79, test_geom_ca
 - **Metrics:** student PR comment
 - **Decision:** CLOSED no_improvement. Lion-internal momentum axis is now fully closed: β1=0.90 optimal (PR #3949, β1=0.95 +9.8%), β2=0.99 optimal (this PR, β2=0.95 +27%). Both defaults confirmed optimal under the current 10-mech stack.
 - **Key finding:** β2=0.95 gives a ~14-step momentum half-life — Lion "forgets" gradient direction every 14 steps. Under T_max=30's steep annealing and pw=2.0's channel asymmetry, this is far too reactive: the model cannot build stable gradient consensus and oscillates. The default β2=0.99 (~69-step half-life) is well-matched to this regime. Physical intuition confirmed: the lion momentum buffer needs enough history to distinguish noise from signal, especially with asymmetric pressure/velocity loss weighting.
+
+---
+
+## 2026-05-16 21:30 — PR #4016: Tighter MLP/output grad-clip (other=0.5,0.3) on 10-mech stack
+
+- **Branch:** charliepai2i48h2-fern/tighter-mlp-clip
+- **Hypothesis:** MLP/output gradients are ~4-6× larger than attention gradients (confirmed by #3725 diagnostic). Per-group clipping with tighter `other_grad_norm` (0.5, 0.3) vs single-clip(1.0) should reduce noise in the dominant gradient group and improve convergence.
+- **Metrics committed:**
+  - `models/model-charliepai2i48h2-fern-tighter-mlp-clip-sanity-20260516-193051/metrics.jsonl`
+  - `models/model-charliepai2i48h2-fern-tighter-mlp-clip-A-20260516-200539/metrics.jsonl`
+  - `models/model-charliepai2i48h2-fern-tighter-mlp-clip-B-20260516-203955/metrics.jsonl`
+
+| Arm | other_grad_norm | Best epoch | val_avg | test_avg | Δ vs baseline (44.24) |
+|-----|-----------------|-----------|---------|---------|----------------------|
+| Sanity (1.0, 1.0) | 1.0 | 33 | 43.38 | 37.15 | −1.95% |
+| Arm A (1.0, 0.5) | 0.5 | 33 | 45.94 | 40.11 | +3.84% |
+| Arm B (1.0, 0.3) | 0.3 | 32 | 44.60 | 38.99 | +0.81% |
+
+Gradient diagnostic (pre-clip means): attn ≈ 3-55×, other ≈ 13-200× — ratio stable at 4-6× throughout training.
+
+- **Decision:** CLOSED no_improvement. Arms A/B regressed: tighter `other_grad_norm` discards useful signal from the dominant MLP/output group. Sanity arm (43.38) within ~1.17-pt noise floor of baseline (44.24).
+
+- **Key finding:** Per-group(1.0, 1.0) is mathematically different from single-clip(1.0): with attn≈3, other≈18, single-clip gives attn only 0.16 effective magnitude while per-group gives attn full 1.0. This rebalancing is a promising avenue. Follow-up PR #4154 tests loosening `other_grad_norm` above 1.0 (1.5, 2.0) to explore the inverse direction.
+
+---
+
+## 2026-05-16 21:35 — PR #3953: LR × T_max re-calibration for 33-epoch compile horizon
+
+- **Branch:** charliepai2i48h2-frieren/lr-tmax-coupling
+- **Hypothesis:** Under the 18-epoch pre-compile budget, lr=1.7e-4 + T_max=30 was optimal. The compile stack gives 33 epochs. With more training time and a gentler annealing slope, a higher lr_init (2.1e-4, 2.5e-4) combined with a recalibrated T_max=40 should outperform the inherited 10-mech config.
+- **Metrics committed:**
+  - `models/model-charliepai2i48h2-frieren-lr-tmax-coupling-compile-tmax40-21e4-20260516-192650/metrics.jsonl` (Arm A)
+  - `models/model-charliepai2i48h2-frieren-lr-tmax-coupling-compile-tmax40-25e4-20260516-202729/metrics.jsonl` (Arm B)
+
+| Arm | lr | T_max | Best epoch | val_avg | test_avg | Δ vs baseline (44.24) |
+|-----|----|----|-----------|---------|---------|----------------------|
+| Arm A (2.1e-4) | 2.1e-4 | 40 | 33 | 41.01 | 35.90 | −7.30% |
+| **Arm B (2.5e-4) — WINNER** | 2.5e-4 | 40 | 33 | **40.69** | **34.98** | **−8.04%** |
+
+Per-split (Arm B): val 44.58 / 54.52 / 23.73 / 39.91 → avg 40.69; test 38.09 / 48.19 / 19.99 / 33.64 → avg 34.98. Arm B better on 3/4 val splits and 4/4 test splits. Both trajectories smooth, still descending at epoch 33.
+
+- **Decision:** MERGED as strong win (−8.04%, both arms clear strong-win threshold val < 41.6). New baseline: val=40.6869. 11th compounding mechanism.
+
+- **Key finding:** LR × schedule coupling confirmed directionally across three regimes (T_max=80: lr=2.5e-4 regressed +2.74%; T_max=30/18ep: within noise; T_max=40/33ep + compile: −8%). The confound between T_max and lr is acknowledged — edward's #4079 (pure T_max at lr=1.7e-4) will isolate T_max. Frieren assigned #4159 (T_max fine-sweep at lr=2.5e-4).
+
+- **Cumulative improvement:** 135.02 → 40.69 = **−69.8%**
