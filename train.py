@@ -260,21 +260,43 @@ def invert_asinh_p(pred, scale):
     return out
 
 
+def apply_asinh_vel(y_norm, scale):
+    """Compress the velocity channels (Ux=0, Uy=1) of a normalized target tensor with asinh."""
+    if scale <= 0:
+        return y_norm
+    y = y_norm.clone()
+    y[..., 0] = torch.asinh(y_norm[..., 0] * scale) / scale
+    y[..., 1] = torch.asinh(y_norm[..., 1] * scale) / scale
+    return y
+
+
+def invert_asinh_vel(pred, scale):
+    """Inverse of apply_asinh_vel; clamps before sinh to avoid overflow."""
+    if scale <= 0:
+        return pred
+    out = pred.clone()
+    out[..., 0] = torch.sinh(pred[..., 0].clamp(-10, 10) * scale) / scale
+    out[..., 1] = torch.sinh(pred[..., 1].clamp(-10, 10) * scale) / scale
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
 def evaluate_split(model, loader, stats, surf_weight, device,
-                   asinh_p_scale: float = 0.0) -> dict[str, float]:
+                   asinh_p_scale: float = 0.0,
+                   asinh_vel_scale: float = 0.0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
 
-    When ``asinh_p_scale > 0`` the model predicts in asinh-compressed normalized
-    space on the pressure channel; we mirror the training loss target via
-    ``apply_asinh_p`` and invert the prediction with ``invert_asinh_p`` BEFORE
+    When ``asinh_p_scale > 0`` (resp. ``asinh_vel_scale > 0``) the model predicts
+    in asinh-compressed normalized space on the pressure channel (resp. the Ux/Uy
+    channels); we mirror the training loss target via ``apply_asinh_p`` /
+    ``apply_asinh_vel`` and invert the prediction with ``invert_asinh_*`` BEFORE
     denormalizing for the MAE accumulator.
     """
     vol_loss_sum = surf_loss_sum = 0.0
@@ -292,6 +314,7 @@ def evaluate_split(model, loader, stats, surf_weight, device,
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             y_target = apply_asinh_p(y_norm, asinh_p_scale)
+            y_target = apply_asinh_vel(y_target, asinh_vel_scale)
             pred = model({"x": x_norm})["preds"]
 
             sq_err = (pred - y_target) ** 2
@@ -308,6 +331,7 @@ def evaluate_split(model, loader, stats, surf_weight, device,
             n_batches += 1
 
             pred_norm = invert_asinh_p(pred, asinh_p_scale)
+            pred_norm = invert_asinh_vel(pred_norm, asinh_vel_scale)
             pred_orig = pred_norm * stats["y_std"] + stats["y_mean"]
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
@@ -445,6 +469,7 @@ class Config:
     huber_delta: float = 0.0  # Huber transition in normalized space; 0 = MSE
     ema_decay: float = 0.999  # EMA decay rate; smaller = faster shadow tracking
     asinh_p_scale: float = 0.0  # 0 disables; >0 enables asinh on pressure channel
+    asinh_vel_scale: float = 0.0  # 0 disables; >0 enables asinh on Ux/Uy channels
     use_swiglu: bool = False  # swap GELU MLP for SwiGLU gated MLP inside TransolverBlocks
     mlp_ratio: float = 2.0  # hidden expansion ratio for the MLP/SwiGLU block; float allows param-match (e.g. 1.333)
 
@@ -556,6 +581,7 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         y_target = apply_asinh_p(y_norm, cfg.asinh_p_scale)
+        y_target = apply_asinh_vel(y_target, cfg.asinh_vel_scale)
         pred = model({"x": x_norm})["preds"]
         if cfg.debug and global_step == 0 and cfg.asinh_p_scale > 0:
             with torch.no_grad():
@@ -613,7 +639,8 @@ for epoch in range(MAX_EPOCHS):
     ema_model.eval()
     split_metrics = {
         name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device,
-                             asinh_p_scale=cfg.asinh_p_scale)
+                             asinh_p_scale=cfg.asinh_p_scale,
+                             asinh_vel_scale=cfg.asinh_vel_scale)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -695,7 +722,8 @@ if best_metrics:
         }
         test_metrics = {
             name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
-                                 asinh_p_scale=cfg.asinh_p_scale)
+                                 asinh_p_scale=cfg.asinh_p_scale,
+                                 asinh_vel_scale=cfg.asinh_vel_scale)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
