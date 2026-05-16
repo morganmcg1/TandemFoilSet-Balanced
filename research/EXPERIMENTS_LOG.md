@@ -1,5 +1,21 @@
 # SENPAI Research Results
 
+## 2026-05-16 07:35 — Round-5 partial close: 3 PRs closed, 5 still running
+
+| PR | Student | Hypothesis | val_avg / outcome | Notes |
+|---|---|---|---|---|
+| #3757 | tanjiro | Pre-LN swap | Closed — **already implemented in baseline** | TransolverBlock is already `sublayer(LN(x)) + x` with `ln_3` in last block as final LN. Student correctly read code before running and surfaced the no-op. Reassigned to RMSNorm (#3778). |
+| #3393 | thorfinn | Per-channel surf_p_weight=1.0 on BF16 baseline (6 seeds) | Closed — **failure to stack** | Mean 90.98 (+3.36 vs 87.62), 5/6 seeds regress, single_in_dist hit hardest (+7.31). Mechanism that worked on OLD Huber-only baseline does not survive BF16+cosine. Reassigned to Re-stratified loss (#3779). |
+| #3709 | nezuko | Cosine T_max=25 | Closed — **stale_wip** (11h+ no training output) | Round-4 holdover, low-priority schedule tweak. Reassigned to focal surface loss (#3780). |
+
+### Cross-experiment signals from round-5 partial close
+
+1. **The student reading the code before running is a valuable defensive behavior.** Tanjiro's catch on Pre-LN saved a GPU-hour and prompted a better hypothesis (RMSNorm).
+2. **Per-channel surf_p weighting is exhausted on the current baseline.** What worked on Huber-only (-1.79 at extra=1.0) regresses by +3.36 on BF16+cosine. The asymmetric harder-on-single_in_dist pattern is the same as round-4's softer-attention pattern — single foils are hyper-sensitive to ANY redistribution of loss away from their gradients. **Future loss experiments should target single foils SPECIFICALLY (e.g., Re-stratified weight; focal weight; per-domain norm).** Round-5 PRs #3753 (DSDF clip), #3754 (per-domain norm), and the new #3779 (Re-strat loss), #3780 (focal loss) all do this.
+3. **Multi-seed reporting (6 seeds) is high-value.** thorfinn's σ=2.77 spread (vs our nominal σ=0.79 single-seed estimate) suggests the seed variance is environment-dependent. Single-seed results within ±2σ should be treated with extra caution.
+
+---
+
 ## 2026-05-16 05:55 — Round-4 batch close: 5 hypotheses, none beat baseline
 
 All 5 round-4 ideas tested. Baseline `val_avg/mae_surf_p = 87.62` (σ=0.79 from PR #3238 variance study). None won.

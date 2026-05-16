@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-16 ~07:25 UTC
+- **Last updated**: 2026-05-16 ~07:40 UTC
 - **Branch**: `icml-appendix-charlie-pai2i-24h-r3`
 - **Target**: TandemFoilSet 2D CFD surrogate; Transolver
 - **Primary metric**: `val_avg/mae_surf_p` — lower is better
@@ -40,9 +40,10 @@
 
 | # | Student | Slug | Status | Hypothesis |
 |---|---|---|---|---|
-| #3393 | thorfinn | `surf-p-channel-weight` | WIP — under nudge | 2-hour deadline expires 08:33 UTC; pod alive on right branch but idle |
-| #3709 | nezuko | `cosine-t-max-25` | WIP — round-4 holdover | schedule extension; still running |
-| **#3759** | **askeladd** | **`per-point-temp`** | **WIP — NEW round 6 (rank 1)** | Per-point adaptive slice temperature (Transolver++) — targets val_single_in_dist |
+| **#3759** | **askeladd** | **`per-point-temp`** | **WIP — round 6 (rank 1)** | Per-point adaptive slice temperature (Transolver++) — targets val_single_in_dist |
+| **#3778** | **tanjiro** | **`rmsnorm`** | **WIP — NEW round 6** | RMSNorm replacement for LayerNorm — LLaMA-family normalization, BF16 stability |
+| **#3779** | **thorfinn** | **`re-stratified-loss`** | **WIP — NEW round 6 (rank 5)** | log(Re)-weighted surface loss per sample — physical hardness proxy targets single_in_dist |
+| **#3780** | **nezuko** | **`focal-loss`** | **WIP — NEW round 6 (rank 10)** | EMA per-sample focal weight γ=2 — adaptive Kaggle-style hard-sample focus |
 | **#3753** | **alphonse** | **`dsdf-clip`** | **WIP — NEW round 5** | clip dims 4-11 at ±3σ — outlier reduction targets single_in_dist |
 | **#3754** | **edward** | **`per-domain-norm`** | **WIP — NEW round 5** | split y_mean/y_std for single vs tandem — directly targets single_in_dist regression |
 | **#3755** | **fern** | **`swa`** | **WIP — NEW round 5** | Stochastic Weight Averaging on cosine plateau — OOD camber generalization |
@@ -54,6 +55,9 @@
 | # | Student | Slug | Outcome |
 |---|---|---|---|
 | #3235 | askeladd | local-re-feature | Closed — 5h stale post-rebase-nudge; saf_norm result valuable (-9.7% on OLD baseline) but never re-validated on current. Reassigned to per-point-temp |
+| #3757 | tanjiro | pre-ln | Closed — baseline already Pre-LN with built-in final LN; student caught no-op before running. Reassigned to RMSNorm |
+| #3393 | thorfinn | surf-p-channel-weight | Closed — 6 seeds mean 90.98 (+3.36); per-channel weighting fails to stack with BF16. Reassigned to Re-stratified loss |
+| #3709 | nezuko | cosine-t-max-25 | Closed — 11h+ stale, no training output; low-priority schedule tweak. Reassigned to focal loss |
 
 ## Round-4 closed (none merged — all within seed σ=0.79 of baseline)
 
