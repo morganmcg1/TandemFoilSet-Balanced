@@ -94,6 +94,16 @@ class SwiGLU(nn.Module):
         return self.W2(F.silu(self.W1(x)) * self.V(x))
 
 
+class LayerScale(nn.Module):
+    # Per-channel learnable residual scale (Touvron et al. 2021, CaiT).
+    def __init__(self, dim, init_value=1e-4):
+        super().__init__()
+        self.gamma = nn.Parameter(init_value * torch.ones(dim))
+
+    def forward(self, x):
+        return self.gamma * x
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -152,7 +162,8 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 ffn_type="gelu", ffn_hidden_inner=None):
+                 ffn_type="gelu", ffn_hidden_inner=None,
+                 layer_scale_init=1e-4):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -172,6 +183,8 @@ class TransolverBlock(nn.Module):
                            n_layers=0, res=False, act=act)
         else:
             raise ValueError(f"Unknown ffn_type: {ffn_type}")
+        self.ls1 = LayerScale(hidden_dim, init_value=layer_scale_init)
+        self.ls2 = LayerScale(hidden_dim, init_value=layer_scale_init)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -180,8 +193,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = self.ls1(self.attn(self.ln_1(fx))) + fx
+        fx = self.ls2(self.mlp(self.ln_2(fx))) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
