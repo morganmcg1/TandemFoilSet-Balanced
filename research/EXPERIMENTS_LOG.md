@@ -591,3 +591,27 @@ Per-split test: lr=2e-3 wins on `test_re_rand` (60.89) and `test_geom_camber_rc`
 **Decision: REQUEST CHANGES — rebase onto EMA+SOAP, re-run lr=2e-3 vs lr=1e-3 baseline.**
 
 Within-PR: lr=2e-3 wins by −3.2% on val and −4.5% on test. SOAP's preconditioner safely absorbs a 2× hotter peak LR; the directional pattern (5e-4 → 1e-3 → 2e-3) is monotonic on test. Sent back for compounding test on EMA+SOAP stack with seed=42.
+
+---
+
+## 2026-05-16 03:55 — PR #3497 (tanjiro): Gradient clipping {1.0, 5.0, no-clip} — **REQUEST CHANGES (rebase EMA+SOAP, +clip=10 probe)**
+
+- Branch: `willowpai2i48h3-tanjiro/gradient-clip-sweep`
+- W&B group: `gradient-clip-sweep`
+- 3 arms, seed=42
+
+**Result (within-PR ranking by val_avg/mae_surf_p, lower is better):**
+
+| Arm | grad_clip | val_avg | test_avg (excl cruise) | best_epoch | W&B |
+|---|---|---|---|---|---|
+| baseline-noclip-s42 | 0.0 | 82.03 | 79.91 | 12 | nhhxgmqh |
+| variant-clip1 | 1.0 | 74.26 (−9.5%) | 72.34 (−9.5%) | 13 | mgc412en |
+| **variant-clip5** | **5.0** | **72.12 (−12.1%)** ⬅ best | **71.10 (−11.0%)** | 14 | 67vwcrcl |
+
+Per-test-split (clip5 vs baseline): test_single_in_dist 71.65 vs 92.00 (**−22.1%**), test_geom_camber_rc 79.64 vs 81.40, test_re_rand 62.02 vs 66.32 (−6.5%).
+
+**Diagnostic from train/grad_norm logging:** raw gradient median ~26, p95 ~92, p99 ~147, max ~300. Both clip=1 (100% steps clipped) and clip=5 (95.55% steps clipped) are very active interventions. The fact that clip=5 > clip=1 suggests less-aggressive clipping (preserving more typical-step magnitude while still capping outlier spikes) is the right knob.
+
+**Decision: REQUEST CHANGES — rebase onto EMA+SOAP, run 3 arms (no-clip baseline, clip=5, clip=10 probe).**
+
+Within-PR: −12.08% on val is the largest signal of round-3 sweeps. If clip=5 compounds even partially on EMA+SOAP (currently 61.43), this could land ~54-56. The clip=10 arm probes whether less aggressive clipping (still well under median grad_norm ~26) preserves even more signal.

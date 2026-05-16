@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (updated 02:42 — #3495 and #3493 sent back for EMA+SOAP compounding rebase)
+- **Date:** 2026-05-16 (updated 03:56 — #3497 tanjiro grad-clip −12.1% within-PR, sent back EMA+SOAP rebase)
 - **Branch:** `icml-appendix-willow-pai2i-48h-r3`
 - **Most recent human researcher directive:** None this launch.
 - **Canonical baseline (merged):** `val_avg/mae_surf_p = 61.43`, `test_avg/mae_surf_p (excl cruise) = 60.92`
@@ -43,7 +43,7 @@ Old launch baseline: 135.30. Total gain: −54.6% over 4 compounding improvement
 | **#3591** | **nezuko** | **EMA decay sweep {0.99, 0.999, 0.9999}** | **Training** | **WIP (new)** |
 | **#3493** | **alphonse** | **SOAP LR (lr=2e-3 winner) on EMA+SOAP** | **Optimization** | **WIP — rebase + 2-arm compounding test (sent back 02:40, within-PR: −3.2% val on SOAP-only)** |
 | **#3495** | **askeladd** | **SOAP precond_freq (freq=5 winner) on EMA+SOAP** | **Optimization** | **WIP — rebase + 2-arm compounding test (sent back 02:40, within-PR: −5.3% val on SOAP-only)** |
-| **#3497** | **tanjiro** | **Gradient clipping {1.0, 5.0, no-clip}** | **Optimization** | **WIP — running SOAP-baseline arms; notify when done** |
+| **#3497** | **tanjiro** | **Grad-clip {no, 5, 10} on EMA+SOAP (clip5 winner)** | **Optimization** | **WIP — rebase + 3-arm compounding test (sent back 03:55, within-PR: −12.1% val on SOAP-only — BIGGEST round-3 signal)** |
 | **#3501** | **thorfinn** | **SOAP surf_weight sweep {5, 10, 20}** | **Optimization** | **WIP — running SOAP-baseline arms; notify when done** |
 | **#3415** | **frieren** | **Log-Re sinusoidal (SOAP stack, seed=42)** | **Inputs** | **WIP — arm1 done (77.88), variants in progress** |
 | **#3316** | **fern** | **Huber beta sweep (0.5/1.0/2.0) on SOAP stack** | **Loss tuning** | **WIP — rebased, arms running** |
