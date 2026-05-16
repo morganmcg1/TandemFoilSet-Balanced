@@ -1418,3 +1418,35 @@ Per-split val: single 47.39→53.02 (+11.9%), rc 55.44→59.42 (+7.2%), cruise 2
 - **Followup (assigning):** ReGLU (F.relu in gate) is the natural next probe — same single-line change, tests the "even-harder-cutoff" hypothesis. Frieren reassigned.
 
 Note: both #4186 and #4155 were trained on the **old pre-SF baseline** since their assignment commits predate the SF merge. The frieren run's GEGLU comparison (50.57) is the pre-SF baseline; the alphonse 43.82 comparison is the current full-stack. Both regressions are large enough that re-running on the full stack would not change the close decision.
+
+## 2026-05-16 23:42 — PR #4185: slice_num 8→6 on full bf16+GEGLU+SF stack
+
+- **Branch:** `charliepai2i48h1-tanjiro/slice-num-6`
+- **Hypothesis:** Continue slice halving trajectory (64→32→16→12→8 all merged wins). Predicted -5-8% sec/epoch from S² projection cost saving (8²→6² = -43.75% slice-proj FLOPs) → +1-2 epochs in 30-min cap.
+- **Results (best epoch 25):**
+
+| Metric | slice_num=6 | baseline #4107 (slice_num=8) | Δ |
+|--------|---|---|---|
+| val_avg/mae_surf_p (primary) | 43.9095 | 43.82 | **+0.20% (TIE in noise band)** |
+| test_avg/mae_surf_p | 38.4430 | 38.05 | +1.03% |
+| val_single_in_dist | 47.33 | 47.39 | -0.12% |
+| val_geom_camber_rc | 55.50 | 55.44 | +0.11% |
+| val_geom_camber_cruise | 26.87 | 26.97 | -0.38% |
+| val_re_rand | 45.94 | 45.50 | **+0.97%** (cross-regime first to break) |
+| sec/epoch (median) | 74.4 | 72.3 | **+2.9% (slower!)** |
+| epochs in cap | 25 | 25 | 0 |
+| peak VRAM | 24.80 GB | 25.19 GB | -1.5% |
+| n_params | 736,501 | 737,491 | -990 |
+
+- **Metrics path:** `models/model-charliepai2i48h1-tanjiro-slice-num-6-20260516-223721/metrics.jsonl`
+- **Decision:** CLOSED. Within tie band (±2 pts); doesn't beat baseline.
+- **Critical insight (tanjiro's, advisor concurs):** **The slice projection cost is no longer the bottleneck on the bf16+GEGLU+SF stack.** Predicted -43.75% slice-proj FLOPs delivered +2.9% sec/epoch — other Transolver costs now dominate (attention scaled-dot-product, FFN GEGLU, FiLM affine, preprocess MLP, dataloader pad_collate).
+- **slice_num halving trajectory CLOSED:**
+  - 64→32 (#3533): -5.81% ✓
+  - 32→16 (#3602): -6.78% ✓
+  - 16→12 (#3950): -0.34% ✓ (tiny win)
+  - 12→8 (#4107): -2.78% ✓ (last clean win)
+  - 8→6 (#4185): TIE — **axis closed**
+- **Per-split picture:** val_re_rand regressed +0.97% — the cross-regime split breaks first when slice budget drops. Consistent with "re_rand needs more slice-level features to cover Re-domain shift."
+- **Followup (not assigned):** slice_num=4 likely regresses further per the per-split pattern. n_head × slice_num joint sweep would be interesting but n_head was previously closed at 4 (on old baseline) — would need careful re-test.
+

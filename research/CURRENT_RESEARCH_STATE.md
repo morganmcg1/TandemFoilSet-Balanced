@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 23:35 UTC (R21 poll)
+- **Updated:** 2026-05-16 23:45 UTC (R21 b — tanjiro slice=6 closed, reassigned)
 - **Track:** Charlie local-metrics arm (`charlie-pai2i-48h-r1`)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-48h-r1`
 - **Target base:** `icml-appendix-charlie`
@@ -71,7 +71,7 @@ Three orthogonal levers still in play:
 |----|---------|------------|-------|--------|
 | #4206 | alphonse  | GEGLU gate on attention to_out projection | FFN/attn | WIP — R21, fresh assignment |
 | #4209 | frieren   | ReGLU (F.relu in gate) vs GEGLU — completes gate-activation axis | FFN nonlinearity | WIP — R21, fresh assignment |
-| #4185 | tanjiro   | slice_num 8→6 on bf16+GEGLU+SF stack | compute | WIP |
+| #4228 | tanjiro   | GEGLU gate on in_project_fx (attention feature input projection) | attn architecture | WIP — R21b, fresh assignment |
 | #4177 | fern      | EMA decay re-tune on SF stack: probe {0.995, 0.999} vs 0.997 | optim | WIP |
 | #4068 | edward    | n_layers 5→4 on bf16+GEGLU+SF stack | compute | WIP |
 | #4069 | nezuko    | torch.compile(dynamic=True) on bf16+GEGLU+SF stack | compute | WIP — training completed ~23:14; results pending GH API rate-limit recovery |
@@ -83,6 +83,7 @@ Three orthogonal levers still in play:
 **Closed this R21:**
 - **#4186 CLOSED** (alphonse per-node geometric FiLM): +9.4% regression, uniform across all 4 splits. Three-part diagnosis: redundant pathway with preprocess, compute squeeze (-7 epochs), gradient dilution over ~1500 nodes. **FiLM family fully exhausted.**
 - **#4155 CLOSED** (frieren SwiGLU): +4.2% worse mean of 2 seeds. GELU's sharper gate is better feature-selector than SiLU on heavy-tailed pressure fields. **Gate-activation axis: only ReGLU and Bilinear remain to test.**
+- **#4185 CLOSED** (tanjiro slice_num=6): TIE at +0.20% (val 43.91). sec/epoch went UP +2.9% — slice projection is no longer the bottleneck. **slice_num halving axis FULLY CLOSED** (8 is the optimum).
 
 ## Closed axes (final state)
 
@@ -106,13 +107,14 @@ Three orthogonal levers still in play:
 | **SwiGLU (F.silu gate)** | CLOSED (#4155 +4.2% — GELU sharper is better for CFD) |
 | **Per-node geometric FiLM** | CLOSED (#4186 +9.4% — redundant pathway, compute squeeze, gradient dilution) |
 | **FiLM family (all variants)** | FULLY CLOSED — broadcast-scalar, per-node, readout all closed |
+| **slice_num halving axis** | CLOSED at 8 — 8→6 TIE (#4185 +0.20%); slice projection no longer the bottleneck |
 
 ## Potential next research directions
 
 1. **torch.compile on SF+GEGLU+bf16 stack** — IN FLIGHT (#4069 nezuko). Prior result val=41.20 on pre-SF baseline (-18.5%), full-stack result pending. High-confidence win: predicted val ≤ 38. Will merge immediately on result.
 2. **ReGLU vs GEGLU** — IN FLIGHT (#4209 frieren). Completes gate-activation axis (GEGLU won over SwiGLU; ReLU gate is the remaining "harder cutoff" test). 40% win / 45% tie / 15% worse.
 3. **GEGLU on to_out projection** — IN FLIGHT (#4206 alphonse). Extends GEGLU win pattern to attention output projection; same shape (128→128) as successful FFN GEGLU.
-4. **slice_num=6** — IN FLIGHT (#4185 tanjiro). Continue halving trajectory; 12→8 out-improved 16→12.
+4. **GEGLU on in_project_fx** — IN FLIGHT (#4228 tanjiro). Extends GEGLU gating to the attention input feature projection; orthogonal to #4206 (to_out).
 5. **n_layers 5→4** — IN FLIGHT (#4068 edward). Predicted ~62-68s/epoch → 27-29 epochs in cap.
 6. **EMA decay re-tune** — IN FLIGHT (#4177 fern). Probe 0.995 vs 0.999 on SF stack.
 7. **batch=8 + lr=1e-3** — IN FLIGHT (#4136 askeladd). Against old baseline; if positive, needs full-stack retest.
