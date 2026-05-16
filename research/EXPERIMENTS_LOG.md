@@ -1,5 +1,76 @@
 # SENPAI Research Results
 
+## 2026-05-16 09:35 — 3 R5 closes (#3673, #3697, #3698); 3 R7 assignments (#3842, #3843, #3845)
+
+### #3673 tanjiro — EMA decay sweep (CLOSED — informative, within noise)
+
+- Branch: `willowpai2i48h5-tanjiro/r5-ema-decay-sweep`
+- Hypothesis: EMA decay ∈ {0.995, 0.997, 0.999} under FiLM+Lion. Is 0.997 locally optimal?
+- Results:
+
+| Arm | ema_decay | W&B run | val_avg | test_avg | Δval vs base (71.65) |
+|-----|-----------|---------|---------|----------|----------------------|
+| **A (best)** | **0.995** | **`s3ufqnz2`** | **71.51** | **−** | **−0.14 (noise)** |
+| B | 0.997 | `3ag4pvjr` | 73.46 | 63.67 | +1.81 |
+| C | 0.999 | `3ki9voje` | ~73+ | — | regression |
+
+- Analysis: **EMA decay is robust in [0.995, 0.997].** Best arm (0.995) at val 71.51 is a wash with the baseline 71.65 (Δ=−0.14, well within σ≈4.6). Arm A is a canonical control (s3ufqnz2 was the intended canonical run, others were process-collision duplicates). No merge — informative paper ablation confirming decay insensitivity. Note: best arm runs pre-date the n_fourier=0 merge; absolute numbers are not directly comparable to new baseline 70.34.
+
+  **Paper finding (finding #4):** EMA decay is robust in [0.995, 0.997] — safe to fix at 0.997.
+
+### #3697 frieren — Multi-σ Gaussian Fourier PE (CLOSED — superseded by n_fourier=0 merge)
+
+- Branch: `willowpai2i48h5-frieren/r5-multi-sigma-fourier`
+- Hypothesis: Multi-scale Fourier features (σ ∈ {3, 10, 30} concatenated) capture broader frequency content and outperform single-σ.
+- Results: Arms A/B posted before n_fourier=0 merged. Arm C posted after.
+
+| Arm | Config | val_avg | vs baseline at time |
+|-----|--------|---------|---------------------|
+| A | σ=3 only | ~73 | regression |
+| B | σ=10 only (control) | ~71.7 | baseline repro |
+| C | σ=3,10,30 multi | ~71.5 | marginal/wash |
+
+- Analysis: **Superseded.** The n_fourier=0 result (val 70.34) shows FiLM on log(Re) makes ALL Fourier PE redundant. Multi-σ cannot beat dropping Fourier entirely. The multi-scale hypothesis is directionally wrong — more frequency resolution doesn't help when FiLM already encodes flow-regime conditioning.
+
+### #3698 thorfinn — TTA z-reflection (CLOSED — catastrophic regression, dataset asymmetry confirmed)
+
+- Branch: `willowpai2i48h5-thorfinn/r5-tta-reflection`
+- Hypothesis: Averaging model predictions over original + z-reflected geometry provides a free inference-time gain via symmetry.
+- Results:
+
+| Eval mode | W&B run | val_avg | vs baseline |
+|-----------|---------|---------|-------------|
+| No TTA (control) | `3du9h0yz` | ~72 | +0.35 (noise) |
+| TTA z-reflect | `5555kka9` | ~307 | **+235 CATASTROPHIC** |
+
+Thorfinn ran additional diagnostic: 6-subset reflection sweep on `3du9h0yz` checkpoint (run `awuxtsni`):
+
+| Subset reflected | val_avg |
+|-----------------|---------|
+| {} (no reflection) | 72.15 |
+| {x,z} | 286 |
+| {z only} | 307 |
+| {AoA0, AoA1} | 184 |
+| ... | ... |
+
+- Analysis: **TTA z-reflection fails because the training data is NOT z-symmetric.** raceCar geometry uses AoA ∈ [-10°, 0°] (always negative camber); z-reflecting an AoA=-5° sample gives AoA=+5°, which the model has never seen. The model is not equivariant to z-reflection because the dataset isn't. Catastrophic regression (72 → 307) confirms the model correctly rejects OOD inputs.
+
+  **Paper-relevant finding (#10):** TTA z-reflection fails on asymmetric AoA distribution. Cannot assume z-symmetry without symmetric training data.
+
+  **Follow-up (H30):** Train-time z-reflection augmentation (#3845) may teach the model the symmetry by including reflected samples during training.
+
+### R7 assignments: tanjiro #3842, frieren #3843, thorfinn #3845
+
+| PR | Student | Hypothesis | Key novelty |
+|----|---------|------------|-------------|
+| **#3842** | **tanjiro** | **Sobolev finer sweep w ∈ {0.05, 0.10, 0.15}** | Extend fern's R5 signal (test −0.18 at w=0.1) with finer grid on new n_fourier=0 baseline |
+| **#3843** | **frieren** | **Lion lr sweep {2e-5, 5e-5 ctrl, 1e-4}** | First lr ablation in this launch; paper-required sensitivity analysis |
+| **#3845** | **thorfinn** | **Train-time z-reflection augmentation (p ∈ {0, 0.25, 0.5})** | Close loop on TTA failure; teach model z-symmetry during training to attack camber_rc (worst split) |
+
+All 8 students now staffed for R7. Full R7 map spans: FiLM ablation (alphonse), surf_weight (fern), Huber β (edward), Lion β1 (askeladd), spectral norm (nezuko), Sobolev (tanjiro), Lion lr (frieren), train-aug (thorfinn).
+
+---
+
 ## 2026-05-16 07:55 — alphonse #3672 MERGED; fern #3695 closed; R7 fern+edward assigned
 
 ### #3672 alphonse — Fourier ablation (MERGED — new baseline val 70.34 / test 61.63)
