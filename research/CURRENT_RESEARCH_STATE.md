@@ -23,24 +23,25 @@
 
 | PR | Student | Theme | Status | Baseline context |
 |----|---------|-------|--------|-----------------|
-| #3656 | frieren | Finer surf_weight sweep: 22 and 27 around 25 optimum | WIP — NEW | On 5-mech baseline 67.30; tightening prior win |
-| #3528 | fern | Grad-clip max_norm=10.0 re-run on 5-mech (surf_weight=25) | WIP — REBASING | Prior 3-arm sweep found 10.0 best at val=67.54 (beat 70.25); needs rebase to confirm vs 67.30 |
+| #3725 | fern | Per-group grad-clip: attention (max_norm=1.0) vs MLP (5.0/10.0) | WIP — NEW | Sub-additivity finding from #3528; test if MLP is over-clipped |
+| #3726 | frieren | Lion weight decay sweep: wd=1e-3 and 3e-3 (Lion paper rec.) | WIP — NEW | Lion paper: 3-10× higher wd than AdamW; current 3e-4 never tested |
+| #3674 | nezuko | Per-channel pressure weight: w_p=0.5 and 2.0 vs 1.0 | WIP — NEW | On 5-mech baseline 67.30; #3586 closed (lr=2.5e-4 regressed +2.74%) |
 | #3442 | tanjiro | signed log1p on pressure (stronger compression) | WIP — REBASING | Rebase guided; target 67.30 |
 | #3470 | askeladd | EMA decay ablation: 0.997/0.995/0.990 | WIP — REBASING | Rebased on grad-clip; target 67.30 |
 | #3485 | alphonse | bf16 autocast: faster forward → more epochs | WIP — REBASING | Rebase guided; target 67.30 |
-| #3674 | nezuko | Per-channel pressure weight: w_p=0.5 and 2.0 vs 1.0 | WIP — NEW | On 5-mech baseline 67.30; #3586 closed (lr=2.5e-4 regressed +2.74%) |
 | #3383 | edward | Lion + 2-epoch linear warmup then cosine | WIP — REBASING | Rebase guided; target 67.30 |
 | #3275 | thorfinn | SwiGLU gated activation in TransolverBlock MLPs | WIP — REBASING | Rebase guided; target 67.30 |
 
 ## Key open questions (round 12)
 
-1. **Is max_norm=1.0 over-clipping?** (#3528 fern) — post-asinh norms 25-180 mean; threshold of 5-10 may let bulk curvature signal through. Now also needs rebase.
-2. **Does per-channel pressure weight matter?** (#3674 nezuko) — w_p=0.5 (free velocity gradient) vs w_p=2.0 (focus on metric channel). Both w_p=1.0 equilibrium and LR tested; lr=1.7e-4 is near-optimal (#3586 finding)
-3. **Does signed log1p beat asinh?** (#3442 tanjiro) — now needs to beat 67.30
-4. **Does EMA decay=0.995 converge faster within budget?** (#3470 askeladd)
-5. **Does bf16 give meaningful epoch count boost?** (#3485 alphonse) — key to unlocking capacity and schedule changes
-6. **Does warmup-cosine help?** (#3383 edward) — on the 5-mech stack
-7. **Does SwiGLU activate gating help?** (#3275 thorfinn) — doesn't increase per-epoch cost
+1. **Is MLP gradient over-clipped?** (#3725 fern) — 100% clip rate at aggregate norms 25-180; per-group clip tests if attention drives the aggregate while MLP is unnecessarily squeezed. Natural successor to #3528 sub-additivity finding.
+2. **Is Lion weight decay too low?** (#3726 frieren) — Lion paper recommends 3-10× higher wd than AdamW; current wd=3e-4 matches AdamW convention, not Lion. wd=1e-3 and 3e-3 not yet tested.
+3. **Does per-channel pressure weight matter?** (#3674 nezuko) — w_p=0.5 (free velocity gradient) vs w_p=2.0 (focus on metric channel). Both w_p=1.0 equilibrium and LR tested; lr=1.7e-4 is near-optimal (#3586 finding)
+4. **Does signed log1p beat asinh?** (#3442 tanjiro) — now needs to beat 67.30
+5. **Does EMA decay=0.995 converge faster within budget?** (#3470 askeladd)
+6. **Does bf16 give meaningful epoch count boost?** (#3485 alphonse) — key to unlocking capacity and schedule changes
+7. **Does warmup-cosine help?** (#3383 edward) — on the 5-mech stack
+8. **Does SwiGLU activate gating help?** (#3275 thorfinn) — doesn't increase per-epoch cost
 
 ## 5-mechanism stack: gradient pipeline analysis
 
@@ -66,10 +67,12 @@ They compose cleanly because they're orthogonal. The surf_weight reduction from 
 | #3106 (frieren Slice128/head8/mlp3) | +98.6% regression; same wall-clock penalty, 7 epochs vs 14 |
 | #3354 (nezuko Lion+cosine T_max=12) | +15.96% regression (81.45 vs 70.25); val still descending at epoch 12, curve is budget-limited not LR-limited |
 | #3586 (nezuko higher LR 2.5e-4) | +2.74% regression (69.14 vs 67.30); lr=1.7e-4 is near-optimal for 5-mech stack; closed without running Arm B |
+| #3656 (frieren surf-weight-fine sw=22/27) | +4.09% regression (sw=22 val=70.04); interpolation hypothesis falsified; curve is flat in [20,25], gain is fully captured at sw=25 |
+| #3528 (fern grad-clip rebased sw×max_norm grid) | +0.57% regression (val=67.68 vs 67.30); max_norm=1.0 is optimal; sub-additive composition confirmed: asinh+EMA+grad-clip share gradient bandwidth |
 
 ## Potential next research directions
 
-- **Finer surf_weight sweep around 25**: frieren's data suggests the optimum knee is between 20-25; a {22, 23, 27} sweep could tighten this further
+- ~~Finer surf_weight sweep around 25~~ — CLOSED: sw=22 regressed +4.09%; curve is flat in [20, 25]. sw=25 is at the plateau.
 - ~~Higher LR sweep~~ — CLOSED: lr=2.5e-4 regressed +2.74%; lr=1.7e-4 is near-optimal for 5-mech stack
 - **bf16 × capacity**: if bf16 cuts per-epoch time to 90s, a moderate capacity bump (n_hidden=160) could reach 18+ epochs within budget
 - **Per-group grad-clip**: attention projection and output head dominate the aggregate norm; per-group clipping lets us tune aggressiveness separately
