@@ -2,7 +2,63 @@
 
 Primary ranking metric is `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across the four validation splits). Test-time decision metric is `test_avg/mae_surf_p`. Lower is better.
 
-## 2026-05-16 04:21 — PR #3582: torch.compile() for more effective epochs (current best)
+## 2026-05-16 06:42 — PR #3666: Peak LR sweep — lr=1e-3 + compile (current best)
+
+Stacks on top of full round-5 merged baseline: scale-inv loss + EMA + surf-L1 + FiLM + bf16 + Cautious AdamW + T_max=25/eta_min_factor=0.10 + torch.compile. A pure optimizer-hyperparameter change: lr 5e-4 → 1e-3 on the compile-enabled stack. The key finding is that the epoch-1 instability seen at lr=1e-3 without compile (PR #3581: val_avg spiked to ~800, unrecoverable in 17 epochs) **entirely disappears** with compile + `torch.set_float32_matmul_precision("high")` TF32 mode — epoch 1 at lr=1e-3 lands at 367, essentially identical to the compile baseline's ~365. With no recovery deficit, the higher LR finds a strictly better minimum across all 32 epochs: Arm B (lr=1e-3) sits below Arm A (lr=7e-4) from epoch 1 to 32. Cautious mask remains invariant (~0.61) across both arms and all LR levels — masking does not gate the high-LR updates. Both arms still descending at ~−0.5/epoch at cutoff; the 32-epoch budget remains undercooked.
+
+**Primary** (Arm B: lr=1e-3 + compile, full merged stack)
+- `val_avg/mae_surf_p` = **54.0564** (best epoch 32 / 50, run cut by 30-min wall clock; **−11.68% vs PR #3582**, **−56.37% vs round-5 anchor**)
+- `test_avg/mae_surf_p` = **48.1422** (**−10.86% vs PR #3582**, **−57.90% vs round-5 anchor**)
+- **Cumulative round-5 improvement:** −56.37% val_avg (123.88 → 54.06), −57.90% test_avg (114.37 → 48.14). **Ten compounding wins.**
+
+**Per-split surface pressure MAE (Arm B — lr=1e-3 + compile)**
+
+| Split | val_mae_surf_p | test_mae_surf_p | Δ val vs PR #3582 | Δ test vs PR #3582 |
+|---|---:|---:|---:|---:|
+| single_in_dist | 56.328 | 53.236 | −13.92% | −10.05% |
+| geom_camber_rc | 68.829 | 63.621 | −10.35% | −9.85% |
+| geom_camber_cruise | 36.021 | 29.889 | −13.18% | −12.45% |
+| re_rand | 55.047 | 45.823 | −9.92% | −12.10% |
+| **avg** | **54.0564** | **48.1422** | **−11.68%** | **−10.86%** |
+
+All 8 val/test cells improve. Uniform gains across OOD-geometry (camber: −10–13%) and in-distribution (−14%) and Re-OOD (−10–12%) splits.
+
+**Arm A (lr=7e-4 + compile):** val_avg=58.3825 (−4.61% vs baseline) — also a winner, but Arm B wins decisively.
+
+**Mechanism — why compile + TF32 kills the epoch-1 spike:**
+The thesis from PR #3581 was that lr=1e-3 caused catastrophic parameter perturbations in the first optimizer step, producing unrecoverable early-epoch spikes. With compile + `torch.set_float32_matmul_precision("high")`, the TF32 matmul numerical characteristics change the effective Hessian in the first step, apparently landing in a better initial regime. This is an empirical observation — a clean test (compile + "highest" precision) was suggested by thorfinn as a future probe, but is not a blocking issue.
+
+**Model config (architecture unchanged from PR #3582)**
+- Transolver — n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2; FiLM per-block conditioning
+- 829,015 parameters; EMA shadow at decay=0.999; torch_compile_active=True (default mode, dynamic=True)
+- **CautiousAdamW lr=1e-3**, wd=1e-4 (key change from lr=5e-4)
+- CosineAnnealingLR(T_max=25, eta_min=5e-5, eta_min_factor=0.10)
+- bf16 AMP, surf_weight=10.0, surf_p_l1_weight=1.0
+- bernoulli_residual=False (per compile-baseline stack)
+- Peak VRAM: 24.38 GB (identical to compile baseline — LR change has no memory footprint)
+- Avg s/epoch: 57.7 (Arm B), 58.4 (Arm A)
+
+**Metric artifacts**
+- `models/model-charliepai2i24h5-thorfinn-lr1e3_compile-20260516-052709/metrics.jsonl`
+- `models/model-charliepai2i24h5-thorfinn-lr1e3_compile-20260516-052709/metrics.yaml`
+- `models/model-charliepai2i24h5-thorfinn-lr1e3_compile-20260516-052709/config.yaml`
+- (Arm A): `models/model-charliepai2i24h5-thorfinn-lr7e4_compile-20260516-042552/metrics.jsonl`
+
+**Reproduce**
+```bash
+cd target/ && python train.py \
+    --agent charliepai2i24h5-thorfinn \
+    --experiment_name "baseline_repro_lr1e3_compile" \
+    --torch_compile \
+    --lr 1e-3 --t_max 25 --eta_min_factor 0.10 \
+    --surf_p_l1_weight 1.0 \
+    --epochs 50
+```
+(Wall clock capped by `SENPAI_TIMEOUT_MINUTES`; run hit 32 epochs in 30 min with compile + lr=1e-3.)
+
+---
+
+## 2026-05-16 04:21 — PR #3582: torch.compile() for more effective epochs (previous best)
 
 Stacks on top of PR #3465 T_max=25 alignment + PR #3466 Cautious AdamW + PR #3373 bf16 + PR #3265 FiLM + PR #3337 surf-L1 + PR #3281 EMA + PR #3266 scale-invariant loss + NaN fix. Wraps the Transolver in `torch.compile(mode="default", dynamic=True)` to reduce per-forward overhead. **Result: 1.88× per-epoch speedup (108s → 57s), unlocking 32 effective epochs within the 30-min wall-clock cap vs 17 at prior baseline.** The −18.83% val improvement comes entirely from the additional 15 epochs — at matched epoch number the compile arm is ~3% worse than the pre-compile baseline (small fp32 accumulation-order differences from kernel fusion). Model still descending at −0.7/epoch at the epoch-32 cutoff; schedule realignment is the next axis.
 
