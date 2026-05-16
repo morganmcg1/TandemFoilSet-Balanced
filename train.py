@@ -311,6 +311,7 @@ def write_experiment_summary(
     test_avg: dict | None,
     n_params: int,
     model_config: dict,
+    extras: dict | None = None,
 ) -> None:
     """Write a local summary next to the best checkpoint."""
     summary: dict = {
@@ -339,6 +340,9 @@ def write_experiment_summary(
             for split_name, m in test_metrics.items():
                 for k, v in m.items():
                     summary[f"test/{split_name}/{k}"] = v
+
+    if extras:
+        summary.update(extras)
 
     summary_path = model_dir / "metrics.yaml"
     with open(summary_path, "w") as f:
@@ -375,6 +379,9 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    # SWA tail averaging: uniform average of EMA weights across the last K epochs
+    # (Izmailov et al. 2018). Set >0 to enable; 0 disables and the pipeline runs EMA-only.
+    swa_tail_epochs: int = 0
 
 
 cfg = sp.parse(Config)
@@ -425,6 +432,13 @@ ema_model = copy.deepcopy(model).eval()
 for p in ema_model.parameters():
     p.requires_grad_(False)
 print(f"EMA shadow model created with decay={ema_decay}")
+
+# SWA accumulator: uniform average of EMA weights across the last
+# cfg.swa_tail_epochs epochs. Stored as a list of state_dicts; we average on
+# demand at validation time inside the tail window.
+swa_states: list[dict] = []
+if cfg.swa_tail_epochs > 0:
+    print(f"SWA tail averaging enabled over last {cfg.swa_tail_epochs} epoch(s) of EMA weights")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
@@ -494,15 +508,54 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate (using EMA model) ---
+    # SWA bookkeeping: in the last K epochs, snapshot the current EMA state.
+    epochs_remaining = MAX_EPOCHS - (epoch + 1)
+    in_swa_tail = cfg.swa_tail_epochs > 0 and epochs_remaining < cfg.swa_tail_epochs
+    if in_swa_tail:
+        swa_states.append({k: v.detach().clone() for k, v in ema_model.state_dict().items()})
+
+    # --- Validate ---
+    # Always evaluate the live EMA model so val_avg_ema is logged every epoch.
+    # In the tail window, additionally evaluate the SWA-averaged model (uniform
+    # average of all EMA snapshots so far) by swapping its weights into
+    # ema_model for the duration of the eval, then restoring.
     model.eval()
     ema_model.eval()
-    split_metrics = {
+    split_metrics_ema = {
         name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device, beta=cfg.smooth_l1_beta)
         for name, loader in val_loaders.items()
     }
-    val_avg = aggregate_splits(split_metrics)
-    avg_surf_p = val_avg["avg/mae_surf_p"]
+    avg_surf_p_ema = aggregate_splits(split_metrics_ema)["avg/mae_surf_p"]
+
+    split_metrics_swa = None
+    avg_surf_p_swa = None
+    if in_swa_tail and len(swa_states) > 0:
+        averaged = {k: torch.zeros_like(v, dtype=torch.float32) for k, v in swa_states[0].items()}
+        for state in swa_states:
+            for k in averaged:
+                averaged[k] += state[k].to(torch.float32) / len(swa_states)
+        averaged = {k: v.to(swa_states[0][k].dtype) for k, v in averaged.items()}
+        _ema_backup = {k: v.detach().clone() for k, v in ema_model.state_dict().items()}
+        ema_model.load_state_dict(averaged)
+        split_metrics_swa = {
+            name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device, beta=cfg.smooth_l1_beta)
+            for name, loader in val_loaders.items()
+        }
+        avg_surf_p_swa = aggregate_splits(split_metrics_swa)["avg/mae_surf_p"]
+        ema_model.load_state_dict(_ema_backup)
+
+    # Primary metric used for checkpoint selection: SWA-eval inside the tail
+    # window (the experimentally-relevant deployment artifact), EMA-eval
+    # outside.
+    if avg_surf_p_swa is not None:
+        avg_surf_p = avg_surf_p_swa
+        split_metrics = split_metrics_swa
+        primary_source = "swa"
+    else:
+        avg_surf_p = avg_surf_p_ema
+        split_metrics = split_metrics_ema
+        primary_source = "ema"
+
     dt = time.time() - t0
 
     tag = ""
@@ -512,12 +565,13 @@ for epoch in range(MAX_EPOCHS):
             "epoch": epoch + 1,
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
+            "primary_source": primary_source,
         }
         torch.save(ema_model.state_dict(), model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
-    append_metrics_jsonl(metrics_jsonl_path, {
+    epoch_record = {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
@@ -525,13 +579,22 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
+        "val_avg/mae_surf_p_ema": avg_surf_p_ema,
+        "val_avg/mae_surf_p_swa": avg_surf_p_swa,
         "val_splits": split_metrics,
+        "val_splits_ema": split_metrics_ema,
+        "val_splits_swa": split_metrics_swa,
         "is_best": tag == " *",
-    })
+        "primary_source": primary_source,
+        "in_swa_tail": in_swa_tail,
+        "n_swa_states": len(swa_states),
+    }
+    append_metrics_jsonl(metrics_jsonl_path, epoch_record)
+    swa_str = f" swa={avg_surf_p_swa:.4f}" if avg_surf_p_swa is not None else ""
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val[ema={avg_surf_p_ema:.4f}{swa_str}]  primary={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
@@ -546,10 +609,54 @@ if best_metrics:
     ema_model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     ema_model.eval()
 
+    # --- Build FINAL SWA-averaged model (if active and at least one snapshot) ---
+    # The deployment artifact is the uniform average across all K EMA snapshots
+    # from the tail window. Test eval is run on this final SWA model per the PR
+    # spec; it is independent of the best-checkpoint logic (which uses primary
+    # val metric and may save an earlier-tail SWA snapshot).
+    final_swa_val_metrics: dict | None = None
+    final_swa_val_avg: float | None = None
+    swa_path: Path | None = None
+    if cfg.swa_tail_epochs > 0 and len(swa_states) > 0:
+        averaged_final = {k: torch.zeros_like(v, dtype=torch.float32) for k, v in swa_states[0].items()}
+        for state in swa_states:
+            for k in averaged_final:
+                averaged_final[k] += state[k].to(torch.float32) / len(swa_states)
+        averaged_final = {k: v.to(swa_states[0][k].dtype) for k, v in averaged_final.items()}
+        swa_path = model_dir / "swa_final.pt"
+        torch.save(averaged_final, swa_path)
+        print(f"\nFinal SWA model saved (uniform avg over {len(swa_states)} tail EMA snapshots): {swa_path}")
+
+        # Eval the FINAL SWA model on val splits (already computed in last
+        # tail epoch but re-run here for a clean separate summary).
+        _ema_backup = {k: v.detach().clone() for k, v in ema_model.state_dict().items()}
+        ema_model.load_state_dict(averaged_final)
+        final_swa_val_metrics = {
+            name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device, beta=cfg.smooth_l1_beta)
+            for name, loader in val_loaders.items()
+        }
+        final_swa_val_avg = aggregate_splits(final_swa_val_metrics)["avg/mae_surf_p"]
+        ema_model.load_state_dict(_ema_backup)
+        print(f"  FINAL SWA val_avg/mae_surf_p = {final_swa_val_avg:.4f}")
+        for name in VAL_SPLIT_NAMES:
+            print_split_metrics(f"final_swa/{name}", final_swa_val_metrics[name])
+
+    # Decide which model to test on:
+    # - If SWA is active and we have snapshots, test on the FINAL SWA-averaged
+    #   model (per PR spec).
+    # - Otherwise, test on the EMA-best checkpoint (standard pipeline).
     test_metrics = None
     test_avg = None
     if not cfg.skip_test:
-        print("\nEvaluating on held-out test splits...")
+        if final_swa_val_metrics is not None:
+            test_model_label = "final_swa"
+            print(f"\nEvaluating FINAL SWA model on held-out test splits...")
+            _ema_backup = {k: v.detach().clone() for k, v in ema_model.state_dict().items()}
+            ema_model.load_state_dict(averaged_final)
+        else:
+            test_model_label = "ema_best"
+            print(f"\nEvaluating EMA-best on held-out test splits...")
+
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
@@ -560,15 +667,43 @@ if best_metrics:
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
+        if final_swa_val_metrics is not None:
+            ema_model.load_state_dict(_ema_backup)
+
         print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
         for name in TEST_SPLIT_NAMES:
             print_split_metrics(name, test_metrics[name])
         append_metrics_jsonl(metrics_jsonl_path, {
             "event": "test",
             "best_epoch": best_metrics["epoch"],
+            "test_model": test_model_label,
             "test_avg": test_avg,
             "test_splits": test_metrics,
         })
+
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "final",
+        "swa_tail_epochs": cfg.swa_tail_epochs,
+        "n_swa_states": len(swa_states),
+        "best_epoch": best_metrics["epoch"],
+        "best_val_avg/mae_surf_p": best_avg_surf_p,
+        "best_primary_source": best_metrics.get("primary_source"),
+        "final_swa_val_avg/mae_surf_p": final_swa_val_avg,
+        "final_swa_val_splits": final_swa_val_metrics,
+        "swa_checkpoint": str(swa_path) if swa_path is not None else None,
+    })
+
+    extras = {
+        "swa_tail_epochs": cfg.swa_tail_epochs,
+        "n_swa_states": len(swa_states),
+        "best_primary_source": best_metrics.get("primary_source"),
+        "final_swa_val_avg/mae_surf_p": final_swa_val_avg,
+        "swa_checkpoint": str(swa_path) if swa_path is not None else None,
+    }
+    if final_swa_val_metrics is not None:
+        for split_name, m in final_swa_val_metrics.items():
+            for k, v in m.items():
+                extras[f"final_swa_val/{split_name}/{k}"] = v
 
     write_experiment_summary(
         model_path=model_path,
@@ -580,6 +715,7 @@ if best_metrics:
         test_avg=test_avg,
         n_params=n_params,
         model_config=model_config,
+        extras=extras,
     )
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping test evaluation.")
