@@ -478,6 +478,7 @@ class Config:
     mlp_ratio: int = 2  # FFN expansion ratio; SwiGLU inner = round_to_mult(hidden*mlp_ratio*2/3, 8)
     use_bf16: bool = False  # bf16 autocast (activations only; params/optimizer stay fp32)
     n_hidden: int = 160  # Transolver hidden dim (embedding/attention/FFN base width)
+    n_head: int = 4  # Transolver attention head count; head_dim = n_hidden / n_head
 
 
 cfg = sp.parse(Config)
@@ -513,7 +514,7 @@ model_config = dict(
     out_dim=3,
     n_hidden=cfg.n_hidden,
     n_layers=5,
-    n_head=4,
+    n_head=cfg.n_head,
     slice_num=64,
     mlp_ratio=cfg.mlp_ratio,
     output_fields=["Ux", "Uy", "p"],
