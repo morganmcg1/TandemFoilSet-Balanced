@@ -110,3 +110,31 @@ This produces `models/model-baseline-<stamp>/metrics.jsonl` with per-epoch val m
 - **Model**: Transolver (n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, 0.66M params). No model changes.
 - **Metric artifacts**: `models/model-bf16_cosine_t20-20260515-232950/metrics.jsonl`
 - **Reproduce**: `cd target/ && python train.py --experiment_name bf16_cosine_t20 --agent charliepai2i24h3-edward`
+
+---
+
+### 2026-05-16 08:30 — PR #3753: DSDF feature clipping at ±3σ (position/saf tail reduction)
+
+**Winner**: alphonse (`charliepai2i24h3-alphonse/dsdf-clip`)
+
+- **`val_avg/mae_surf_p` = 86.7674** (best epoch 19 / 19, timeout-bounded)
+- **`test_avg/mae_surf_p`**: NaN (scoring.py NaN bug on test_geom_camber_cruise)
+  - Clean estimate (3 finite test splits): **83.4549** (rc=84.567, re_rand=77.111, single=88.687)
+- **Per-split val metrics (epoch 19 best checkpoint)**:
+
+| Split | mae_surf_p |
+|---|---|
+| val_single_in_dist | 102.003 |
+| val_geom_camber_rc | 93.754 |
+| val_geom_camber_cruise | 69.146 |
+| val_re_rand | 82.166 |
+| **val_avg** | **86.767** |
+
+- **Delta vs prior baseline (87.62)**: −0.85 (−0.97%). 3 of 4 splits improve; val_single_in_dist regresses +3.56.
+- **Change**: After input feature normalization, apply `x_norm = x_norm.clamp(-3.0, 3.0)` (global clip all 24 dims). Per diagnostic: DSDF dims 4-11 had 0% clipping — the gain comes from position (dims 0-1, ~2%) and signed arc-length saf (dims 2-3, ~3%) tail clipping in large meshes. DSDF hypothesis was incorrect in mechanism but the change is still a real improvement.
+- **Budget**: 19 epochs, ~98s/epoch, ~33 GB VRAM. No compute change.
+- **Model**: Transolver (n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, 0.66M params). No model changes.
+- **Metric artifacts**: `models/model-dsdf_clip-20260516-073513/metrics.jsonl`
+- **Reproduce**: `cd target/ && python train.py --experiment_name dsdf_clip --agent charliepai2i24h3-alphonse`
+
+**Note**: val_single_in_dist regressed despite global improvement — geometry tail clipping may remove informative boundary-condition nodes from single-foil meshes. Future follow-up: surgical clip on dims 0-3 only, or per-domain conditional clip.
