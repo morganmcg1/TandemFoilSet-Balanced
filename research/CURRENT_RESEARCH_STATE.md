@@ -1,74 +1,76 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-15 23:50
+- **Date**: 2026-05-16 00:45
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
-- **Round**: 3 active (R3 experiments: H20–H28)
+- **Round**: 3 active (R3 experiments: H20–H33)
 - **Most recent human research directive**: None received
 
 ## Current Best
 
-**PR #3450 (H25: Per-channel Huber δ_vel=1.0, δ_p=0.25 on H19 stack, askeladd) — val_avg/mae_surf_p = 75.7713** (merged 2026-05-15)
+**PR #3445 (H20: Grad clip=1.0 on H19 triple compound, nezuko) — val_avg/mae_surf_p = 75.4955** (merged 2026-05-16)
 
 | Reference | val_avg/mae_surf_p | Notes |
 |-----------|--------------------|-------|
-| **Per-channel Huber (δ_vel=1.0, δ_p=0.25) on H19 (H25 Arm B)** | **75.77** | **Current best (PR #3450)** |
-| Per-channel Huber (δ_vel=0.5, δ_p=0.25) on H19 (H25 Arm A) | 78.23 | (PR #3450) |
-| Uniform Huber δ=0.1 on H19 (H22 winning arm) | 78.83 | (PR #3447, merged) |
-| Uniform Huber δ=0.25 on H19 (H22 second arm) | 79.15 | (PR #3447, merged) |
-| FiLM + Huber δ=0.5 + T_max=15 (H19) | 83.81 | Previous best (PR #3408) |
-| Huber δ=0.5 + T_max=15 (no FiLM, H15) | 94.68 | (PR #3335) |
+| **Grad clip=1.0 + H19 (H20 Arm A)** | **75.4955** | **Current best (PR #3445)** |
+| Per-channel Huber δ_vel=1.0/δ_p=0.25 (H25 Arm B) | 75.7713 | (PR #3450) |
+| Per-channel Huber δ_vel=0.5/δ_p=0.25 (H25 Arm A) | 78.2286 | (PR #3450) |
+| Uniform Huber δ=0.1 on H19 (H22 Arm B) | 78.8321 | (PR #3447) |
+| Clip=0.5 on H19 (H20 Arm B) | 77.0687 | (PR #3445) |
+| FiLM + Huber δ=0.5 + T_max=15 (H19) | 83.8136 | (PR #3408) |
 
-**Test metrics (3-split avg, excl. cruise NaN bug):** 73.0704 (H25 Arm B)
+**Test metrics (3-split avg, excl. cruise NaN bug):** 73.1556 (H20 Arm A)
 
 ## Key Confirmed Insights
 
-1. **T_max mismatch was the dominant first-order bottleneck**: T_max=15 fix alone gave 11.7-pt improvement (114→102 etc.). Cosine T_max=epochs=50 never anneals at 30-min cap.
-2. **Per-channel Huber decouples pressure clipping (H25)**: δ_p=0.25 (aggressive clip on heavy-tailed pressure) + δ_vel=1.0 (near-MSE on Gaussian velocities) yields 9.6% improvement over uniform-Huber H19. Pressure outliers were dominating optimization.
-3. **Triple compound (H19) was the prior win**: FiLM + Huber δ=0.5 + T_max=15. FiLM adds 10.9 pts on top of compounded H15. H25 then improved on this by decoupling Huber per channel.
-4. **Huber δ trend is monotone down to 0.1 for uniform**: H22 confirmed — δ=0.1 (78.83) better than δ=0.25 (79.15) when applied uniformly. But per-channel asymmetric δ wins outright.
-5. **FiLM conditioning is effective**: cond_dim=11 merged default. Reduces cross-regime variance via Re/AoA conditioning.
-6. **EMA at d=0.999 fails at 4,875-step budget (H24, closed)**: shadow weights lag a still-rapidly-improving live model. Pivoted to SWA (H28).
-7. **val_single_in_dist remains the ceiling split**: 86.55 at H25 — still 12+ pts above the val_geom_camber_cruise easy split. Root cause TBD.
-8. **Scoring NaN bug confirmed**: `test_geom_camber_cruise` sample 20 non-finite GT. Workaround: 3-split test_avg excl. cruise.
+1. **T_max mismatch was the dominant first-order bottleneck**: CosineAnnealingLR(T_max=50) with 30-min cap → ~14 epochs → LR never anneals. T_max=15 fix gave 11.7-pt gain.
+2. **Per-channel Huber wins over uniform (H25)**: δ_p=0.25 for pressure (heavy-tailed), δ_vel=1.0 for velocities (near-MSE) — decoupling channels targets the right statistical structure per field.
+3. **Grad clip=1.0 is independently effective (H20)**: Clipping was active every step (pre-clip norm 5–17). Caps per-step update magnitude, preventing any single high-Re sample from dominating a training step.
+4. **H20 and H25 use the SAME δ_p and δ_vel defaults**: H20's effective config is δ_vel=0.5/δ_p=0.25 (from merged defaults) + clip=1.0; H25 differs only in δ_vel=1.0 (no clip). The two wins are orthogonal: pressure clipping vs gradient clipping.
+5. **Compound H25+H20 (H29) is the top priority**: Neither has the other's improvement — combining should yield ~74 or better.
+6. **Averaging (EMA H24, SWA H28) fails at 14-epoch budget**: Model is in steep descent throughout; no converged basin to average. Both closed as dead ends.
+7. **WSD fails on this budget (H21 confirmed H9)**: Decay phase never fires within 14 epochs. CosineAnnealingLR T_max=15 is the right schedule.
+8. **cond_dim=3 beats cond_dim=11 (H26)**: Geometry tail dims zero out for single-foil samples (~50% of training), creating noise. cond_dim=3 (Re, AoA1, NACA1_camber) is the cleaner FiLM conditioning.
+9. **surf_weight=5 beats 10 (H23)**: Lowering surface weight improves both surface AND volume metrics simultaneously — 10 is too high.
+10. **lr=7e-4 beats lr=5e-4 on H19 (H27)**: Monotone LR trend confirmed; higher peak LR is better under T_max=15 cosine.
+11. **Scoring NaN bug confirmed**: `test_geom_camber_cruise` sample 20 non-finite GT. Workaround: 3-split test_avg excl. cruise.
 
-## Active R3 WIP / Review-Ready
+## Active R3/R4 WIP Experiments
 
-| PR | Student | Hypothesis | Status | val_avg (vs H25 75.77) |
-|----|---------|------------|--------|------------------------|
-| #3452 | frieren | H27: LR=7e-4 with T_max=15 base | **Review-ready** | ~79.79 — does not beat H25 |
-| #3448 | tanjiro | H23: surf_weight=5 (vs default 10) | **Review-ready** | ~81.91 — does not beat H25 |
-| #3446 | thorfinn | H21: WSD schedule on H19 stack | **Review-ready** | ~96.71 — dead end candidate |
-| #3445 | nezuko | H20: Grad clip=1.0 + FiLM+Huber+T_max=15 | WIP | — |
-| #3447 | (merged) | H22: uniform Huber δ sweep | Merged | 78.83 (won arm) |
-| #3450 | (merged) | H25: per-channel Huber | **Merged — NEW BEST** | 75.77 |
-| #3451 | ? | (stale label) | Investigate | — |
-| #3491 | edward | H28: SWA on H19 stack | WIP | — |
-| #3343 | fern | H17: Per-channel adaptive Huber (older variant) | **Sent back for rebase** — likely superseded by H25 | — |
-| #3349 | frieren | H18: Grad clip+FiLM+Huber | **Sent back for rebase** — superseded by nezuko H20 | — |
-| #3340 | thorfinn | H9: WSD schedule | **Sent back for rebase + verify** | 89.04 prelim |
+| PR | Student | Hypothesis | Status |
+|----|---------|------------|--------|
+| #3549 | nezuko | **H29: Per-channel δ_vel=1.0/δ_p=0.25 + clip=1.0 (compound H25+H20)** | WIP — **HIGHEST PRIORITY** |
+| #3551 | askeladd | H30: Clip sweep (2.0, 1.5) on H20 base | WIP |
+| #3553 | fern | H31: δ_p push (0.1, 0.05) with clip=1.0 | WIP |
+| #3557 | thorfinn | H32: LR sweep (1e-3, 8e-4) on H20 base | WIP |
+| #3561 | edward | H33: n_hidden=192/256 on H20 base | WIP |
+| #3452 | frieren | H27b: LR sweep (7e-4, 1e-3) + clip=1.0 rebase | WIP (rebase in progress) |
+| #3448 | tanjiro | H23b: surf_weight=5/2 + clip=1.0 rebase | WIP (rebase in progress) |
+| #3451 | alphonse | H26b: cond_dim=3/2 + clip=1.0 rebase | WIP (rebase in progress) |
 
-**Note:** All R3 PRs use cond_dim=11 (FiLM on) + Huber δ=0.5 + T_max=15 as the merged defaults. H25's per-channel Huber is now the new base for follow-up experiments.
+**Note:** All new R4 PRs use cond_dim=11, huber_delta_vel=0.5, huber_delta_p=0.25 (merged defaults), CosineAnnealingLR T_max=15 as the base. clip_grad_norm=1.0 is explicitly set in all new assignments.
 
-## Key Open Questions (Post-H25)
+## Key Open Questions (Post-H20)
 
-1. **Push per-channel Huber further**: δ_p=0.1 or even smaller for pressure on top of δ_vel=1.0? Monotone δ_p trend suggests room.
-2. **Decouple per-channel for velocities asymmetrically**: δ_Ux=1.0/δ_Uy=0.5/δ_p=0.25, or even per-channel separately tuned.
-3. **Grad clip on H25 base**: H18B signal (~74) from frieren on H19 — does grad clip=1.0 + per-channel Huber yield ~70?
-4. **SWA on H25 base**: H28 (edward) tests SWA on H19 base; rebase onto H25 would be the right next step.
-5. **LR sweep on H25 base**: H27 (frieren) tried lr=7e-4 on H19 base. Does lr ∈ {7e-4, 1e-3} beat lr=5e-4 on H25?
-6. **surf_weight on H25 base**: H23 (tanjiro) tried surf_weight=5 on H19. Now per-channel Huber down-weights pressure gradient already — does surf_weight↓ help or hurt?
-7. **val_single_in_dist ceiling (86.55 at H25)**: Why is in-dist the worst split? Suggests model has high variance on samples it should ace.
-8. **WSD vs cosine T_max=15 on triple+per-channel base (H9 pending rebase)**.
+1. **Does per-channel δ_vel=1.0 compound with clip=1.0?** H29 (nezuko) — critical, expected ~74 or better.
+2. **Optimal clip threshold?** H30 (askeladd) — does clip=2.0 continue the monotone trend, or is 1.0 the optimum?
+3. **How far can δ_p go?** H31 (fern) — δ_p=0.1 and δ_p=0.05; if it's nearly L1 at 0.05, does the loss destabilize?
+4. **Higher LR with clip stability?** H32 (thorfinn) + H27b (frieren) — clip=1.0 may allow lr=1e-3 without instability; H27b and H32 cover complementary ranges.
+5. **Architecture headroom on tuned base?** H33 (edward) — n_hidden=192/256 on H20 base. H5 (R1) was inconclusive on untuned stack.
+6. **cond_dim=3 with clip?** H26b (alphonse) — if cond_dim=3 compounds with clip, the combined FiLM+conditioning improvement is an additive win.
+7. **surf_weight=5/2 with clip?** H23b (tanjiro) — if lighter surface weighting helps on H20 base, may reveal gradient balance insight.
+8. **val_single_in_dist ceiling (~85.7 at H20)**: Still the worst split. Hypothesis: in-dist samples have high variance (single foil, diverse Re/AoA), model under-regularized for these.
 
-## Potential Next Research Directions (After R3 Reviews Close)
+## Potential Next Research Directions (After Active PRs Close)
 
-- **Per-channel Huber refinement**: δ_p ∈ {0.1, 0.05}, δ_vel asymmetric, learned δ.
-- **Combine grad clip + per-channel Huber + lr sweep**: triple-knob compound on H25 base.
-- **Pressure-only auxiliary head**: separate decoder branch for surface pressure with sharper loss.
-- **Architecture (deferred until simpler levers exhausted)**: spectral/Fourier features, graph-based positional encoding for surface, n_hidden/depth sweep with proper schedule.
-- **Per-split weighted loss**: val_single_in_dist drives error — upweight in-distribution samples?
-- **SWA tuned for short budget**: average final K=3 epochs only (skip noisy mid-training).
+- **Compound triple: δ_vel=1.0 + δ_p=0.1 + clip=1.0**: If H29 and H31 both win, compound all three.
+- **Per-sample adaptive loss weighting**: Reweight training samples by recent loss history to focus on hard samples (curriculum).
+- **Pressure-only auxiliary head**: Separate decoder branch with sharper Huber δ_p for surface pressure.
+- **Non-contiguous FiLM conditioning**: Try indices (Re, AoA1, AoA2) vs contiguous slice — alphonse's H26 suggested non-contiguous could test different structural hypothesis.
+- **Per-foil FiLM heads**: Single vs tandem mode switch to handle distribution mismatch in single-foil samples.
+- **Graph-based positional encoding**: Geodesic distances along foil surface for better surface-local representation.
+- **SWA with late start (start_epoch=11+) if budget allows**.
 
 ## Known Issues
 
-- `data/scoring.py` NaN propagation: `test_geom_camber_cruise` sample 20 has non-finite GT; `test_avg/mae_surf_p = NaN` for all models. File is read-only. Report 3-split test_avg excl. cruise as workaround.
+- `data/scoring.py` NaN propagation: `test_geom_camber_cruise` sample 20 has non-finite GT. File is read-only. Report 3-split test_avg excl. cruise as workaround.
+- train.py: `huber_delta` Config field is present but NOT used in loss computation — loss always uses `huber_delta_vel` and `huber_delta_p`. Students passing `--huber_delta` have no effect on the loss.
