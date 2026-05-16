@@ -369,6 +369,26 @@ def gamma_stats(model: nn.Module) -> dict[str, float]:
     return stats
 
 
+def param_norms(model: nn.Module) -> dict[str, float]:
+    """L2 norms of LayerScale gamma vectors and a representative MLP weight matrix.
+
+    Tracks how weight_decay shapes parameter magnitudes — per-block ‖gamma_attn‖
+    and ‖gamma_mlp‖ (no-decay group with LayerScale on), plus the per-block
+    MLP linear_pre weight (decay group) so we can see WD's effect on a normal
+    parameter for comparison.
+    """
+    norms: dict[str, float] = {}
+    for i, block in enumerate(model.blocks):
+        if block.gamma_attn is not None:
+            norms[f"param_norm/gamma_attn/block{i}"] = block.gamma_attn.detach().norm().item()
+        if block.gamma_mlp is not None:
+            norms[f"param_norm/gamma_mlp/block{i}"] = block.gamma_mlp.detach().norm().item()
+        if hasattr(block, "mlp") and hasattr(block.mlp, "linear_pre"):
+            w = block.mlp.linear_pre[0].weight
+            norms[f"param_norm/mlp_linear_pre_w/block{i}"] = w.detach().norm().item()
+    return norms
+
+
 def write_experiment_summary(
     model_path: Path,
     model_dir: Path,
@@ -673,6 +693,7 @@ for epoch in range(MAX_EPOCHS):
     gstats = gamma_stats(model)
     if gstats:
         epoch_record.update(gstats)
+    epoch_record.update(param_norms(model))
     if ema_model is not None:
         epoch_record["raw_val_avg/mae_surf_p"] = raw_avg_surf_p
         epoch_record["raw_val_splits"] = raw_split_metrics
