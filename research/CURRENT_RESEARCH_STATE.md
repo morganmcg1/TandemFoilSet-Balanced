@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 10:28
+- **Date:** 2026-05-16 10:36
 - **Branch:** `icml-appendix-charlie-pai2i-24h-r4`
 - **Round:** charlie-pai2i-24h-r4 (24h, 8 students × 1 GPU, local JSONL metrics only)
 - **Most recent human research directive:** _none — issue queue empty_
@@ -42,7 +42,7 @@
 | **#3742** | **tanjiro** | **H33 OneCycleLR pct_start sweep {0.10,0.15,0.20} — more fine-tune budget** | **WIP (training in progress)** |
 | **#3867** | **thorfinn** | **H41 domain-type indicator embedding (is_tandem 2-class) — fix val_single bottleneck** | **WIP (new, replaces H34)** |
 | **#3850** | **askeladd** | **H39 BF16 AMP mixed precision — unlock 18+ epochs in 30-min budget** | **WIP (new)** |
-| **#3687** | **nezuko** | **H30 gradient clipping max_norm=1.0 — 2-line stability fix** | **WIP (training in progress)** |
+| **#3889** | **nezuko** | **H42 aux Re/AoA prediction head (aux_weight={0.1, 0.05}) — val_re targeting** | **WIP (new, replaces H30)** |
 
 ## Closed/Failed this round
 
@@ -72,6 +72,7 @@
 | #3686 | askeladd | H31 SAM ρ=0.05 OneCycleLR | Closed — 84-95% worse baseline. 5.3 min/epoch (2.1×) → only 5-6 epochs fit in 30-min. Budget collision, not SAM failure. Best contingency val=124.68 (ep 6/10 truncated). AMP (H39) assigned as structural fix. |
 | #3792 | edward | H37 OneCycleLR epochs=12 | Closed — +14.3% (val=77.30). Lost ~20% gradient steps. Per-epoch drift 130s→166s (+27%) meant realized 10.8 epochs, schedule still truncated. Schedule truncation cannot be fixed by epoch-count alone under variable wall-time. |
 | #3762 | thorfinn | H34 RFF n_freq sweep {16,64} | Closed — n_freq=16: +13.1% (val=76.52), n_freq=64: +21.2% (val=81.97). Both regress uniformly. n_freq=32 is empirically optimal. Asymmetry (doubling hurts more than halving) — larger input dilutes per-input-dim weights at fixed n_hidden=256 bottleneck. |
+| #3687 | nezuko | H30 gradient clipping max_norm=1.0 | Closed — mean 4-seed val=71.93 (+6.3%). Natural gradient norm 4-30 with surf_weight=10; max_norm=1.0 fires 100% of batches (not spike-filtering but constant damping). OneCycleLR + log1p is already stable — no instability to clip. |
 
 ## OneCycleLR budget constraint (critical insight)
 
@@ -111,10 +112,9 @@ The 30-min wall-clock cap reliably truncates 15-epoch runs to ~11-13 epochs depe
 - Does SWA tail averaging K={3,5} give pseudo-ensemble benefit? (edward H40 — prediction: -0.5% to -3%)
 - Does compressing pct_start give more fine-tune budget? (tanjiro H33 {0.10,0.15,0.20} — prediction: -1% to -3%)
 - Does input Gaussian noise regularize the input Jacobian? (fern H38 — prediction: -0.5% to -2%)
-- Does n_freq=64 RFF improve spatial resolution? (thorfinn H34 — prediction: varies)
-- Does grad-clip stabilize OneCycleLR high-LR phase? (nezuko H30 — prediction: mild +/-)
+- Does aux Re/AoA head force Re-aligned encoder representations and close val_re gap? (nezuko H42 — prediction: -2% to -6%, concentrated on val_re)
 
-## Research insights so far (19 total)
+## Research insights so far (22 total)
 
 1. **OneCycleLR is the biggest win** (-14.9% val, -9.9% test in single PR). Super-convergence effect clear: rapid cosine fall forces LR to 9.4e-5 by epoch 12 vs cosine at 1.7e-4. Schedule didn't complete (epoch 12/15) so result is a lower bound.
 2. **LR schedule is the dominant lever**: Both H22 warmup (-14.0%) and H24 OneCycleLR (-14.9%) produced massive gains. OneCycleLR subsumed warmup. max_lr tuning is the natural next step.
@@ -137,6 +137,7 @@ The 30-min wall-clock cap reliably truncates 15-epoch runs to ~11-13 epochs depe
 19. **SAM structurally incompatible with 30-min cap**: H31 closed. 2.1× per-step slowdown → 5-6 SAM epochs max. OneCycleLR schedules need 12+ epochs for fine-tune tail. Per-epoch wall-time variance (130s → 166s across node SKUs) is a confound for all schedule-fitting experiments — future proposals must use step-count targets, not epoch-count.
 20. **n_freq=32 is empirically optimal for RFF on this dataset**: H34 closed. n_freq=16: +13.1%, n_freq=64: +21.2%. CFD pressure fields are spatially smoother than 3D NeRF textures — 32-mode basis with σ=1.0 captures all relevant frequencies. Asymmetry (doubling worse than halving) → fixed preprocess bottleneck (n_hidden=256) dilutes per-input-dim weights as rff_dim grows.
 21. **val_single=80.32 anomaly explained by structural input ambiguity**: Single-foil samples have dims 18-23 all zero — indistinguishable from degenerate tandem at zero gap/stagger. Model must infer regime from continuous geometry as a corner case. H41 tests explicit is_tandem embedding (zero-init BERT-style token type ID) to give the model a direct routing signal.
+22. **Gradient clipping incompatible with surf_weight=10 + signed_log1p loss**: H30 closed +6.3%. Natural gradient norm is mean 4-30, max 150 under the current loss. max_norm=1.0 fires 100% of batches — transforms AdamW into sign-of-gradient updates, destroying moment estimates. OneCycleLR + log1p produces stable monotonic descent (H24 curve confirms); there is no instability to fix. Any grad-clip intervention needs max_norm ≥ 30 to be spike-only.
 
 ## Next directions (after current wave resolves)
 

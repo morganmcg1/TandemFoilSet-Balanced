@@ -2,6 +2,21 @@
 
 Per-PR results log. Earliest at the bottom; latest at the top.
 
+## 2026-05-16 10:34 — PR #3889: H42 Auxiliary Re/AoA prediction head (nezuko) — **assigned**
+
+- Branch: `charliepai2i24h4-nezuko/aux-re-aoa-head`
+- Hypothesis: Lightweight auxiliary head predicts `log(Re)` and `AoA_foil1` from global masked mean-pooled latent after the final TransolverBlock. Auxiliary MSE loss with weight sweep {0.1, 0.05}. Forces the encoder to maintain Re/AoA-aligned representations via direct gradient signal. Caruana 1997 multi-task learning; Kendall, Gal, Cipolla CVPR 2018. Attacks val_re_rand=63.96 — only split with no previous targeted intervention. Predicted -2 to -6, concentrated on val_re.
+- Replaces: #3687 (H30 grad-clip — closed)
+
+## 2026-05-16 10:34 — PR #3687: H30 Gradient clipping max_norm=1.0 (nezuko) — **CLOSED**
+
+- Branch: `charliepai2i24h4-nezuko/grad-clip-1p0`
+- Result: val_avg=71.93 mean of 4 seeds (+6.3% regression vs baseline 67.64). grad_clip=5.0 single seed: val_avg=71.53 (+5.8%). No seed beats baseline.
+- Key diagnostic: `max_norm=1.0` fires on **100% of batches** throughout epochs 1-11. Natural gradient norm = mean 4-30, max up to 150 — clip fires on every step, not just spikes. AdamW steps become sign-of-gradient pseudo-steps, destroying first/second moment estimates. `max_norm=5.0` reduces fire rate to 25.9% by epoch 11 but early high-LR phase (≥60% fire rate epochs 1-7) still over-clips and regresses.
+- Per-split: val_single worst affected (80.32 → 87.45 mean), consistent across all 4 seeds — largest absolute gradient signal under surf_weight=10 is dampened most.
+- Lesson: OneCycleLR + surf_weight=10 + signed_log1p produces natural gradient norms 4-30. Any fixed max_norm below ~20 is not spike-filtering but constant damping. H24's clean monotonic descent confirms the optimizer is already stable; there is no instability problem to clip.
+- **Closed**: negative result. Hypothesis disconfirmed under current OneCycleLR + surf_weight=10 + log1p stack.
+
 ## 2026-05-16 10:25 — PR #3867: H41 Domain-type indicator embedding is_tandem (thorfinn) — **assigned**
 
 - Branch: `charliepai2i24h4-thorfinn/domain-type-indicator`
