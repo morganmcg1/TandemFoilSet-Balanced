@@ -522,7 +522,33 @@ n_ffn_params = sum(
 )
 print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN={n_ffn_params})")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+# PR #3932: head_and_embed-only LR boost (2.5x) — continuation of #3832 (1.75x).
+# All 5 blocks at baseline LR; the preprocess MLP + placeholder token (which
+# together carry the largest grad norm under SwiGLU per #3832's diagnostic at
+# 3.48 vs block_0 at 1.12, a 3.11x ratio) get the boost. 2.5x is the geometric
+# midpoint between 1.75x (undersized) and 3.1x (gradient equilibrium target).
+HEAD_EMBED_BOOST = 2.5
+NUM_BLOCKS = len(model.blocks)
+param_groups = []
+for i, block in enumerate(model.blocks):
+    param_groups.append({
+        "params": list(block.parameters()),
+        "lr": cfg.lr,
+        "name": f"block_{i}",
+    })
+block_param_ids = {id(p) for g in param_groups for p in g["params"]}
+head_embed_params = [p for p in model.parameters() if id(p) not in block_param_ids]
+param_groups.append({
+    "params": head_embed_params,
+    "lr": cfg.lr * HEAD_EMBED_BOOST,
+    "name": "head_and_embed",
+})
+print(
+    f"Param groups: {NUM_BLOCKS} blocks @ lr={cfg.lr:.2e}, "
+    f"head_and_embed @ lr={cfg.lr * HEAD_EMBED_BOOST:.2e} "
+    f"({HEAD_EMBED_BOOST}x boost, {len(head_embed_params)} tensors)"
+)
+optimizer = torch.optim.AdamW(param_groups, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
 
 run = wandb.init(
@@ -550,6 +576,7 @@ wandb.define_metric("val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
+wandb.define_metric("optim/*", step_metric="global_step")
 
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
@@ -598,13 +625,27 @@ for epoch in range(MAX_EPOCHS):
         grad_norm = torch.nn.utils.clip_grad_norm_(
             model.parameters(), max_norm=float("inf")
         )
+        # Per-group grad-norm (computed after backward, before step) — PR #3832/3932.
+        # Used to test whether boosted head_and_embed group sees its gradient mass
+        # shrink relative to blocks as the LR boost consumes it faster.
+        per_group_grad_norms = {}
+        for g in optimizer.param_groups:
+            sqs = [p.grad.detach().pow(2).sum() for p in g["params"] if p.grad is not None]
+            if sqs:
+                per_group_grad_norms[g["name"]] = torch.stack(sqs).sum().sqrt().item()
+            else:
+                per_group_grad_norms[g["name"]] = 0.0
         optimizer.step()
         global_step += 1
-        wandb.log({
+        log_payload = {
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
             "global_step": global_step,
-        })
+        }
+        for g in optimizer.param_groups:
+            log_payload[f"optim/{g['name']}/lr"] = g["lr"]
+            log_payload[f"optim/{g['name']}/grad_norm"] = per_group_grad_norms[g["name"]]
+        wandb.log(log_payload)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
