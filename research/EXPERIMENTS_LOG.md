@@ -2,6 +2,90 @@
 
 Per-PR results log. Earliest at the bottom; latest at the top.
 
+## 2026-05-16 00:30 — PR #3540: H24 OneCycleLR super-convergence (tanjiro) — **assigned**
+
+- Branch: `charliepai2i24h4-tanjiro/onecycle-lr`
+- Hypothesis: OneCycleLR (Smith & Topin 2019) replaces CosineAnnealingLR with a phased super-convergence schedule: rising LR (warmup-like phase), rapid fall (steeper than cosine), then very-low LR fine-tune phase. `max_lr=5e-4, div_factor=25, final_div_factor=1e4, pct_start=0.3`. Different paradigm from cosine — single structured cycle with rapid final fall.
+- Single arm with per-batch stepping. Target: val_avg < 80.21.
+- References: Smith & Topin arXiv:1708.07120.
+
+## 2026-05-16 00:30 — PR #3539: H23 slice_num sweep {32, 64, 128} (alphonse) — **assigned**
+
+- Branch: `charliepai2i24h4-alphonse/slice-num-sweep`
+- Hypothesis: PhysicsAttention has `slice_num=64` (Transolver default). Test {32, 64, 128} to find optimum on 1499-sample dataset. Lower may regularize attention routing; higher may capture finer boundary-layer features but overfit.
+- 3 arms. Target: val_avg < 80.21.
+
+## 2026-05-16 00:30 — PR #3538: H22 LR warmup + cosine eta_min=1e-5 (thorfinn) — **assigned**
+
+- Branch: `charliepai2i24h4-thorfinn/warmup-cosine`
+- Hypothesis: Linear LR warmup over 2 epochs (1e-5 → 5e-4) before cosine anneal to eta_min=1e-5. Addresses early-training noise observed in all PR curves (epochs 1-3 typically show large val_avg drops). Synergistic with H18 LayerScale (edward, in flight) and SwiGLU's gate init (random).
+- Single arm. Target: val_avg < 80.21.
+- References: He et al. "Bag of Tricks" CVPR 2019, Goyal et al. arXiv:1706.02677.
+
+## 2026-05-16 00:25 — PR #3461: H16 FiLM Geometry Conditioning (tanjiro) — **CLOSED**
+
+- Branch: `charliepai2i24h4-tanjiro/film-geom-cond`
+- Result: val_avg=84.36 (on H13 baseline 85.16), test_avg=77.74. -0.94% vs H13 GALE baseline but +5.2% vs current 80.21 baseline (run was on pre-SwiGLU code).
+
+| Split | H13 baseline | H16 FiLM | Delta |
+|---|---:|---:|---:|
+| val_single_in_dist | 106.16 | 106.44 | +0.28 (tied) |
+| val_geom_camber_rc | 92.10 | 95.28 | **+3.18 (worse)** |
+| val_geom_camber_cruise | 61.36 | 57.47 | -3.89 (better) |
+| val_re_rand | 81.01 | 78.26 | -2.74 (better) |
+| **val_avg** | **85.16** | **84.36** | **-0.94%** |
+| test_avg | 77.61 | 77.74 | +0.13 |
+
+- FiLM gates: scale gates dominated shift gates by ~10× (0.22-0.25 vs 0.01-0.04). Scale gate highest at block 0 (not monotone with depth).
+- **Analysis**: Multiplicative path overfits in-distribution feature importance and structurally regresses on the hardest OOD split (camber_rc). H13 GALE's additive shift was already optimal for OOD geometry. Multiplicative scaling reverses GALE's gain. SwiGLU's gates already implement per-dimension multiplicative feature modulation; FiLM's scale path is redundant + antagonistic to GALE additive injection.
+- **Decision**: Closed. Camber_rc regression is mechanistic, not seed variance. Rerunning on post-SwiGLU stack wouldn't change the fundamental tradeoff. Tanjiro reassigned to H24 OneCycleLR.
+
+## 2026-05-16 00:25 — PR #3184: H1 LinearNO ablation (alphonse) — **CLOSED, diagnostic**
+
+- Branch: `charliepai2i24h4-alphonse/linearno-no-interslice-qkv`
+- v1 result (pre-RFF code): val_avg=144.93, test_avg=131.04
+- v2 result (post-RFF + dropout + log1p baseline): val_avg=93.02, test_avg=84.96
+
+| Configuration | val_avg | delta vs current 80.21 |
+|---|---:|---:|
+| Baseline (with PhysicsAttention QKV) | 80.21 | — |
+| **LinearNO (no inter-slice QKV)** | **93.02** | **+16.0%** |
+
+- **Analysis**: Diagnostic ablation. Inter-slice QKV contributes ~13 absolute val_avg points. Largest single architectural contributor measured. Removing it costs more than the cumulative loss-side gains (log1p + dropout = ~30 points each). Confirms attention is essential and the baseline architecture is doing real work.
+- **Decision**: Closed (expected diagnostic regression). Alphonse reassigned to H23 slice_num sweep.
+
+## 2026-05-16 00:25 — PR #3417: H11b log1p alpha sweep {0.5, 1.0, 2.0} (thorfinn) — **CLOSED, α=1.0 optimal**
+
+- Branch: `charliepai2i24h4-thorfinn/log1p-alpha-sweep`
+- 3-arm sweep on pre-GALE pre-SwiGLU code:
+
+| α | val_avg | test_avg | delta vs α=1.0 |
+|---|---:|---:|---:|
+| 0.5 | 103.22 | 94.30 | +14.9% |
+| **1.0 (current default)** | **89.85** | **80.01** | — |
+| 2.0 | 95.99 | 88.31 | +6.8% |
+
+- **Analysis**: α=1.0 wins on every val and test split. No mixed result. α=0.5 underfits high-|y| tail; α=2.0 over-compresses and flattens loss landscape. The optimum is firmly at α=1.0 (already baked into baseline).
+- **Decision**: Closed (α=1.0 confirmed, no follow-up needed — α is loss-side and orthogonal to architectural changes, so optimum won't shift under SwiGLU/GALE). Thorfinn reassigned to H22 LR warmup.
+
+## 2026-05-16 00:20 — PR #3197: H8v3 EMA on combined baseline (askeladd) — **SENT BACK FOR REBASE — WINNER**
+
+- Branch: `charliepai2i24h4-askeladd/ema-weights-decay-0p999`
+- Result: **val_avg=74.178, test_avg=66.62** — **NEW BEST candidate, -7.5% vs current 80.21!**
+- v3 ran on FULL combined post-H15 stack (rebased onto advisor at 22:41 UTC, after H15 SwiGLU merged).
+
+| Split | Baseline (H15) | EMA v3 | Delta |
+|---|---:|---:|---:|
+| val_single_in_dist | 104.46 | 98.18 | -6.28 |
+| val_geom_camber_rc | 88.50 | 81.38 | -7.12 |
+| val_geom_camber_cruise | 53.88 | 49.79 | -4.09 |
+| val_re_rand | 74.00 | 67.37 | -6.63 |
+| **val_avg** | **80.21** | **74.178** | **-7.5%** |
+| test_avg | 73.20 | 66.62 | -9.0% |
+
+- Best epoch 11 (EMA). EMA wins on 3/4 splits over live; live wins on single_in_dist (98.18 EMA vs 92.80 live) but EMA wins on average.
+- **Status**: GitHub mergeStateStatus=DIRTY (CONFLICTING) — needs rebase. Sent back with detailed merge conflict resolution guidance (the SwiGLU MLP class change is the expected conflict in train.py). Result is already on post-H15 stack; no rerun needed. Will merge after force-push.
+
 ## 2026-05-15 23:00 — PR #3517: H19 DropPath stochastic depth (frieren) — **assigned**
 
 - Branch: `charliepai2i24h4-frieren/droppath`

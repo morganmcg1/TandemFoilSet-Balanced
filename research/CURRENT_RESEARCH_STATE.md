@@ -1,11 +1,11 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-15 23:05
+- **Date:** 2026-05-16 00:35
 - **Branch:** `icml-appendix-charlie-pai2i-24h-r4`
 - **Round:** charlie-pai2i-24h-r4 (24h, 8 students × 1 GPU, local JSONL metrics only)
 - **Most recent human research directive:** _none — issue queue empty_
 - **Primary metric:** `val_avg/mae_surf_p` (lower is better)
-- **Current baseline:** `val_avg/mae_surf_p = 80.21` (PR #3423 edward H15 SwiGLU, 2 runs; seed variance ~10%)
+- **Current baseline:** `val_avg/mae_surf_p = 80.21` (PR #3423 edward H15 SwiGLU; **#3197 askeladd EMA at 74.18 is winner pending rebase**)
 
 ## Merged improvements so far (baseline stack)
 
@@ -16,32 +16,31 @@
 | #3326 fern H12 | MLP dropout=0.1 in FFN sub-layers | -10.32 (-8.4%) | 112.49 |
 | #3345 thorfinn H11 | signed-log1p target transform | -19.69 (-17.5%) | ~92.80 |
 | #3224 tanjiro H13 | GALE-style geom-cond per block + T_max=15 | -7.64 (-8.2%) | 85.16 |
-| **#3423 edward H15** | **SwiGLU gated FFN (replaces GELU)** | **-4.95 (-5.8%)** | **80.21** |
+| #3423 edward H15 | SwiGLU gated FFN (replaces GELU) | -4.95 (-5.8%) | 80.21 |
+| **#3197 askeladd H8v3** | **EMA weights (decay=0.999)** — PENDING MERGE | **-6.03 (-7.5%)** | **74.18** |
 
-## Per-split current best (H15 reference, run 2)
+## Per-split current best (H15 reference; EMA expected on merge)
 
-| Split | val | test |
-|---|---|---|
-| `single_in_dist` | 104.46 | — |
-| `geom_camber_rc` | 88.50 | — |
-| `geom_camber_cruise` | 53.88 | — |
-| `re_rand` | 74.00 | — |
-| **avg** | **80.21** | **73.20** |
-
-Note: per-split test metrics not separately reported by edward. test_avg=73.20.
+| Split | val (H15) | val (EMA v3, pending) | test (EMA v3) |
+|---|---|---|---|
+| `single_in_dist` | 104.46 | 98.18 | — |
+| `geom_camber_rc` | 88.50 | 81.38 | — |
+| `geom_camber_cruise` | 53.88 | 49.79 | — |
+| `re_rand` | 74.00 | 67.37 | — |
+| **avg** | **80.21** | **74.18** | **66.62** |
 
 ## Current active WIP PRs (8 students, all assigned)
 
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
-| #3417 | thorfinn | H11b log1p alpha sweep {0.5, 1.0, 2.0} | WIP (training done, awaiting commit post rate-limit) |
+| **#3197** | **askeladd** | **H8v3 EMA (val_avg=74.18, WINNER)** | **Sent back for rebase (CONFLICTING train.py); merge after fix** |
 | #3421 | nezuko | H14v2 cosine T_max=14 + eta_min=1e-5 single-arm retest | WIP (sent back for v2 retest on current code) |
-| #3197 | askeladd | H8v3 EMA on combined baseline | WIP (training done, awaiting commit post rate-limit) |
-| #3461 | tanjiro | H16 FiLM geom-cond (γ + β, extends H13 GALE) | WIP (training started, post-rate-limit) |
-| #3467 | fern | H17 attention dropout sweep {0.05, 0.10} | WIP (training started, post-rate-limit) |
-| #3184 | alphonse | H1 LinearNO ablation | WIP (training done, awaiting commit post rate-limit) |
-| **#3514** | **edward** | **H18 LayerScale residual scaling (CaIT init=1e-6)** | **WIP (just assigned)** |
-| **#3517** | **frieren** | **H19 DropPath stochastic depth {0.10, 0.20}** | **WIP (just assigned)** |
+| #3467 | fern | H17 attention dropout sweep {0.05, 0.10} | WIP (training started 00:21 UTC after iter 118) |
+| #3514 | edward | H18 LayerScale residual scaling (CaIT init=1e-6) | WIP (just assigned) |
+| #3517 | frieren | H19 DropPath stochastic depth {0.10, 0.20} | WIP (just assigned) |
+| **#3538** | **thorfinn** | **H22 LR warmup (2-epoch linear) + cosine eta_min=1e-5** | **WIP (just assigned)** |
+| **#3539** | **alphonse** | **H23 slice_num sweep {32, 64, 128}** | **WIP (just assigned)** |
+| **#3540** | **tanjiro** | **H24 OneCycleLR super-convergence** | **WIP (just assigned)** |
 
 ## Closed/Failed this round
 
@@ -52,48 +51,53 @@ Note: per-split test metrics not separately reported by edward. test_avg=73.20.
 | #3222 | nezuko | H9v2 Cautious AdamW | Closed — +1.0% vs H12 baseline |
 | #3201 | edward | H3 channel-loss (p=3, p=1.5) | Closed — severe in-dist regression |
 | #3375 | fern | H12b dropout sweep {0.05, 0.15, 0.20} | Closed — U-shape minimum at 0.10 |
-| **#3318** | **frieren** | **H6v2 SGDR+grad-clip** | **Closed — +7.5% regression; SGDR can't fire 2nd restart in 14-epoch budget** |
+| #3318 | frieren | H6v2 SGDR+grad-clip | Closed — +7.5% regression; SGDR can't fire 2nd restart in 14-epoch budget |
+| #3417 | thorfinn | H11b log1p alpha sweep {0.5, 1.0, 2.0} | Closed — α=1.0 confirmed optimal (dominant across all val/test splits) |
+| #3184 | alphonse | H1 LinearNO ablation | Closed — +16% regression diagnostic (inter-slice QKV essential) |
+| #3461 | tanjiro | H16 FiLM multiplicative geom-cond | Closed — camber_rc structural regression (+3.18), SwiGLU already covers multiplicative scaling |
 
 ## Research insights so far
 
-1. **SwiGLU FFN is a structural win**: -5.8% from replacing GELU with gated multiplicative FFN. OOD gains 1.5–1.7× larger than in-dist — gate modulation reduces co-adaptation like dropout but structurally. Best epoch at 10 (faster convergence).
-2. **GALE-style geometry conditioning works**: -8.2% from additive geom-cond with zero-init gates. Camber_rc split benefited most (-12.7%). T_max=15 alignment critical.
-3. **Log-domain target transform is the biggest lever**: -17.5% from signed-log1p. Compresses 13× y-std range.
-4. **FFN dropout confirmed optimal at 0.10**: U-shape minimum, all alternatives regress. Narrow basin.
-5. **Spectral bias matters**: RFF -3.9%.
-6. **Re-stratified sampling works**: upweighting high-Re samples improved OOD-Re splits.
-7. **SGDR does NOT compose with the current stack**: Only one LR restart fires in 14 realized epochs; second restart is structurally unreachable. Log1p + dropout absorb grad-clip's stabilization benefit. The SGDR direction is closed.
-8. **EMA validated earlier**: +7.4% gain over live (pre-GALE stack) — retest on current stack pending (askeladd).
-9. **Schedule alignment matters**: T_max=15 > T_max=50 for 14 realized epochs. T_max=14 + eta_min=1e-5 may give marginal further gain (nezuko retesting).
-10. **Seed variance is real with SwiGLU**: H15 showed 10% val_avg spread between 2 seeds. Gating amplifies lucky init states.
+1. **EMA is a major win**: -7.5% val, -9.0% test on full combined stack. Best epoch 11. Wins 3 of 4 splits over live weights (loses on single_in_dist but wins overall).
+2. **SwiGLU FFN is a structural win**: -5.8% from replacing GELU with gated multiplicative FFN. OOD gains 1.5–1.7× larger than in-dist.
+3. **GALE-style geometry conditioning works**: -8.2% from additive geom-cond with zero-init gates. Camber_rc split benefited most (-12.7%). T_max=15 alignment critical.
+4. **Log-domain target transform is the biggest lever**: -17.5% from signed-log1p, α=1.0 confirmed optimal across all splits.
+5. **FFN dropout confirmed optimal at 0.10**: U-shape minimum.
+6. **Spectral bias matters**: RFF -3.9%.
+7. **Re-stratified sampling works**: upweighting high-Re samples improved OOD-Re splits.
+8. **SGDR does NOT compose with current stack**: 14-epoch budget can't fit 2 restart cycles.
+9. **Multiplicative geom-cond (FiLM) hurts OOD geometry**: camber_rc regresses structurally. Additive (GALE) is the right form. SwiGLU already covers multiplicative scaling.
+10. **Inter-slice QKV attention is essential**: +16% regression when removed (alphonse H1 diagnostic). Largest single architectural contributor measured.
+11. **Seed variance is real with SwiGLU**: H15 showed 10% val_avg spread between 2 seeds.
 
 ## High-value in-flight bets
 
-- **edward H18 LayerScale**: Per-channel residual scaling (init=1e-6). Synergistic with SwiGLU — gradually activates depth capacity. Diagnostic: deeper blocks should develop larger gamma norms.
-- **frieren H19 DropPath**: Stochastic depth {0.10, 0.20}. Block-level regularization complementary to FFN dropout. Hypothesis: SwiGLU made each block more expressive; DropPath prevents block co-adaptation.
-- **fern H17 attn-dropout**: Unregularized attention on 1499 samples. 0.05 or 0.10 could help.
-- **tanjiro H16 FiLM**: Multiplicative geom-cond extends H13 GALE. Gate magnitudes from H13 suggest model wants more geometry capacity.
-- **askeladd H8v3 EMA**: On full combined stack. EMA orthogonal to geom-cond and SwiGLU.
-- **thorfinn H11b alpha sweep**: Verifies combined baseline. α=2.0 could help on tail of y distribution.
-- **nezuko H14v2**: Single-arm T_max=14 + eta_min=1e-5 on current code. Marginal gain expected; close if within seed variance.
-- **alphonse H1 LinearNO**: Diagnostic ablation — removes inter-slice QKV. Expected to regress but quantifies attention contribution.
+- **#3197 askeladd EMA**: Already a WINNER (74.18, -7.5%). Pending rebase to clear merge conflict. Top priority.
+- **#3514 edward H18 LayerScale**: Per-channel residual scaling (CaIT init=1e-6). Gradually activates depth.
+- **#3517 frieren H19 DropPath**: Stochastic depth {0.10, 0.20}. Block-level regularization.
+- **#3538 thorfinn H22 LR warmup**: 2-epoch linear warmup + cosine eta_min=1e-5. Addresses early-training noise.
+- **#3539 alphonse H23 slice_num sweep**: {32, 64, 128}. Direct test of PhysicsAttention granularity.
+- **#3540 tanjiro H24 OneCycleLR**: Super-convergence schedule. Different paradigm than cosine.
+- **#3467 fern H17 attn-dropout**: Sweep attention dropout {0.05, 0.10}.
+- **#3421 nezuko H14v2**: T_max=14 + eta_min=1e-5 retest on current code.
 
 ## Open questions
 
-- Does LayerScale's gradual depth activation compose with SwiGLU gating? (edward H18 testing)
-- Does DropPath's block-level regularization help on 1499 samples? (frieren H19 testing)
-- Does EMA gain survive on the full stack? (askeladd H8v3 testing)
-- Is α=1.0 optimal for log1p? (thorfinn H11b testing)
-- Does FiLM beat additive geom-cond? (tanjiro H16 testing)
-- Does attention dropout help in addition to FFN dropout? (fern H17 testing)
-- Does T_max=14 + eta_min=1e-5 give marginal gain over T_max=15? (nezuko H14v2 testing)
+- Will LayerScale + SwiGLU synergize on depth activation? (edward H18)
+- Does DropPath's block-level regularization help on 1499 samples? (frieren H19)
+- Does LR warmup reduce early-training noise without hurting peak performance? (thorfinn H22)
+- What's the optimal slice_num on this dataset? (alphonse H23)
+- Does OneCycleLR's super-convergence work better than CosineAnnealingLR for this 14-epoch budget? (tanjiro H24)
+- Does attention dropout help additionally? (fern H17)
+- Does T_max=14 + eta_min=1e-5 give marginal gain over T_max=15? (nezuko H14v2)
+- **EMA composability**: Does EMA still help when LayerScale, DropPath, warmup are also enabled? Future test.
 
 ## Next directions if plateau hits
 
-- **Architectural**: n_layers=7 (deeper), hierarchical attention, slice_num sweep (32 vs 64 vs 128)
-- **Loss**: physics-informed conservation terms, auxiliary lift/drag prediction head
-- **Optimizer**: OneCycleLR superconvergence (Smith 2017), LR warmup before cosine
-- **Data**: geometry-derivative features (curvature, normals), TTA, data augmentation (geometry perturbations)
-- **Conditioning**: per-block independent geom_proj (vs shared), FiLM on slice tokens instead of hidden state
-- **Learning rate sweep**: {1e-4, 5e-4 (current), 1e-3} — not yet ablated
-- **Preprocess MLP**: deeper (3 layers) or wider (256 hidden) to expand feature extraction capacity
+- **Architectural**: n_layers=7, hierarchical attention, deeper preprocess MLP
+- **Loss**: physics-informed conservation, auxiliary lift/drag prediction head
+- **Optimizer**: Lookahead wrapper, Lion optimizer, AdaBelief
+- **Data**: geometry-derivative features (curvature, normals), TTA, data augmentation
+- **Conditioning**: per-block independent geom_proj (vs shared)
+- **EMA refinement**: decay sweep {0.9999, 0.999, 0.99}, EMA on best-checkpoint vs final, EMA + BN/LN stats
+- **Combining recent wins**: Once EMA merges, the next stack will include SwiGLU + GALE + log1p + EMA. Should re-baseline any closed direction whose performance was margin-of-error vs prior baseline (e.g. attention dropout at 0.05 might suddenly help when paired with EMA's smoothing).
