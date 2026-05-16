@@ -541,6 +541,13 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     epoch_grad_norm_pre = 0.0
     n_batches = 0
+    # L1-regime fraction accumulators: per-channel (Ux, Uy, p), split by vol/surf.
+    # Counts the fraction of |residual| that lies above delta (i.e. in the L1
+    # branch of the Huber loss); informs whether delta is actively shaping loss.
+    l1_count_vol = torch.zeros(3, device=device, dtype=torch.float64)
+    l1_count_surf = torch.zeros(3, device=device, dtype=torch.float64)
+    n_vol_nodes = torch.zeros((), device=device, dtype=torch.float64)
+    n_surf_nodes = torch.zeros((), device=device, dtype=torch.float64)
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -568,6 +575,13 @@ for epoch in range(MAX_EPOCHS):
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
+
+        with torch.no_grad():
+            in_l1 = (abs_err >= delta).to(torch.float64)  # [B, N, 3]
+            l1_count_vol += (in_l1 * vol_mask.unsqueeze(-1)).sum(dim=(0, 1))
+            l1_count_surf += (in_l1 * surf_mask.unsqueeze(-1)).sum(dim=(0, 1))
+            n_vol_nodes += vol_mask.sum().to(torch.float64)
+            n_surf_nodes += surf_mask.sum().to(torch.float64)
 
         optimizer.zero_grad()
         loss.backward()
@@ -609,6 +623,10 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    vol_denom = float(n_vol_nodes.item()) or 1.0
+    surf_denom = float(n_surf_nodes.item()) or 1.0
+    l1_vol = (l1_count_vol / vol_denom).tolist()
+    l1_surf = (l1_count_surf / surf_denom).tolist()
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -617,7 +635,11 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/grad_norm_pre_clip": epoch_grad_norm_pre,
+        "train/l1_frac_vol": {"Ux": l1_vol[0], "Uy": l1_vol[1], "p": l1_vol[2]},
+        "train/l1_frac_surf": {"Ux": l1_surf[0], "Uy": l1_surf[1], "p": l1_surf[2]},
         "clip_grad_norm": cfg.clip_grad_norm,
+        "huber_delta_vel": cfg.huber_delta_vel,
+        "huber_delta_p": cfg.huber_delta_p,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -625,6 +647,7 @@ for epoch in range(MAX_EPOCHS):
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"L1frac_p[vol={l1_vol[2]:.3f} surf={l1_surf[2]:.3f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
