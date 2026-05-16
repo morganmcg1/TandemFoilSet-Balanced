@@ -66,7 +66,7 @@ The merged config now includes:
 | #3600 | fern     | Fourier L sweep (L=4, L=6 vs merged L=8) | newly assigned R15 |
 | #3151 | thorfinn | EMA model weights (rebase R2) | conflict state on GitHub despite student re-rebase |
 
-*(Note: alphonse's #3499 was closed null — RMSNorm worse. Alphonse needs new assignment if idle.)*
+| #3605 | alphonse | Cauchy/Lorentzian loss (heavier-tail than Charbonnier) | newly assigned R15 |
 
 ## Closed / merged this launch
 
@@ -135,5 +135,5 @@ arm at 100.21 confirms correct composition; EMA arms expected in 80-92 val range
 - AoA + Re jitter augmentation
 - Curriculum learning (single-foil first)
 
-**Check alphonse status** — #3499 closed null (RMSNorm). If idle, assign new
-hypothesis immediately.
+**Alphonse assigned #3605** — Cauchy/Lorentzian loss (γ sweep ∈ {0.1, 1.0}) as natural
+extension of the Charbonnier L1 regime; heavy-tail gradient saturation targets OOD splits.
