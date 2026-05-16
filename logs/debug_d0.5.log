@@ -1,0 +1,77 @@
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+wandb: W&B API key is configured. Use `wandb login --relogin` to force relogin
+wandb: Tracking run with wandb version 0.26.1
+wandb: Run data is saved locally in /workspace/senpai/target/wandb/run-20260516_062332-inhqak4o
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run willowpai2i48h2-alphonse/huber-delta-0.5-debug
+wandb: ⭐️ View project at https://wandb.ai/wandb-applied-ai-team/senpai-v1
+wandb: 🚀 View run at https://wandb.ai/wandb-applied-ai-team/senpai-v1/runs/inhqak4o
+Device: cuda [DEBUG]
+Train: 6, val_single_in_dist: 2, val_geom_camber_rc: 2, val_geom_camber_cruise: 2, val_re_rand: 2
+Model: Transolver (0.66M params)
+Epoch 1/3:   0%|          | 0/2 [00:00<?, ?it/s]Epoch 1/3:  50%|█████     | 1/2 [00:00<00:00,  1.32it/s]                                                        [ASINH-DEBUG scale=1.0] y_norm[p] range=[-7.345,3.814] y_target[p] range=[-2.692,2.049] pred[p] range=[-0.075,0.026] pred_inv[p] range=[-0.075,0.026] pred_phys[p] range=[-179.966,-111.642]
+Epoch   1 (2s) [15.1GB]  train[vol=0.4858 surf=0.4734]  val_avg_surf_p=505.8372 *
+    val_single_in_dist         loss=51.3772  surf[p=1078.3761 Ux=27.5903 Uy=3.4053]  vol[p=905.5789 Ux=24.9738 Uy=8.1265]
+    val_geom_camber_rc         loss=27.6255  surf[p=579.9632 Ux=21.8183 Uy=3.4742]  vol[p=554.0149 Ux=16.7804 Uy=7.5908]
+    val_geom_camber_cruise     loss=14.5300  surf[p=240.6523 Ux=21.2369 Uy=1.2494]  vol[p=208.9445 Ux=15.5232 Uy=3.0497]
+    val_re_rand                loss=12.7340  surf[p=124.3573 Ux=21.4326 Uy=0.9859]  vol[p=123.4071 Ux=17.2343 Uy=2.6740]
+Epoch 2/3:   0%|          | 0/2 [00:00<?, ?it/s]Epoch 2/3:  50%|█████     | 1/2 [00:00<00:00,  4.39it/s]                                                        Epoch   2 (1s) [15.1GB]  train[vol=0.4988 surf=0.4456]  val_avg_surf_p=503.7878 *
+    val_single_in_dist         loss=51.3867  surf[p=1076.1378 Ux=27.5706 Uy=3.3924]  vol[p=902.3551 Ux=25.0396 Uy=8.1050]
+    val_geom_camber_rc         loss=27.4939  surf[p=578.4864 Ux=21.6839 Uy=3.4724]  vol[p=552.4019 Ux=16.7877 Uy=7.5904]
+    val_geom_camber_cruise     loss=14.3116  surf[p=239.0086 Ux=21.0622 Uy=1.2505]  vol[p=209.6053 Ux=15.5026 Uy=3.0472]
+    val_re_rand                loss=12.4346  surf[p=121.5182 Ux=21.1296 Uy=0.9827]  vol[p=122.5533 Ux=17.1875 Uy=2.6695]
+Epoch 3/3:   0%|          | 0/2 [00:00<?, ?it/s]Epoch 3/3:  50%|█████     | 1/2 [00:00<00:00,  4.96it/s]                                                        Epoch   3 (1s) [15.1GB]  train[vol=0.6072 surf=0.5147]  val_avg_surf_p=501.6132 *
+    val_single_in_dist         loss=51.4032  surf[p=1073.8155 Ux=27.5494 Uy=3.3806]  vol[p=898.7342 Ux=25.1135 Uy=8.0815]
+    val_geom_camber_rc         loss=27.3488  surf[p=576.8732 Ux=21.5342 Uy=3.4711]  vol[p=550.5897 Ux=16.7954 Uy=7.5896]
+    val_geom_camber_cruise     loss=14.0738  surf[p=237.2911 Ux=20.8674 Uy=1.2524]  vol[p=210.3642 Ux=15.4774 Uy=3.0446]
+    val_re_rand                loss=12.1047  surf[p=118.4731 Ux=20.7900 Uy=0.9800]  vol[p=121.5952 Ux=17.1329 Uy=2.6644]
+
+Training done in 0.1 min
+
+Best val: epoch 3, val_avg/mae_surf_p = 501.6132
+
+Evaluating on held-out test splits...
+Test: test_single_in_dist: 2, test_geom_camber_rc: 2, test_geom_camber_cruise: 2, test_re_rand: 2
+wandb: updating run metadata; uploading artifact model-willowpai2i48h2-alphonse-huber-delta-0.5-debug-inhqak4o
+wandb: uploading artifact model-willowpai2i48h2-alphonse-huber-delta-0.5-debug-inhqak4o; uploading requirements.txt; uploading output.log; uploading wandb-summary.json; uploading config.yaml (+ 3 more)
+wandb: uploading artifact model-willowpai2i48h2-alphonse-huber-delta-0.5-debug-inhqak4o
+wandb: uploading history steps 0-9, summary, console lines 0-31
+wandb: 
+wandb: Run history:
+wandb:                             epoch_time_s █▁▁
+wandb:                              global_step ▁▂▂▄▅▅▇██
+wandb:                                       lr █▃▁
+wandb:        test/test_geom_camber_cruise/loss ▁
+wandb: test/test_geom_camber_cruise/mae_surf_Ux ▁
+wandb: test/test_geom_camber_cruise/mae_surf_Uy ▁
+wandb:  test/test_geom_camber_cruise/mae_surf_p ▁
+wandb:  test/test_geom_camber_cruise/mae_vol_Ux ▁
+wandb:  test/test_geom_camber_cruise/mae_vol_Uy ▁
+wandb:   test/test_geom_camber_cruise/mae_vol_p ▁
+wandb:                                      +90 ...
+wandb: 
+wandb: Run summary:
+wandb:                               best_epoch 3
+wandb:                  best_val_avg/mae_surf_p 501.6132
+wandb:                             epoch_time_s 0.70432
+wandb:                              global_step 6
+wandb:                                       lr 0
+wandb:        test/test_geom_camber_cruise/loss 20.62796
+wandb: test/test_geom_camber_cruise/mae_surf_Ux 26.43718
+wandb: test/test_geom_camber_cruise/mae_surf_Uy 1.31381
+wandb:  test/test_geom_camber_cruise/mae_surf_p 293.66474
+wandb:  test/test_geom_camber_cruise/mae_vol_Ux 24.43673
+wandb:                                      +93 ...
+wandb: 
+wandb: 🚀 View run willowpai2i48h2-alphonse/huber-delta-0.5-debug at: https://wandb.ai/wandb-applied-ai-team/senpai-v1/runs/inhqak4o
+wandb: ⭐️ View project at: https://wandb.ai/wandb-applied-ai-team/senpai-v1
+wandb: Synced 7 W&B file(s), 0 media file(s), 3 artifact file(s) and 0 other file(s)
+wandb: Find logs at: ./wandb/run-20260516_062332-inhqak4o/logs
+
+  TEST  avg_surf_p=380.1240
+    test_single_in_dist        loss=18.2318  surf[p=300.2621 Ux=22.3156 Uy=1.3035]  vol[p=272.2727 Ux=19.0967 Uy=3.1275]
+    test_geom_camber_rc        loss=22.5260  surf[p=488.5816 Ux=21.4467 Uy=2.1318]  vol[p=470.5495 Ux=16.5333 Uy=5.6457]
+    test_geom_camber_cruise    loss=20.6280  surf[p=293.6647 Ux=26.4372 Uy=1.3138]  vol[p=275.0601 Ux=24.4367 Uy=3.8701]
+    test_re_rand               loss=20.9102  surf[p=437.9876 Ux=19.5327 Uy=3.4507]  vol[p=404.5983 Ux=13.7088 Uy=7.4096]
+
+Logged model artifact 'model-willowpai2i48h2-alphonse-huber-delta-0.5-debug-inhqak4o' (aliases: best, epoch-3)

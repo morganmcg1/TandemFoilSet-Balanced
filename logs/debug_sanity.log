@@ -1,0 +1,33 @@
+Device: cuda [DEBUG]
+Train: 6, val_single_in_dist: 2, val_geom_camber_rc: 2, val_geom_camber_cruise: 2, val_re_rand: 2
+Model: Transolver (0.66M params)
+Epoch 1/3:   0%|          | 0/2 [00:00<?, ?it/s]Epoch 1/3:  50%|█████     | 1/2 [00:00<00:00,  1.18it/s]                                                        Epoch   1 (2s) [15.1GB]  train[vol=0.7938 surf=0.7915]  val_avg_surf_p=499.5150 *
+    val_single_in_dist         loss=229.4566  surf[p=1071.6408 Ux=27.4531 Uy=3.5608]  vol[p=899.3214 Ux=24.4125 Uy=8.0838]
+    val_geom_camber_rc         loss=44.4855  surf[p=573.5426 Ux=21.6617 Uy=3.8324]  vol[p=544.7911 Ux=16.5732 Uy=7.5455]
+    val_geom_camber_cruise     loss=15.2783  surf[p=248.0018 Ux=20.7343 Uy=1.5228]  vol[p=217.5614 Ux=15.1699 Uy=3.0229]
+    val_re_rand                loss=12.3574  surf[p=104.8751 Ux=21.1330 Uy=1.3357]  vol[p=107.4371 Ux=16.4375 Uy=2.5963]
+Epoch 2/3:   0%|          | 0/2 [00:00<?, ?it/s]Epoch 2/3:  50%|█████     | 1/2 [00:00<00:00,  4.52it/s]                                                        Epoch   2 (1s) [15.1GB]  train[vol=0.7727 surf=0.6985]  val_avg_surf_p=497.7248 *
+    val_single_in_dist         loss=229.3957  surf[p=1069.2873 Ux=27.4311 Uy=3.5737]  vol[p=896.3014 Ux=24.4809 Uy=8.0800]
+    val_geom_camber_rc         loss=44.2991  surf[p=571.6512 Ux=21.4834 Uy=3.8470]  vol[p=542.5722 Ux=16.5673 Uy=7.5450]
+    val_geom_camber_cruise     loss=15.0768  surf[p=247.2614 Ux=20.5394 Uy=1.5412]  vol[p=218.2564 Ux=15.1366 Uy=3.0230]
+    val_re_rand                loss=11.9873  surf[p=102.6991 Ux=20.7411 Uy=1.3566]  vol[p=106.4764 Ux=16.3593 Uy=2.5963]
+Epoch 3/3:   0%|          | 0/2 [00:00<?, ?it/s]Epoch 3/3:  50%|█████     | 1/2 [00:00<00:00,  4.91it/s]                                                        Epoch   3 (1s) [15.1GB]  train[vol=0.9572 surf=0.8412]  val_avg_surf_p=495.8938 *
+    val_single_in_dist         loss=229.3027  surf[p=1066.7903 Ux=27.3975 Uy=3.5858]  vol[p=892.8850 Ux=24.5453 Uy=8.0751]
+    val_geom_camber_rc         loss=44.0978  surf[p=569.5607 Ux=21.2967 Uy=3.8613]  vol[p=540.0352 Ux=16.5589 Uy=7.5444]
+    val_geom_camber_cruise     loss=14.8715  surf[p=246.7289 Ux=20.3341 Uy=1.5603]  vol[p=219.1213 Ux=15.0990 Uy=3.0232]
+    val_re_rand                loss=11.6027  surf[p=100.4954 Ux=20.3287 Uy=1.3775]  vol[p=105.3634 Ux=16.2682 Uy=2.5966]
+
+Training done in 0.1 min
+
+Best val: epoch 3, val_avg/mae_surf_p = 495.8938
+
+Evaluating on held-out test splits...
+Test: test_single_in_dist: 2, test_geom_camber_rc: 2, test_geom_camber_cruise: 2, test_re_rand: 2
+
+  TEST  avg_surf_p=367.9604
+    test_single_in_dist        loss=27.1148  surf[p=282.7068 Ux=22.8044 Uy=1.5661]  vol[p=251.0957 Ux=19.4158 Uy=3.0667]
+    test_geom_camber_rc        loss=34.7830  surf[p=478.3344 Ux=21.1784 Uy=2.5754]  vol[p=459.2313 Ux=16.1412 Uy=5.6080]
+    test_geom_camber_cruise    loss=22.6538  surf[p=279.5091 Ux=26.1727 Uy=1.6502]  vol[p=265.2107 Ux=24.0923 Uy=3.7350]
+    test_re_rand               loss=27.9243  surf[p=431.2914 Ux=19.4081 Uy=3.8946]  vol[p=399.7589 Ux=13.6683 Uy=7.4927]
+
+Logged model artifact 'model-debug-sanity-q3ch46uv' (aliases: best, epoch-3)
