@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 16:45 UTC
+- **Updated:** 2026-05-16 17:30 UTC
 - **Track:** Charlie local-metrics arm (`charlie-pai2i-48h-r1`)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-48h-r1`
 - **Target base:** `icml-appendix-charlie`
@@ -31,13 +31,30 @@ Three consecutive FiLM wins, each a one-line input-layer change:
 
 **Next probe:** PR #4041 (alphonse in-flight) extends to all 11 broadcast-constant scalars. If NACA conditioning helps val_geom_camber_rc specifically, it validates the geometric conditioning axis. If not, FiLM conditioning is saturated and the axis is closed.
 
+## R14 portfolio strategy (just dispatched, 7 fresh assignments)
+
+The 7 stale pre-FiLM PRs were closed because their baselines were 8-15 pts behind the FiLM regime. Replaced with **7 orthogonal hypotheses all anchored on the FiLM-Re+AoA baseline (68.80)** — chosen to attack different bottlenecks simultaneously.
+
+| Theme | Student | PR | Hypothesis | Expected mechanism |
+|-------|---------|----|------------|---------------------|
+| Compute | askeladd | #4064 | bf16 autocast | +4-6 epochs in 30-min budget |
+| Compute | edward | #4068 | n_layers 5→4 | -20% step time → +4-5 epochs |
+| Compute | nezuko | #4069 | torch.compile(dynamic=True) | -10-25% step time, kernel fusion |
+| Optim | fern | #4071 | Schedule-Free AdamW | Removes T_max fragility, internal averaging |
+| FiLM capacity | tanjiro | #4072 | Wider FiLM head 128→256 | Probe conditioning bottleneck |
+| EMA | thorfinn | #4073 | decay 0.997→0.995 | Looser window matches FiLM dynamics |
+| Normalization | frieren | #4077 | RMSNorm replaces LayerNorm | -1 op per norm, drop-in for LayerNorm |
+| Architecture | alphonse | #4041 | FiLM-full (11 scalars) | Probe NACA conditioning gap |
+
+Three compute experiments simultaneously (bf16, n_layers=4, torch.compile) — these may stack later if any wins. The optim/EMA/norm levers test orthogonal axes. FiLM-full and Wider-FiLM-head test the FiLM saturation hypothesis from two angles (more dims vs. more head capacity).
+
 ## Critical lessons (R1–R13)
 
-1. **30-min budget is the binding constraint.** Every capacity-adding experiment failed. Both FiLM runs are still monotonically descending at epoch 18 — compute-bound throughout.
+1. **30-min budget is the binding constraint.** Every capacity-adding experiment failed. Both FiLM runs are still monotonically descending at epoch 18 — compute-bound throughout. **Most current dispatches attack this directly.**
 2. **FiLM conditioning is the dominant architectural discovery.** Three consecutive wins. -13.9% total from mlp_ratio=1 baseline via FiLM alone.
-3. **FiLM conditioning axis still OPEN.** Re (9.6%) > Re+AoA (3.7%). Each extension cheaper than the last. Saturation signal: diminishing returns. Current probe: full 11-scalar conditioning.
+3. **FiLM conditioning axis still OPEN.** Re (9.6%) > Re+AoA (3.7%). Each extension cheaper than the last. Saturation signal: diminishing returns. Current probes: full 11-scalar conditioning (#4041) and wider FiLM head (#4072).
 4. **val_geom_camber_rc diagnostic pointer:** This split (OOD on front-foil NACA shape) improved least with AoA conditioning (-1.8%), directly pointing at NACA shape as the conditioning gap.
-5. **slice_num, EMA, dropout, surf_weight, n_head, mlp_ratio axes all CLOSED.**
+5. **slice_num, dropout, surf_weight, n_head, mlp_ratio axes all CLOSED.**
 6. **Identity FiLM init is critical pattern:** `nn.init.zeros_(film_head[-1].weight/bias)` ensures epoch-0 = baseline, allowing safe zero-risk experiments.
 
 ## Round wins merged (R1–R13)
@@ -58,32 +75,32 @@ Three consecutive FiLM wins, each a one-line input-layer change:
 
 **Total improvement from calibration baseline:** 143.52 → 68.80 = **-52.1%**
 
-## Currently in flight (8 WIP — all students active)
+## Currently in flight (8 WIP — all students active on FiLM baseline)
 
 | PR | Student | Hypothesis | Theme | Status |
 |----|---------|------------|-------|--------|
-| #3572 | nezuko   | CosineWarmRestarts T_0=4 T_mult=2 | LR schedule | WIP — high bar (68.80) |
-| #3573 | fern     | lr 5e-4→7e-4 (2-seed) | optim | WIP — high bar (68.80) |
-| #3558 | tanjiro  | racecar_single 2x upweight | data sampling | WIP — high bar (68.80) |
-| #3560 | thorfinn | surf per-channel (1,1,3) | loss channel | WIP — high bar (68.80) |
-| #3743 | askeladd | bf16 autocast | compute | WIP — notified of 71.46; needs 68.80 |
-| #3769 | edward   | n_layers=5→4 | compute/capacity | WIP — notified of 71.46; needs 68.80 |
-| #3772 | frieren  | gradient clipping max_norm=1.0 | stability | WIP — notified of 71.46; needs 68.80 |
-| #4041 | alphonse | FiLM-full: all 11 broadcast scalars | architecture | WIP (just assigned) |
+| #4041 | alphonse  | FiLM-full: all 11 broadcast scalars | architecture | WIP |
+| #4064 | askeladd  | bf16 autocast on FiLM | compute | WIP |
+| #4068 | edward    | n_layers 5→4 on FiLM | compute | WIP |
+| #4069 | nezuko    | torch.compile(dynamic=True) | compute | WIP |
+| #4071 | fern      | Schedule-Free AdamW | optim | WIP |
+| #4072 | tanjiro   | Wider FiLM head 128→256 | FiLM capacity | WIP |
+| #4073 | thorfinn  | EMA decay 0.997→0.995 | EMA | WIP |
+| #4077 | frieren   | RMSNorm replaces LayerNorm | normalization | WIP |
 
-Note: PRs #3572, #3573, #3558, #3560 predate FiLM. They face a very high bar (68.80). Most unlikely to beat the baseline on their own — review for insights and close if clearly regressing. PRs that could still win: askeladd (bf16), edward (n_layers=4) if they yield enough extra epochs on the FiLM baseline to overcome the gap.
+**Closed (stale, pre-FiLM baselines):** #3558, #3560, #3572, #3573, #3743, #3769, #3772 — all replaced with FiLM-aligned hypotheses above.
 
-## Potential next research directions (R14+)
+## Potential next research directions (R15+)
 
-1. **FiLM saturation check (PR #4041):** If full-11-scalar conditioning wins, the FiLM axis remains open. If not, FiLM axis is closed — the model already extracts sufficient information from Re and AoA.
-2. **Compute × FiLM compound:** If bf16 (askeladd) or n_layers=4 (edward) land, they should be re-run ON THE FiLM BASELINE, not the old 79.05 base. Compound wins compound.
-3. **Wider/deeper FiLM head:** Current head `Linear(11, 128) → GELU → Linear(128, 1280)`. A wider head (e.g., Linear(11, 256) → GELU → Linear(256, 1280)) might better exploit 11-dimensional conditioning. But may overfit small Re/NACA diversity.
-4. **FiLM inside PhysicsAttention slice projection:** Apply Re/geometry conditioning to the slice projections within PhysicsAttention, not just the block-level representations. More targeted attention modulation.
-5. **Schedule-Free AdamW:** Eliminates cosine T_max fragility. Single import change.
-6. **Second seed of current best (68.80):** Variance confirmation before ICML deadline.
+1. **Compound the winners.** If multiple of {bf16, n_layers=4, torch.compile} land, they should be merged sequentially and the next round runs on the compound baseline. Compute savings compound linearly with epochs.
+2. **FiLM × NACA shape conditioning.** If PR #4041 wins, the next probe is per-NACA expert routing (mixture of FiLM heads conditioned on NACA shape clusters).
+3. **FiLM inside PhysicsAttention slice projection.** Apply Re/geometry conditioning to the slice projections within PhysicsAttention, not just the block-level representations. More targeted attention modulation.
+4. **Cross-block FiLM with shared parameters.** Currently each block gets its own (γ,β). Try sharing the FiLM head across blocks (cheaper, may regularize).
+5. **Second seed of current best (68.80).** Variance confirmation before ICML deadline.
+6. **GEGLU/SwiGLU FFN.** mlp_ratio=1 is closed at FFN width axis, but FFN nonlinearity is unexplored.
 
 ## Plateau plan
 
 Progress: 11 consecutive wins (R1-R13), -52.1% total from calibration. First time crossing 50% improvement.
-FiLM conditioning has been the dominant theme of R11-R13.
+FiLM conditioning has been the dominant theme of R11-R13. R14 attacks 8 orthogonal axes simultaneously to find what stacks on top of FiLM.
 Next trigger: fires if two consecutive rounds land 0 winners vs the 68.80 baseline.
