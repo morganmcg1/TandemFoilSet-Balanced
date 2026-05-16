@@ -450,6 +450,7 @@ class Config:
     surf_weight: float = 10.0
     p_channel_weight: float = 3.0
     epochs: int = 50
+    cosine_tmax: int = 14  # match observed wall-clock ceiling (~13-14 epochs)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -502,7 +503,7 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: TransolverFiLM ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.cosine_tmax)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -598,11 +599,14 @@ for epoch in range(MAX_EPOCHS):
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
     dt = time.time() - t0
 
+    current_lr = optimizer.param_groups[0]['lr']
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/lr": current_lr,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
+        "epoch": epoch + 1,
         "epoch_time_s": dt,
         "global_step": global_step,
     }
