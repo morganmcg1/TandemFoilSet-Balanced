@@ -22,6 +22,7 @@ import math
 import os
 import subprocess
 import time
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -464,6 +465,7 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     use_onecycle: bool = False  # OneCycleLR (Smith&Topin) instead of CosineAnnealingLR
     onecycle_pct_start: float = 0.3  # fraction of training for rising LR phase
+    use_amp: bool = False  # bfloat16 mixed precision via torch.amp.autocast (training fwd+loss only)
 
 
 cfg = sp.parse(Config)
@@ -472,6 +474,7 @@ MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+print(f"AMP: {'bfloat16 mixed precision (training fwd+loss only; eval stays FP32)' if cfg.use_amp else 'FP32'}")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -602,41 +605,47 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
 
-        # H11: signed-log1p target transform applied on the loss side only.
-        # pred stays in linear (normalized) space for the metric/eval path;
-        # both pred and y_norm are passed through slog1p before MSE so per-sample
-        # gradients are magnitude-comparable across the Re range.
-        y_log = signed_log1p(y_norm)
-        pred_log = signed_log1p(pred)
-        sq_err = (pred_log - y_log) ** 2
+        amp_ctx = (
+            torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16)
+            if cfg.use_amp else nullcontext()
+        )
+        with amp_ctx:
+            pred = model({"x": x_norm})["preds"]
 
-        if not slog1p_diag_printed:
-            with torch.no_grad():
-                m = mask.unsqueeze(-1)
-                y_raw_p = y[..., 2][mask]
-                y_norm_p = y_norm[..., 2][mask]
-                y_log_p = y_log[..., 2][mask]
-                print(
-                    f"slog1p diag (pressure ch, batch 0, valid nodes):\n"
-                    f"  y raw     : min={y_raw_p.min().item():.2f} "
-                    f"max={y_raw_p.max().item():.2f} "
-                    f"std={y_raw_p.std().item():.2f}\n"
-                    f"  y_norm    : min={y_norm_p.min().item():.4f} "
-                    f"max={y_norm_p.max().item():.4f} "
-                    f"std={y_norm_p.std().item():.4f}\n"
-                    f"  slog1p(y_norm): min={y_log_p.min().item():.4f} "
-                    f"max={y_log_p.max().item():.4f} "
-                    f"std={y_log_p.std().item():.4f}"
-                )
-            slog1p_diag_printed = True
+            # H11: signed-log1p target transform applied on the loss side only.
+            # pred stays in linear (normalized) space for the metric/eval path;
+            # both pred and y_norm are passed through slog1p before MSE so per-sample
+            # gradients are magnitude-comparable across the Re range.
+            y_log = signed_log1p(y_norm)
+            pred_log = signed_log1p(pred)
+            sq_err = (pred_log - y_log) ** 2
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+            if not slog1p_diag_printed:
+                with torch.no_grad():
+                    m = mask.unsqueeze(-1)
+                    y_raw_p = y[..., 2][mask]
+                    y_norm_p = y_norm[..., 2][mask]
+                    y_log_p = y_log[..., 2][mask]
+                    print(
+                        f"slog1p diag (pressure ch, batch 0, valid nodes):\n"
+                        f"  y raw     : min={y_raw_p.min().item():.2f} "
+                        f"max={y_raw_p.max().item():.2f} "
+                        f"std={y_raw_p.std().item():.2f}\n"
+                        f"  y_norm    : min={y_norm_p.min().item():.4f} "
+                        f"max={y_norm_p.max().item():.4f} "
+                        f"std={y_norm_p.std().item():.4f}\n"
+                        f"  slog1p(y_norm): min={y_log_p.min().item():.4f} "
+                        f"max={y_log_p.max().item():.4f} "
+                        f"std={y_log_p.std().item():.4f}"
+                    )
+                slog1p_diag_printed = True
+
+            vol_mask = mask & ~is_surface
+            surf_mask = mask & is_surface
+            vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
