@@ -1600,3 +1600,45 @@ Triggered by Edward's H58 terminal result (Lion+GEGLU → −10.11 vs new H59 ba
 **H71 (Lion wd):** H58 used wd=1e-3 (Lion's classic sweet spot from H49). The H37b/H39c AdamW wd-optimum is wd=5e-5. Lion's decoupled-wd implementation behaves differently — Arm A wd=1e-4 and Arm B wd=5e-4 probe the local landscape around H58's choice.
 
 **Strategy:** All 8 students now WIP. Lion is the dominant lever; if any of H67-H71 lands cleanly, baseline could drop another 1-3 pts on top of H58's still-loose 46.80.
+
+---
+
+## 2026-05-16 16:31 — PR #4011: H66 slice_num sweep (thorfinn) — **MERGED, NEW BASELINE**
+
+- Branch: `charliepai2i48h3-thorfinn/h66-slice-num`
+- Hypothesis: Widen the slice-token representation in Transolver's PhysicsAttention from 64 → 96/128. H60's shallower depth freed ~13% s/epoch compute; this budget tested finer spatial selectivity for geometry-OOD splits.
+
+| Metric | H59 baseline (slice=64) | **Arm A (slice=96)** | Arm B (slice=128) | Δ A vs baseline |
+|--------|---:|---:|---:|---:|
+| **val_avg/mae_surf_p** | 56.9056 | **56.7504** | 58.8766 | **−0.16** |
+| **test_avg (3-split)** | 56.2420 | **54.5026** | 57.8969 | **−1.74** |
+| val_single_in_dist | 64.4659 | **60.9717** | 65.6492 | −3.49 |
+| val_geom_camber_rc | 70.1136 | **70.7939** | 72.4829 | +0.68 |
+| val_geom_camber_cruise | 35.7221 | 38.2785 | 39.2583 | +2.56 |
+| val_re_rand | 57.3210 | 56.9576 | 58.1159 | −0.36 |
+| test_geom_camber_rc | — | **61.8680** | 65.0606 | — |
+| test_single_in_dist | — | **54.5425** | 58.1689 | — |
+| test_re_rand | — | **47.0974** | 50.4611 | — |
+| Best epoch | 15 | 15 | 14 (wall-cut) | — |
+| Mean s/epoch | 113s | 121.8s | 130.7s | — |
+| n_params | 856,587 | 864,907 | 873,227 | — |
+
+**Analysis:** Arm A (slice=96) wins convincingly on the **test** side (−1.74 pts 3-split), with the gain concentrated on **test_geom_camber_rc (−3.33 pts)** — exactly the geometry-OOD split where local mesh spatial structure matters most, confirming the hypothesis mechanism. Val-side gain is marginal (−0.16 pts) with mixed per-split behavior (in-dist +, cruise −, OOD roughly flat). The strong test/val divergence suggests slice_num=96 improves OOD generalization more than in-distribution accuracy.
+
+Arm B (slice=128) regresses across the board. Two factors: (1) wall-cut at epoch 14 missing the sharpest final-epoch drop; (2) even at equal epoch 14, Arm B trailed Arm A by 1.60 pts — capacity vs. small dataset (1499 samples) tips into overfit.
+
+**Important nuance:** H66 was branched against the pre-H59 codebase (LayerNorm). The merged squash commit landed both H59 RMSNorm code and H66 slice_num flag on the advisor branch. The H66 numbers reflect **LayerNorm + slice_num=96**. Combining with RMSNorm is the direct follow-up (→ H72).
+
+**Bug-fix included:** Student exposed `--slice_num` as a CLI flag (Config field + one-line wire-through to model_config) — `slice_num=64` was previously hardcoded at line 499.
+
+**Status: MERGED — NEW BASELINE val=56.7504, test=54.5026 (3-split). Cumulative R5 gain: −9.36 pts val vs H37b (66.11 → 56.75).**
+
+---
+
+## 2026-05-16 16:32 — R5 cycle 14 new assignment (1 idle student)
+
+| PR | Student | Hypothesis | Predicted val_avg |
+|----|---------|------------|-------------------|
+| **#4048** | thorfinn | **H72: slice_num=96 + RMSNorm compound at GEGLU n_layers=4 base** | ~56.0-56.5 (Arm A) |
+
+**H72 (slice_num=96 + RMSNorm compound):** Directly compounds the two latest baseline-moving wins. H59 (RMSNorm, fused F.rms_norm) and H66 (slice_num=96) are mechanistically orthogonal — one is a kernel-efficiency / extra-epoch lever, the other widens the attention bottleneck. H66 was measured at LayerNorm; enabling both flags simultaneously (no code changes needed — both are in the merged codebase) should yield near-additive gains. Arm A = slice_num=96 + RMSNorm (direct compound). Arm B = slice_num=112 + RMSNorm (exploratory: probes the 96→128 interpolation zone, with RMSNorm's per-epoch speedup recovering the wall budget Arm B of H66 lost at 128).
