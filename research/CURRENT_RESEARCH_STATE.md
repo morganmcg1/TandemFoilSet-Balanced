@@ -1,139 +1,106 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 04:20
-- **Launch:** willow-pai2i-48h-r1 (round 4/5 in progress; #3546 merged, #3521 closed, 8/8 students active)
+- **Date:** 2026-05-16 05:45
+- **Launch:** willow-pai2i-48h-r1 (round 5 active; 8/8 students in flight)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~18 epochs achievable in bf16 at bs=4)
-- **Latest direction from human team:** None
+- **Latest direction from human team:** None (no open issues as of 05:45)
 
 ## Research contract
-Beat the Transolver baseline on `val_avg/mae_surf_p` (lower is better). Primary paper-facing metric also includes `test_avg/mae_surf_p` (all 4 splits valid since PR #3309 merged).
+
+Beat the Transolver baseline on `val_avg/mae_surf_p` (lower is better). Paper-facing metric: `test_avg/mae_surf_p` (all 4 splits valid since PR #3309).
 
 ## Current best baseline
-- **val_avg/mae_surf_p = 87.9105** (PR #3480, bf16 autocast + T_max=15)
-- **test_avg/mae_surf_p = 83.3782** (4-split, all valid)
-- **Epochs in 30 min:** 18 (bf16) vs 14 (fp32)
-- **Peak VRAM:** 32.9 GB vs 78 GB (fp32)
-- W&B: `t00506x1`
-- Noise floor σ ≈ 1.80 (alphonse PR #3305 4-replicate characterization, confirmed by nezuko PR #3175)
 
-## Merged PRs
-| PR | Hypothesis | val_avg/mae_surf_p | test_avg/mae_surf_p |
-|----|-----------|---------------------|---------------------|
-| #3159 | Huber loss δ=0.1 | 112.9001 | 115.7589 (3/4) |
-| #3309 | NaN fix (cruise test) | 112.8295 | 106.5996 (4/4) |
-| #3317 | Cosine T_max=15 | 91.3319 | 88.4260 (3/4) |
-| #3480 | **bf16 autocast (bs=4)** | **87.9105** | **83.3782 (4/4)** |
+| Metric | Value | Source |
+|---|---|---|
+| **val_avg/mae_surf_p (all-time best)** | **87.9105** | PR #3480, W&B `t00506x1` |
+| **test_avg/mae_surf_p (paper-facing)** | **83.3782** | PR #3480 |
+| **Canonical 4-seed mean μ̂** | 90.77 ± σ̂=1.54 | PR #3546 |
+| **Win threshold (1σ)** | val < 89.2 | = μ̂-σ̂ |
+| **Win threshold (2σ, strong)** | val < 87.7 | = μ̂-2σ̂ |
 
-## Closed PRs (key dead ends)
-| PR | Hypothesis | val | Reason |
-|----|-----------|-----|--------|
-| #3162 | surf_weight=25 (MSE) | 133.41 | Loss misalignment |
-| #3188 | slice_num=128 (MSE) | 134.74 | Capacity not bottleneck (fp32 base) |
-| #3167 | OneCycleLR | 137.12 | Budget too short |
-| #3180 | h=192 wider (MSE/T=50) | 150.38 | Resource-constrained, unfavorable conditions |
-| #3361 | slice_num=128 (retried) | 116.19 | 30% slower/ep, fp32 VRAM-saturated |
-| #3359 | edward no-commit | 133.32 | Iterated w/o pushing |
-| #3395 | LR peak scan 3e-4/8e-4 | 94.18/94.46 | lr=5e-4 at basin minimum |
-| #3426 | Warm restarts T_0=5 | 103.07 | 5-ep cycles too short |
-| #3460 | bf16 + bs=8 | 110.72 | bs=8 starved AdamW (-39% updates) |
-| #3459 | EMA decay=0.999 | 100.92 | Decay half-life > training horizon |
-| #3174 | L1-on-p + surf_w=50 | 99.51 | Gradient starvation (94% on surf-p) |
-| #3305 | Huber δ=0.05 (4 replicates) | 91.47 ± σ=1.80 | Within noise; **headline σ characterization** |
-| #3428 | surf_weight scan (15, 20) | 91.6 / 92.07 | Within σ — uniform surf_weight lever exhausted |
-| #3522 | L1-on-p ONLY w=10 | 103.07 | L1-shape weaker small-residual grads |
-| #3171 | Split pressure head v3 | 100.78 | Capacity cost > 14-ep payback |
-| #3363 | AdamW β2=0.95 + clip 1.0 | 92.43 (rebased) | Compounded with schedule fix into noise |
-| #3175 | Cosine warmup (3 replicates) | mean 95.16, best 89.65 | Within noise — mean firmly worse than baseline |
-| #3542 | TTA via h-flip (eval) | 91.14 raw / TTA=161.10 | **Dataset NOT z-symmetric — raceCar catastrophically OOD** |
-| #3580 | SWA over last 5 ckpts | 89.86 | SWA ≈ best-by-val under cosine T_max=15 (frozen tail) |
-| #3563 | Train-aug h-flip | 111.70 | **+27% catastrophic — confirms #3542 dataset finding** |
+## Merged PRs (all)
 
-## Merged PRs (cumulative)
-| PR | Hypothesis | val_avg/mae_surf_p | test_avg/mae_surf_p |
-|----|-----------|---------------------|---------------------|
-| #3159 | Huber loss δ=0.1 | 112.9001 | 115.7589 |
-| #3309 | NaN fix (cruise test) | 112.8295 | 106.5996 |
-| #3317 | Cosine T_max=15 | 91.3319 | 88.4260 |
-| #3480 | bf16 autocast (bs=4) | **87.9105** | **83.3782** |
+| PR | Hypothesis | val_avg | test_avg |
+|----|-----------|---------|---------|
+| #3159 | Huber loss δ=0.1 | 112.90 | 115.76 |
+| #3309 | NaN fix (cruise test) | 112.83 | 106.60 |
+| #3317 | Cosine T_max=15 | 91.33 | 88.43 |
+| #3480 | **bf16 autocast (bs=4)** | **87.91** | **83.38** |
 | #3546 | **Seed control + variance** | μ̂=90.77, σ̂=1.54 | μ̂=85.85, σ̂=0.67 |
-
-## Active WIP — 8/8 students (zero idle)
-| PR | Student | Hypothesis | Status |
-|----|---------|-----------|--------|
-| #3678 | alphonse | **Dropout (attn_drop=proj_drop=0.1), 2-seed** | NEW after #3546 merge |
-| #3562 | askeladd | Wider h=192, slice=96, T_max=18 under bf16 | **Best run val=86.81 (`hzxs6zx9`) — NUDGED for SENPAI-RESULT** |
-| #3611 | edward | Per-channel surf weight β_p=20 | In flight |
-| #3566 | fern | Unified pos encoding (unified_pos=True) | Runs done val~107 regress, pending SENPAI-RESULT |
-| #3642 | frieren | Layer-wise LR decay γ=0.85 | In flight |
-| #3644 | nezuko | Cosine T_max=10 + constant tail + SWA | In flight |
-| #3574 | tanjiro | Per-channel Huber-δ δ_p=0.05 | Active run in progress |
-| #3680 | thorfinn | **SwiGLU activation in MLP blocks** | NEW after #3521 close |
 
 ## URGENT — askeladd #3562 val=86.81 awaiting SENPAI-RESULT
 
-Run `hzxs6zx9` (h=192/slice=96/T_max=18) shows val_avg=86.81 — beats all-time best 87.91 and is 2.6σ below canonical mean 90.77. Two other completed runs: `sv85254i` val=91.06 and `fqzs1zk1` val=92.97. Student nudged to post terminal marker; advisor action on merge as soon as it posts.
+Run `hzxs6zx9` (h=192/slice=96/T_max=18 under bf16) shows val_avg=86.81 — beats all-time best 87.91 and is ≈2.6σ below canonical mean. Two other completed runs same config: `sv85254i` val=91.06, `fqzs1zk1` val=92.97. Student nudged twice to post terminal SENPAI-RESULT. **Merge pending receipt of terminal marker.**
 
-## Round 4 surfacing results (preliminary / logged)
+## Active WIP — 8/8 students (zero idle)
 
-### alphonse #3546 — 4 baseline replicates (W&B):
-| Run | Seed | val_avg | test_avg |
-|---|---|---:|---:|
-| `ek21s9hy` | seed0 (retry) | 91.11 | 85.64 |
-| `8vcv4ojk` | seed1 | 90.16 | 85.54 |
-| `1y3my9x2` | seed2 | 93.60 | 86.83 |
-| `0ekl0alh` | seed3 | 90.25 | 85.37 |
-| **mean** |  | **91.28** | **85.85** |
-| **σ̂** |  | **~1.60** | **~0.65** |
+| PR | Student | Hypothesis | Status |
+|----|---------|-----------|--------|
+| #3562 | askeladd | Wider h=192, slice=96, T_max=18 under bf16 | **URGENT: val=86.81 best-to-date, awaiting SENPAI-RESULT** |
+| #3678 | alphonse | Dropout attn_drop=proj_drop=0.1, 2-seed | WIP (new assignment post-#3546) |
+| #3611 | edward | Per-channel surf weight β_p=20 | WIP (nudged for status at 05:30) |
+| #3680 | thorfinn | SwiGLU activation in MLP blocks | WIP |
+| #3644 | nezuko | Cosine T_max=10 + constant tail + SWA | **SENT BACK FOR REBASE** (CONFLICTING, needs rebase onto #3546) |
+| #3721 | fern | **DropPath / Stochastic Depth (rate=0.1)** | **NEW — assigned 05:40** |
+| #3722 | frieren | **Inverse-LLRD (γ_inv=1.176, boost bottom block)** | **NEW — assigned 05:42** |
+| #3724 | tanjiro | **Corrected h-flip (flip pos_z+AoA+Uy, preserve NACA camber)** | **NEW — assigned 05:44** |
 
-**Critical implication:** baseline #3480 val=87.91 is **~2σ below** the canonical-config seed distribution mean. The 87.91 number may have been a downward outlier. *True* expected val under canonical bf16+T_max=15 is ~91 ± 1.6. **All future PR evaluations should be calibrated against this distribution**, not the point-estimate 87.91. Will update BASELINE.md variance notes once alphonse posts terminal marker.
+## Recently closed PRs (round 5)
 
-### fern #3566 — unified_pos=True (W&B):
-| Run | val_avg | test_avg |
-|---|---:|---:|
-| `nugotxr6` | 106.51 | 99.76 |
-| `s0tj1q82` | 108.07 | 103.13 |
+| PR | Hypothesis | val | Reason |
+|----|-----------|-----|--------|
+| #3642 | LLRD γ=0.85 | 92.45 | Inverted gradient profile — bottom block needs highest LR in Transolver, not lowest. LLRD assumption empirically falsified. |
+| #3566 | unified_pos=True | 102.63 | Encoding mismatch — flag swaps (x,z) for rotation-symmetric radial, discards directional info. +7.7σ regression. |
+| #3574 | Per-channel Huber-δ δ_p=0.05 | 91.78 | Within noise, above μ̂. Loss-formulation lever class exhausted. |
+| #3644 | Cosine T_max=10 + constant tail + SWA | — | Needs rebase (CONFLICTING). Sent back. |
 
->10σ regression on both runs. **Closing pending SENPAI-RESULT post.** Per-split breakdown will determine whether the regression is OOD-concentrated (informative finding about positional encoding's role in geom generalization) or uniform (clean dead end).
+## Dead-end lever classes (do not revisit)
 
-## Key insights from rounds 3 & 4 (cumulative)
-1. **bf16 is a clean orthogonal win** (PR #3480). 18 epochs/30min, 32.9GB VRAM. Now in canonical train.py. Stacks with all other levers.
-2. **Noise floor is σ ≈ 1.80** (alphonse PR #3305) — independently confirmed by nezuko's PR #3175 (3 seeds, ~5pt std). alphonse #3546 is running a fresh 4-replicate σ̂ on the new 87.91 baseline.
-3. **L1-on-surf-p lever fully exhausted** (#3174, #3522). The cruise OOD signal from #3174 was confounded with the surf_weight boost.
-4. **Marginal hyperparameter tweaks plateau within σ of baseline.** Surf_weight scan, β2+clip, Huber δ scan, cosine warmup, SWA — all within ±2σ. Time to bigger swings.
-5. **Capacity scaling under unfavorable conditions failed** (#3180, #3188). bf16's VRAM unlock + T_max=18 budget enables a real retest (askeladd #3562, in flight).
-6. **Schedule warmup lever is dead** (#3175). Cosine T_max=15 already provides soft warmup-like ramp.
-7. **Optimizer-stability lever is dead** (#3363). β2+clip on OLD base was schedule fix in disguise.
-8. **Dataset is NOT z-symmetric for raceCar domain** (PR #3542, edward). RaceCar has one-sided pos_z, AoA; non-negative NACA camber encoding. **This falsifies the entire naive horizontal-flip-symmetry lever class** (eval-time TTA #3542 and train-aug #3563 both catastrophically regressed).
-9. **SWA under cosine T_max=15 is a no-op** (PR #3580). Last 5 epochs near-frozen → SWA ≈ best-by-val. nezuko's follow-up tests this on a constant-LR-tail schedule.
-10. **Cosine T_max=15 tail is essentially dead weight** (epochs 15-17 with LR≈0). Implication: thorfinn's #3521 EMA decay=0.99 also faces this — its averaging window includes the frozen tail.
+1. **Naive horizontal-flip symmetry** — PRs #3542, #3563. Dataset NOT z-symmetric. Camber unsigned, AoA one-sided, pos_z one-sided for raceCar domain.
+2. **SWA/EMA on cosine T_max=15 frozen tail** — PRs #3580, #3521. Tail LR≈0 makes SWA≈best-by-val. Only valid on a non-frozen tail schedule.
+3. **Uniform surf_weight scan** — PRs #3428, #3174, #3522. All within σ or worse.
+4. **Cosine warmup** — PR #3175. Cosine T_max=15 already provides soft warm-up; explicit warmup adds nothing.
+5. **High-batch (bs=8)** — PR #3460. -39% optimizer updates per epoch starves convergence.
+6. **LLRD standard (top-to-bottom decay)** — PR #3642. Transolver gradients are inverted vs BERT/RoBERTa. Block_0 has largest grad norm.
+7. **unified_pos=True** — PR #3566. Incompatible with 2D asymmetric-flow Transolver (discards directional features).
+8. **Per-channel Huber-δ tightening** — PR #3574. Full loss-formulation lever class exhausted.
 
-## Round 4+ active levers (8 students)
-1. **Noise-floor characterization** (alphonse #3546) — seed control + 4-replicate baseline σ̂.
-2. **Capacity scaling** (askeladd #3562) — bigger model (h=192 slice=96 T_max=18), bf16.
-3. **Per-channel surf weight** (edward #3611) — β_p=20 on surface-p only, Ux/Uy stay at α=10.
-4. **Architectural — unified positional encoding** (fern #3566).
-5. **Layer-wise LR decay** (frieren pending) — γ=0.85 across 5 Transolver blocks.
-6. **Constant-LR-tail SWA** (nezuko pending) — cosine T_max=10 + 8-ep constant tail + SWA.
-7. **Loss shape — per-channel Huber-δ** (tanjiro #3574) — δ_p=0.05 on surface-p only.
-8. **Weight averaging — EMA** (thorfinn #3521) — decay=0.99 during training.
+## Key insights (cumulative)
 
-## Next research directions (post round 4)
-1. **Stack winners** — if per-channel-δ (#3574) and per-channel-surf-weight (#3611) both land, stack them (loss shape × gradient magnitude, orthogonal mechanisms).
-2. **Per-domain normalization** — pressure ranges differ by split (edward's #3542 distribution table). Not yet tested.
-3. **β_p scan** — if edward's #3611 β=20 wins, scan β∈{15, 25, 30}.
-4. **Mesh-permutation augmentation** — true symmetry of the mesh encoder, no physical-content change. Replaces the dead h-flip augmentation lever.
-5. **Corrected h-flip** (flip pos_z + AoA + Uy, leave camber alone) — frieren's suggested follow-up from #3563 analysis.
-6. **Cruise-only conditional augmentation** — leverage the one z-symmetric split.
-7. **bf16 + h=192 + EMA + LLRD stack** — full kitchen-sink confirmation run once individual levers land.
-8. **SwiGLU/SiLU activation swap** — modern transformer activation, untested in this program.
-9. **DropPath / stochastic depth** — orthogonal regularizer, untested.
-10. **Lighter split head** (fern's suggested follow-up from #3171) — h→h instead of h→2h→h.
+1. **bf16 is a clean orthogonal win** (#3480) — canonical default, 18ep/30min, 32.9GB VRAM.
+2. **Noise floor σ̂=1.54** (#3546) — baseline 87.91 is 1.86σ downward outlier. Meaningful win needs val < 89.2.
+3. **Dataset NOT z-symmetric** (#3542) — falsifies naive h-flip. Only cruise is z-symmetric.
+4. **SWA/EMA dead on frozen tail** (#3580, #3521) — constant-LR tail needed before averaging can help.
+5. **LLRD gradient inversion** (#3642) — Transolver's block_0 has highest grad norm; standard LLRD starves it.
+6. **unified_pos encoding mismatch** (#3566) — replaces directional coords with radial, incompatible with this 2D fork.
+7. **Loss-shape lever exhausted** (#3574, #3305, #3428) — δ and surf_weight scans converge to baseline.
+
+## Active hypotheses and expected outcomes
+
+| PR | Student | Lever class | Expected val | Confidence |
+|----|---------|------------|-------------|-----------|
+| #3562 | askeladd | Capacity scaling (h=192/slice=96) | **86.81 (observed in W&B!)** | HIGH — already trained |
+| #3678 | alphonse | Regularization (dropout 0.1) | 87–90 | Medium-high |
+| #3680 | thorfinn | Architecture (SwiGLU FFN) | 88–90 | Medium |
+| #3721 | fern | Regularization (DropPath 0.1) | 88–91 | Medium |
+| #3722 | frieren | Optimization (inverse-LLRD) | 88–91 | Medium (gradient-evidence backed) |
+| #3724 | tanjiro | Data aug (corrected h-flip) | 88–91 | Medium |
+| #3611 | edward | Loss weighting (β_p=20) | 88–91 | Medium |
+| #3644 | nezuko | Schedule+SWA (T_max=10+tail) | 87–91 | Pending rebase |
+
+## Next research directions (post round 5)
+
+1. **Stack if askeladd #3562 wins (h=192):** SwiGLU + DropPath on h=192 backbone — #3680 and #3721 already target h=128; winner can be re-tested on h=192.
+2. **Per-domain normalization** — per-split input/output normalization statistics. Not yet tested.
+3. **Hybrid positional encoding** — fern's suggested per-block injection with directional features preserved (the correct version of #3566).
+4. **Cruise-only conditional corrected-flip** — if #3724 tanjiro's corrected-flip wins, add conditional application to cruise as a stacking candidate.
+5. **β_p scan** — only if #3611 edward wins; scan β∈{15, 25, 30}.
+6. **Constant-tail SWA (nezuko #3644)** — after rebase; if it wins, the non-frozen-tail insight unlocks EMA too.
+7. **Gradient-norm-proportional LR** — frieren's follow-up from #3642 if inverse-LLRD wins.
+8. **LAMB optimizer** — Adam-variant with per-layer normalization, specifically designed for cases where gradient norms vary widely across layers (exactly Transolver's condition).
 
 ## Plateau status
-Not in plateau. bf16 unlock (#3480) was a real win past noise on test. Round 4 closes are concentrated information: dataset asymmetry finding (#3542 + #3563) is a high-value negative ruling out an entire lever class; SWA-on-frozen-tail finding (#3580) explains the redundancy and points to a fix. 7 active orthogonal lever classes in flight; 1-3 expected to compound.
 
-## Operational notes
-- **GitHub REST API rate limit (5000/hr) is being hit** by combined advisor+student traffic. Student pods (alphonse, thorfinn) hit it on assignment polls and fall back to "no work assigned" sleep, but training continues uninterrupted. Advisor work batches around the hourly reset.
-- **Thorfinn pod self-recovered** from earlier stuck-on-checkout state (uncommitted train.py blocking branch switch) via natural restart. Currently iteration 2, 100% GPU utilization.
-- Both alphonse and thorfinn are training-active; the stale_wip flag is a false positive driven by GH rate-limited polling, not actual stall.
+Not in plateau. Askeladd #3562 is a potential new all-time best (val=86.81 observed). 6 active orthogonal lever classes in flight across regularization, architecture, optimization, and data augmentation tiers. The round 5 close wave (3 regressions) has mapped the local dead ends and sharpened the remaining search space.

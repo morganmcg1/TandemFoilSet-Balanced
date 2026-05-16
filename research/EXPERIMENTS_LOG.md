@@ -831,3 +831,99 @@ EMA decay=0.99 val=91.07 = within 0.20pt of canonical μ̂=90.77 (<<σ=1.54). No
 **EMA lever dead under cosine T_max=15.** If nezuko's #3644 (constant-LR tail) shows the tail regime matters, EMA with decay=0.99 + constant tail is the right follow-up. Not now.
 
 Pod restart at 02:21 UTC (uncommitted train.py blocking checkout) caused the stale_wip appearance. Multiple run restarts visible in W&B.
+
+---
+
+## 2026-05-16 05:30 — PR #3642: H: Layer-wise LR decay γ=0.85 ✗ CLOSED (regression)
+
+- **Branch:** willowpai2i48h1-frieren/llrd_gamma85
+- **Student:** willowpai2i48h1-frieren
+- **Hypothesis:** Apply standard LLRD (γ=0.85) across 5 Transolver blocks — highest LR at top block, lowest at bottom — mirroring BERT/RoBERTa fine-tuning recipe.
+
+### Results
+
+| Metric | Baseline μ̂ (#3546) | LLRD γ=0.85 | Δ vs μ̂ | Δ vs best (87.91) |
+|---|---:|---:|---:|---:|
+| **val_avg/mae_surf_p** | 90.77 | **92.45** | +1.68 (+1.9%) | +4.54 (+5.2%) |
+| **test_avg/mae_surf_p** | 85.85 | **87.08** | +1.23 | +3.70 |
+
+Per-split val/test:
+
+| Split | val | test |
+|---|---:|---:|
+| single_in_dist | 110.41 | 99.99 |
+| geom_camber_rc | 101.17 | 88.36 |
+| geom_camber_cruise | 70.65 | 78.47 |
+| re_rand | 87.57 | 81.49 |
+| **avg** | **92.45** | **87.08** |
+
+W&B run: `rpjyfrss` · Best epoch: 15 · Group: layer_wise_lr_decay
+
+### Analysis
+**CLOSED — regression (~2.5σ above all-time best, clearly above μ̂).** The LLRD assumption (bottom layers are "frozen pretrained features") is empirically inverted for Transolver: frieren's gradient-norm diagnostics showed block_0 has the **largest** gradient signal (active geometry-encoding layers, not frozen representations). Standard LLRD γ=0.85 starved the most learning-hungry layer, causing the regression.
+
+**Mechanism confirmed by gradient telemetry:** standard LLRD amplified the gradient imbalance instead of correcting it. The BERT/RoBERTa recipe doesn't transfer because there's no pretraining — block_0 is randomly initialized and needs maximum LR to learn geometry encoding from scratch.
+
+**Falsified hypothesis class:** Standard top→bottom LR decay for Transolver. **Live follow-up: inverse-LLRD** (PR #3722, frieren) tests γ_inv=1.176 with highest LR at bottom block where gradient is strongest — direct inversion of this hypothesis, same magnitude.
+
+---
+
+## 2026-05-16 05:30 — PR #3566: H: Unified positional encoding (unified_pos=True) ✗ CLOSED (catastrophic regression)
+
+- **Branch:** willowpai2i48h1-fern/unified-positional-encoding
+- **Student:** willowpai2i48h1-fern
+- **Hypothesis:** Enable Transolver's `unified_pos=True` flag for cross-layer positional consistency and OOD generalization.
+
+### Results (best run: k72akuht)
+
+| Metric | Baseline #3480 | unified_pos=True | Δ | % |
+|---|---:|---:|---:|---:|
+| **val_avg/mae_surf_p** | 87.9105 | **102.6271** | +14.72 | **+16.7%** |
+| **test_avg/mae_surf_p** | 83.3782 | **98.8012** | +15.42 | **+18.5%** |
+
+Per-split breakdown (best run k72akuht, 3 runs total: s0tj1q82, nugotxr6, k72akuht):
+
+| Split | Val | Test |
+|---|---:|---:|
+| single_in_dist | 127.53 | 116.03 |
+| geom_camber_rc | 109.09 | 101.63 |
+| geom_camber_cruise | 76.52 | 83.94 |
+| re_rand | 97.36 | 93.62 |
+| **avg** | **102.63** | **98.80** |
+
+W&B runs: `s0tj1q82`, `nugotxr6`, `k72akuht` · Group: unified_pos_encoding
+
+### Analysis
+**CLOSED — catastrophic regression >7σ above canonical mean, uniform across all splits.** The worst-hit split is `single_in_dist` (+21.4%, opposite of the predicted OOD-geom improvement).
+
+**Encoding mismatch is the root cause:** in this 2D fork, `unified_pos=True` replaces directional `(x, z)` coordinates with rotation-symmetric radial-distance features to a reference grid. This discards the directional information the baseline relies on for accurate pressure field prediction. Additionally, the flag adds ~15.9K parameters while increasing convergence time ~2× — model still descending at epoch 18 under cosine T_max=15, leaving no fine-tuning budget.
+
+**Architectural finding:** `unified_pos` as implemented is incompatible with this 2D asymmetric-flow Transolver. It may work if directional features are preserved alongside the unified pos (hybrid concat or per-block injection).
+
+**Valid follow-up:** fern's suggested per-block positional injection (directional features preserved) is queued as a future hypothesis.
+
+---
+
+## 2026-05-16 05:30 — PR #3574: H: Per-channel Huber-δ (δ_p=0.05 on surface-p only) ✗ CLOSED (within noise, regression)
+
+- **Branch:** willowpai2i48h1-tanjiro/per-channel-huber-delta
+- **Student:** willowpai2i48h1-tanjiro
+- **Hypothesis:** Use δ_p=0.05 on surface-p channel (tighter Huber → stronger L1 penalty on small pressure residuals) while keeping δ=0.10 on Ux/Uy.
+
+### Results
+
+| Metric | Baseline μ̂ (#3546) | δ_p=0.05 | Δ vs μ̂ | Δ vs best (87.91) |
+|---|---:|---:|---:|---:|
+| **val_avg/mae_surf_p** | 90.77 | **91.78** | +1.01 | +3.87 |
+| **test_avg/mae_surf_p** | 85.85 | **86.67** | +0.82 | +3.29 |
+
+W&B run: `9leqg5zi` · Best epoch: 17 · Group: per_channel_huber_delta
+
+### Analysis
+**CLOSED — above canonical μ̂, 3.87pt above all-time best.** The per-channel Huber-δ lever class is now exhausted: δ=0.10 uniform (baseline) outperforms δ_p=0.05 single-channel tightening, δ_p=0.05 joint-channel (PR #3305), and the full suite of surf_weight scans (#3428, #3174, #3522). Loss-shape modification without architecture or schedule change has run out of signal.
+
+**Mechanistic note:** tighter Huber (smaller δ) increases the gradient for small residuals but simultaneously decreases gradient on large residuals — the pressure field has a heavy tail of large-residual outliers (especially geom_camber OOD splits) that need the full gradient signal. δ=0.10 provides the right balance.
+
+**Dead end: loss-formulation lever class for this baseline architecture.** Further gains from loss shaping would require quantile regression, gradient-norm-balanced multitask, or learned per-channel weights — all architectural additions rather than simple δ tuning.
+
+**Follow-up assigned:** PR #3724 tanjiro — corrected horizontal-flip augmentation (physics-respecting, flip pos_z+AoA+Uy, preserve unsigned NACA camber).
