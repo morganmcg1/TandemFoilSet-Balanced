@@ -279,7 +279,8 @@ def evaluate_split(model, loader, stats, surf_weight, device, loss_fn="mse", eps
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            with amp_ctx():
+                pred = model({"x": x_norm})["preds"]
 
             # Drop samples whose ground truth contains any non-finite value
             # before computing loss/MAE. scoring.accumulate_batch tries to skip
@@ -296,20 +297,21 @@ def evaluate_split(model, loader, stats, surf_weight, device, loss_fn="mse", eps
                 is_surface = is_surface[y_finite_per_sample]
                 mask = mask[y_finite_per_sample]
 
-            err = _per_node_loss(pred, y_norm, loss_fn, eps)
-            vol_mask = mask & ~is_surface
-            surf_mask = mask & is_surface
-            vol_loss_sum += (
-                (err * vol_mask.unsqueeze(-1)).sum()
-                / vol_mask.sum().clamp(min=1)
-            ).item()
-            surf_loss_sum += (
-                (err * surf_mask.unsqueeze(-1)).sum()
-                / surf_mask.sum().clamp(min=1)
-            ).item()
+            with amp_ctx():
+                err = _per_node_loss(pred, y_norm, loss_fn, eps)
+                vol_mask = mask & ~is_surface
+                surf_mask = mask & is_surface
+                vol_loss_sum += (
+                    (err * vol_mask.unsqueeze(-1)).sum()
+                    / vol_mask.sum().clamp(min=1)
+                ).item()
+                surf_loss_sum += (
+                    (err * surf_mask.unsqueeze(-1)).sum()
+                    / surf_mask.sum().clamp(min=1)
+                ).item()
             n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            pred_orig = pred.float() * stats["y_std"] + stats["y_mean"]
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -448,6 +450,7 @@ class Config:
     grad_clip_max_norm: float = 0.5  # 0.0 = no clipping, >0 = clip global L2 norm
     pos_enc_mode: str = "raw"        # "raw" | "fourier_basic" | "fourier_rich"
     pos_enc_num_freqs: int = 8        # frequency bands when mode != raw
+    amp_dtype: str = "fp32"   # "fp32" | "bf16"
 
 
 def _per_node_loss(pred, y, fn, eps):
@@ -466,6 +469,20 @@ MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+
+_AMP_DTYPE_MAP = {"fp32": None, "bf16": torch.bfloat16}
+if cfg.amp_dtype not in _AMP_DTYPE_MAP:
+    raise ValueError(f"--amp_dtype must be one of {list(_AMP_DTYPE_MAP)}; got {cfg.amp_dtype!r}")
+AMP_DTYPE = _AMP_DTYPE_MAP[cfg.amp_dtype]
+
+
+def amp_ctx():
+    if AMP_DTYPE is None:
+        return torch.amp.autocast(device_type="cuda", enabled=False)
+    return torch.amp.autocast(device_type="cuda", dtype=AMP_DTYPE)
+
+
+print(f"AMP: amp_dtype={cfg.amp_dtype}" + (" (autocast disabled)" if AMP_DTYPE is None else ""))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -588,14 +605,15 @@ for epoch in range(MAX_EPOCHS):
             wandb.summary["x_norm_pos_mean"] = xn_mean
             wandb.summary["x_norm_pos_std"] = xn_std
             _logged_x_range = True
-        pred = model({"x": x_norm})["preds"]
-        err = _per_node_loss(pred, y_norm, cfg.loss_fn, cfg.charbonnier_eps)
+        with amp_ctx():
+            pred = model({"x": x_norm})["preds"]
+            err = _per_node_loss(pred, y_norm, cfg.loss_fn, cfg.charbonnier_eps)
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
-        vol_loss = (err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+            vol_mask = mask & ~is_surface
+            surf_mask = mask & is_surface
+            vol_loss = (err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
