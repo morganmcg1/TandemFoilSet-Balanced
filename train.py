@@ -347,6 +347,29 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 
+def curriculum_weights(epoch, max_epochs, sample_to_group, group_sizes,
+                       easy_group="racecar_single",
+                       transition_frac=0.5,
+                       easy_boost=3.0):
+    """Per-sample weights ramping from easy-domain-boosted to uniform-balanced.
+
+    Easy domain weights start at easy_boost * (1/N_easy) and linearly decay to
+    1/N_easy over the first ``transition_frac`` of training. Other domains
+    start at 0.1*(1/N) and ramp to 1/N over the same window.
+    """
+    progress = min(1.0, epoch / max(max_epochs * transition_frac, 1e-9))
+    n = len(sample_to_group)
+    weights = torch.empty(n, dtype=torch.float64)
+    for i in range(n):
+        group = sample_to_group[i]
+        if group == easy_group:
+            w = (easy_boost - (easy_boost - 1.0) * progress) / group_sizes[group]
+        else:
+            w = (0.1 + 0.9 * progress) / group_sizes[group]
+        weights[i] = w
+    return weights
+
+
 @dataclass
 class Config:
     lr: float = 5e-4
@@ -359,6 +382,9 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    curriculum_easy_boost: float = 3.0
+    curriculum_transition_frac: float = 0.5
+    curriculum_easy_group: str = "racecar_single"
 
 
 cfg = sp.parse(Config)
@@ -371,19 +397,58 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
-loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
-                     persistent_workers=True, prefetch_factor=2)
+# Curriculum sampler needs per-sample domain assignment — recompute from meta.json.
+with open(Path(cfg.splits_dir) / "meta.json") as f:
+    _meta = json.load(f)
+_domain_groups = _meta["domain_groups"]
+group_sizes = {name: len(idxs) for name, idxs in _domain_groups.items()}
+sample_to_group: dict[int, str] = {}
+for name, idxs in _domain_groups.items():
+    for i in idxs:
+        sample_to_group[i] = name
 
-if cfg.debug:
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              shuffle=True, **loader_kwargs)
-else:
-    sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              sampler=sampler, **loader_kwargs)
+val_loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
+                         persistent_workers=True, prefetch_factor=2)
+# Train loader is recreated each epoch under the curriculum schedule, so
+# persistent_workers=False avoids carrying stale workers across DataLoader instances.
+train_loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
+                           persistent_workers=False, prefetch_factor=2)
+
+
+def make_train_loader(epoch: int) -> DataLoader:
+    if cfg.debug:
+        return DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True,
+                          **train_loader_kwargs)
+    cur_weights = curriculum_weights(
+        epoch=epoch, max_epochs=MAX_EPOCHS,
+        sample_to_group=sample_to_group, group_sizes=group_sizes,
+        easy_group=cfg.curriculum_easy_group,
+        transition_frac=cfg.curriculum_transition_frac,
+        easy_boost=cfg.curriculum_easy_boost,
+    )
+    sampler = WeightedRandomSampler(cur_weights, num_samples=len(train_ds), replacement=True)
+    return DataLoader(train_ds, batch_size=cfg.batch_size, sampler=sampler,
+                      **train_loader_kwargs)
+
+
+def curriculum_expected_mix(epoch: int) -> dict[str, float]:
+    """Expected per-domain sample fraction at the start of ``epoch`` (for logging)."""
+    w = curriculum_weights(
+        epoch=epoch, max_epochs=MAX_EPOCHS,
+        sample_to_group=sample_to_group, group_sizes=group_sizes,
+        easy_group=cfg.curriculum_easy_group,
+        transition_frac=cfg.curriculum_transition_frac,
+        easy_boost=cfg.curriculum_easy_boost,
+    )
+    mix = {g: 0.0 for g in group_sizes}
+    for i in range(len(w)):
+        mix[sample_to_group[i]] += float(w[i])
+    total = sum(mix.values())
+    return {g: v / total for g, v in mix.items()}
+
 
 val_loaders = {
-    name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+    name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **val_loader_kwargs)
     for name, ds in val_splits.items()
 }
 
@@ -438,6 +503,8 @@ for epoch in range(MAX_EPOCHS):
         break
 
     t0 = time.time()
+    train_loader = make_train_loader(epoch)
+    domain_mix = curriculum_expected_mix(epoch) if not cfg.debug else {g: 1.0 / len(group_sizes) for g in group_sizes}
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
@@ -500,7 +567,7 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
-    append_metrics_jsonl(metrics_jsonl_path, {
+    record = {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
@@ -510,10 +577,15 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
-    })
+    }
+    for g, frac in domain_mix.items():
+        record[f"train/domain_mix_{g}"] = frac
+    append_metrics_jsonl(metrics_jsonl_path, record)
+    mix_str = " ".join(f"{g[:4]}={v:.2f}" for g, v in domain_mix.items())
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"mix[{mix_str}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
@@ -535,7 +607,7 @@ if best_metrics:
         print("\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
         test_loaders = {
-            name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+            name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **val_loader_kwargs)
             for name, ds in test_datasets.items()
         }
         test_metrics = {
