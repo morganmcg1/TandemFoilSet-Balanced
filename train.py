@@ -172,6 +172,7 @@ class Transolver(nn.Module):
                  slice_num=32, ref=8, unified_pos=False,
                  pos_freq_bands: int = 0,
                  pos_freq_surface_only: bool = False,
+                 pos_freq_coord_norm: str = "dataset",
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -179,6 +180,11 @@ class Transolver(nn.Module):
         self.unified_pos = unified_pos
         self.pos_freq_bands = pos_freq_bands
         self.pos_freq_surface_only = pos_freq_surface_only
+        if pos_freq_coord_norm not in ("dataset", "bbox_xy", "bbox_iso"):
+            raise ValueError(
+                f"pos_freq_coord_norm must be 'dataset', 'bbox_xy', or 'bbox_iso'; got {pos_freq_coord_norm!r}"
+            )
+        self.pos_freq_coord_norm = pos_freq_coord_norm
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
 
@@ -231,12 +237,46 @@ class Transolver(nn.Module):
         proj = coords.unsqueeze(-1) * (2.0 * math.pi * self._fourier_freqs)
         return torch.cat([proj.sin(), proj.cos()], dim=-1).flatten(start_dim=-2)
 
+    def _bbox_normalize_coords(
+        self, coords: torch.Tensor, is_surface: torch.Tensor, mode: str,
+    ) -> torch.Tensor:
+        """Rescale coords to [0,1] per-sample using the bbox of surface nodes.
+
+        coords: [B, N, space_dim]; is_surface: [B, N] bool. Per-sample bbox is
+        computed over surface nodes only (padding has is_surface=False and is
+        excluded automatically). Used only for the Fourier PE input — the main
+        model input still receives dataset-normalised coords.
+        """
+        surf_mask = is_surface.unsqueeze(-1)
+        coords_for_min = torch.where(
+            surf_mask, coords, torch.full_like(coords, float("inf"))
+        )
+        coords_for_max = torch.where(
+            surf_mask, coords, torch.full_like(coords, float("-inf"))
+        )
+        if mode == "bbox_xy":
+            mins = coords_for_min.amin(dim=-2, keepdim=True)
+            maxs = coords_for_max.amax(dim=-2, keepdim=True)
+        elif mode == "bbox_iso":
+            mins = coords_for_min.amin(dim=(-2, -1), keepdim=True)
+            maxs = coords_for_max.amax(dim=(-2, -1), keepdim=True)
+        else:
+            raise ValueError(f"Unknown bbox normalisation mode: {mode!r}")
+        ranges = (maxs - mins).clamp(min=1e-8)
+        return (coords - mins) / ranges
+
     def forward(self, data, **kwargs):
         x = data["x"]
         if self.pos_freq_bands > 0:
             coords = x[..., :self.space_dim]
             fun = x[..., self.space_dim:]
-            fourier = self.fourier_encode(coords)
+            if self.pos_freq_coord_norm == "dataset":
+                coords_for_pe = coords
+            else:
+                coords_for_pe = self._bbox_normalize_coords(
+                    coords, data["is_surface"], self.pos_freq_coord_norm,
+                )
+            fourier = self.fourier_encode(coords_for_pe)
             if self.pos_freq_surface_only:
                 # Gate Fourier features by binary is_surface mask so only
                 # surface nodes receive the high-frequency basis expansion.
@@ -359,6 +399,7 @@ def write_experiment_summary(
         "ema_decay": cfg.ema_decay,
         "pos_freq_bands": cfg.pos_freq_bands,
         "pos_freq_surface_only": cfg.pos_freq_surface_only,
+        "pos_freq_coord_norm": cfg.pos_freq_coord_norm,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -420,6 +461,7 @@ class Config:
     surf_weight_init: float = 1.0       # starting surf_weight at epoch 0 when warmup is enabled
     pos_freq_bands: int = 0          # Fourier positional encoding bands (0 = disabled, NeRF-style γ(x))
     pos_freq_surface_only: bool = False  # Gate Fourier features by is_surface mask (surface-only PE)
+    pos_freq_coord_norm: str = "dataset"  # Coord rescaling for fourier_encode: "dataset" (current), "bbox_xy" (per-sample independent x/y bbox→[0,1]), "bbox_iso" (per-sample shared-scale bbox→[0,1])
 
 
 def augment_geometry(x: torch.Tensor, cfg: "Config") -> torch.Tensor:
@@ -479,6 +521,7 @@ model_config = dict(
     mlp_ratio=2,
     pos_freq_bands=cfg.pos_freq_bands,
     pos_freq_surface_only=cfg.pos_freq_surface_only,
+    pos_freq_coord_norm=cfg.pos_freq_coord_norm,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -656,6 +699,7 @@ for epoch in range(MAX_EPOCHS):
         "ema_decay": cfg.ema_decay,
         "pos_freq_bands": cfg.pos_freq_bands,
         "pos_freq_surface_only": cfg.pos_freq_surface_only,
+        "pos_freq_coord_norm": cfg.pos_freq_coord_norm,
         "scheduler": "onecycle" if cfg.use_onecycle else "cosine",
         "surf_weight_warmup_epochs": cfg.surf_weight_warmup_epochs,
         "surf_weight_init": cfg.surf_weight_init,
