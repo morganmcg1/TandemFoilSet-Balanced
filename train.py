@@ -448,6 +448,7 @@ class Config:
     use_swiglu: bool = False  # swap GELU MLP for SwiGLU gated MLP inside TransolverBlocks
     mlp_ratio: float = 2.0  # hidden expansion ratio for the MLP/SwiGLU block; float allows param-match (e.g. 1.333)
     n_head: int = 4  # number of attention heads; n_hidden must be divisible by n_head
+    warmup_epochs: int = 0  # linear warmup epochs before cosine annealing
 
 
 cfg = sp.parse(Config)
@@ -501,7 +502,18 @@ for p in ema_model.parameters():
 ema_decay = cfg.ema_decay
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+if cfg.warmup_epochs > 0:
+    warmup_sched = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=1e-6, end_factor=1.0, total_iters=cfg.warmup_epochs
+    )
+    cosine_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=max(1, MAX_EPOCHS - cfg.warmup_epochs)
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup_sched, cosine_sched], milestones=[cfg.warmup_epochs]
+    )
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -596,7 +608,11 @@ for epoch in range(MAX_EPOCHS):
             for ema_p, p in zip(ema_model.parameters(), model.parameters()):
                 ema_p.data.mul_(ema_decay).add_(p.data, alpha=1 - ema_decay)
         global_step += 1
-        step_log = {"train/loss": loss.item(), "global_step": global_step}
+        step_log = {
+            "train/loss": loss.item(),
+            "train/lr": optimizer.param_groups[0]["lr"],
+            "global_step": global_step,
+        }
         if grad_norm_preclip is not None:
             step_log["train/grad_norm_preclip"] = grad_norm_preclip
         wandb.log(step_log)
