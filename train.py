@@ -436,7 +436,7 @@ scheduler = torch.optim.lr_scheduler.OneCycleLR(
     optimizer,
     max_lr=1e-3,
     total_steps=len(train_loader) * 14,
-    pct_start=0.1,
+    pct_start=0.05,
     div_factor=25,
     final_div_factor=1e4,
 )
