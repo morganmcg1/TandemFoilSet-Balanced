@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 00:40 UTC
+- **Last updated:** 2026-05-16 01:00 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
 - **Most recent direction from human researcher team:** None (checked 00:30 UTC — no open issues).
 
@@ -30,20 +30,20 @@ Per-split validation:
 | #3456 | nezuko | cosine T_max=14, T_max=9 | 96.04 (T_max=14 only; T_max=9 NOT YET RUN) | +5.9% so far |
 | #3458 | tanjiro | huber-delta sweep (0.5, 1.0, 2.0, 0.0) | 93.91 (δ=1.0); δ=0.0 running | +3.6% so far |
 
-### Tier-2 — orthogonal mechanisms (all WIP, training active or awaiting terminal post)
+### Tier-2 — orthogonal mechanisms (WIP)
 
 | PR | Student | Hypothesis | W&B best | Vs new baseline | Status |
 |----|---------|-----------|----------|-----------------|--------|
-| **#3475** | **askeladd** | **asinh-pressure (scale=1.0)** | **88.67** | **−2.1% WIN** | **Awaiting terminal SENPAI-RESULT — top merge candidate** |
-| #3473 | fern | geom-aug-mirror | 99.79 | +10.1% REGRESS | Awaiting terminal result → likely close |
-| #3476 | frieren | swa-on-full-stack start=6 | 96.00 | +5.9% REGRESS | start=4 arm pending |
+| **#3475** | **askeladd** | **asinh-pressure (scale=1.0)** | **88.67** (old base) | **−2.1% WIN** | **Sent back to WIP — rebase onto new main + re-verify single arm on ema_decay=0.99 baseline; merge on receipt** |
+| #3476 | frieren | swa-on-full-stack start=6 | 96.00 | +5.9% REGRESS | start=4 arm still pending |
 | #3477 | thorfinn | physics-continuity | 98.66 (w=0.01); w=0.1 running | +8.9% so far | Await w=0.1 + w=0.5 completion |
+| #3571 | fern | depth-sweep (n_layers=6, then 7) | — just assigned | — | After her geom-aug closed (99.79 regression) |
 
 ### Tier-3 — follow-up on confirmed direction (EMA decay bracketing)
 
 | PR | Student | Hypothesis | Status |
 |----|---------|-----------|--------|
-| #3543 | alphonse | ema-decay-push (0.98, 0.97, 0.95) | Just assigned |
+| #3543 | alphonse | ema-decay-push (0.98, 0.97, 0.95) | WIP |
 
 ## Confirmed winners (merged)
 
@@ -68,8 +68,8 @@ EMA+clip5+Huber δ=1.0: −22.4% val_avg. Three mechanisms orthogonal (EMA smoot
 - **Trend still monotone at 0.99 — optimum not yet bracketed from below**
 
 ### Early Round-3 signal from Tier-2:
-- **asinh-pressure scale=1.0 (askeladd): val_avg=88.67** — beats new 90.61 baseline by 2.1%. Awaiting terminal SENPAI-RESULT.
-- Geometry mirror (fern): 99.79 — regresses. Augmentation not helping on this dataset/budget.
+- **asinh-pressure scale=1.0 (askeladd): val_avg=88.67** on OLD baseline — beats new 90.61 by 2.1%. Sent back to rebase + verify on new ema_decay=0.99 stack.
+- Geometry mirror (fern): 99.79 — CLOSED (regression). Vertical mirror augmentation too aggressive at p=0.5; tandem mirror not implemented.
 - SWA on full stack (frieren): 96.00 — regresses vs new baseline. SWA's 14-epoch window too short.
 - Physics continuity (thorfinn): 98.66 (w=0.01); w=0.1 still running.
 

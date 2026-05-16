@@ -481,3 +481,38 @@ After merging #3474 (decay=0.99 new baseline), the decay trend was still monoton
 - Arms: ema_decay=0.98, 0.97, 0.95
 - Group: ema-decay-push
 - Expected: find where shadow = live model (ema_lag_rel → 0%) and improvement stops
+
+---
+
+## 2026-05-16 00:55 — Round-3 Tier-2 closures and reroutes
+
+### PR #3473 fern (geom-aug-mirror) — CLOSED (dead-end)
+
+Terminal SENPAI-RESULT posted at 00:27:41:
+- val_avg = 99.7887 (+10.1% vs new baseline 90.6131, +5.7% vs prior 94.42)
+- test_3split = 99.54 (+12.1% vs new baseline test 88.83)
+- W&B runs: c5yqhyum (99.79), e2mq4thp (101.17)
+
+Augmentation regresses on all 4 val splits. Single-foil vertical mirror with AUGMENT_PROB=0.5 was too aggressive — half the batch lands in low-density input regions (negative AoA). Closed.
+
+### PR #3475 askeladd (asinh-pressure) — SENT BACK (winner pending verify)
+
+Terminal SENPAI-RESULT posted at 00:36:35:
+- val_avg = 88.667 (**−2.1% vs new baseline 90.6131**, −6.1% vs prior 94.42)
+- test_avg = 87.1257 (**−1.9% vs new test_3split 88.83**)
+- W&B runs: 9vcc7qfn (88.67), sgl0hury (91.70), 1kllktu2
+
+**Result IS a winner but two issues block merge:**
+1. PR has merge conflicts (alphonse #3474 was merged in parallel, changing train.py)
+2. Result measured at ema_decay=0.999 (old baseline default); needs verification on new ema_decay=0.99 default
+
+Sent back to WIP with rebase + single-arm-re-verify (asinh_p_scale=1.0 + ema_decay=0.99) instructions. Will merge on successful re-verify.
+
+## 2026-05-16 00:55 — fern reassigned: depth-sweep
+
+After geometry-augmentation closure, fern assigned to architecture axis (untouched so far in this programme).
+
+| PR | Hypothesis | Arms | Rationale |
+|---|---|---|---|
+| #3571 | n_layers depth sweep on fast-EMA baseline | 6, 7 | All wins so far are optimizer/loss; architecture capacity untested. Depth+regularization classically compounds. |
+
