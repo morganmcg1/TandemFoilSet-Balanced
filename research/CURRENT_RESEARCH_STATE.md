@@ -32,18 +32,18 @@ python train.py \
 
 **val_avg/mae_surf_p: 54.769** | test 3-split: 53.540
 
-## In-Flight Experiments (21:25 UTC)
+## In-Flight Experiments (21:55 UTC)
 
 | Student | PR | Hypothesis | Stack | Priority |
 |---------|----|----|----|----|
 | ⭐ **frieren** | **#4144** | **Lion vs SF-AdamW lr=2e-3 vs Lion+SF (3-way)** | Lion (A), SF lr=2e-3 (B), Lion+SF (C) | **HIGHEST — resolves whether Lion or SF wins head-to-head with correct LRs** |
 | ⭐ **askeladd** | **#4149** | **Lion LR sweep: {7.5e-5, 1.5e-4, 3e-4, 6e-4}** | Lion+cosine | **HIGH — can Lion match SF-54.769 with higher LR?** |
-| **fern** | **#4012** | **Sobolev edge-gradient loss R2** (redirected to Lion stack) | Lion+cosine | Loss axis; orthogonal to optimizer |
+| ⭐ **edward** | **#4157** | **SF-AdamW LR fine-tune: {1.5e-3, 2e-3, 2.5e-3, 3e-3}** | SF-AdamW lr=2e-3 base | **HIGH — localizes the peak from #4038's coarse sweep; +1-3% EV if peak is off-grid** |
+| **fern** | **#4012** | **Sobolev edge-gradient loss R2** (on Lion stack) | Lion+cosine | Loss axis; orthogonal to optimizer; result will transfer to SF stack |
 | **nezuko** | **#4081** | FiLM head width: film_mlp_hidden ∈ {128, 192, 256} | SF-AdamW lr=5e-4 (stale) | Results still diagnostic; paired Δ may be larger at correct LR |
 | **tanjiro** | **#4113** | EMA decay sweep: {0.99, 0.999, 0.9995, 0.9999} | SF-AdamW lr=5e-4 (stale) | EMA decay still relevant; paired Δ should transfer |
 | **thorfinn** | **#4114** | Batch size sweep: {4, 6, 8, 12} | SF-AdamW lr=5e-4 (stale) | Batch size axis universal |
-| **alphonse** | **#4019** | SF clip×EMA factorial (2×2) | SF-AdamW lr=5e-4 (stale) | EMA-on/off finding still useful; clip setting informative |
-| **edward** | **#4087** | SF warmup steps: {100, 500, 1000, 2000} | SF-AdamW lr=5e-4 (stale) | SF warmup at correct LR may differ — low priority to redirect |
+| **alphonse** | **#4019** | SF clip×EMA factorial (2×2) | SF-AdamW lr=5e-4 (stale) | Needs rebase; EMA-on/off finding still useful |
 
 **Note on stale-LR SF sweeps:** #4019/#4081/#4087/#4113/#4114 are all running at lr=5e-4. Their paired Δ results are still mechanistically informative. When they complete:
 - Large paired Δ results (>3%) → result likely holds and may be even stronger at lr=2e-3
@@ -68,12 +68,12 @@ python train.py \
 
 ## Priority Next Experiments (Post Current Sweeps)
 
-1. **Lion LR sweep results (#4149 askeladd)** — if Lion+lr=3e-4 or 6e-4 matches/beats SF-54.769, Lion becomes competitive again
-2. **Lion+SF composition (#4144 frieren)** — 3-way comparison with correct LRs for both mechanisms
-3. **SF-AdamW lr fine-tuning around 2e-3** — if #4149 Lion doesn't beat SF, narrow sweep {1.5e-3, 2e-3, 3e-3}
-4. **All in-flight SF sweeps at lr=2e-3** — after current stale-LR runs complete, re-run promising ones at the correct LR
+1. **Review #4157 edward LR fine-tune** — if any arm in {1.5e-3, 2.5e-3, 3e-3} beats 2e-3, update canonical LR immediately
+2. **Lion LR sweep results (#4149 askeladd)** — if Lion+lr=3e-4 or 6e-4 matches/beats SF-54.769, Lion becomes competitive again
+3. **Lion+SF composition (#4144 frieren)** — 3-way comparison with correct LRs for both mechanisms
+4. **All in-flight stale-LR SF sweeps** — after current runs complete (nezuko/tanjiro/thorfinn/alphonse), apply paired Δ gate: >3% → re-run at lr=2e-3; <1% → close
 5. **FiLM width under SF lr=2e-3** — if nezuko #4081 shows effect at stale LR, confirm/amplify at correct LR
-6. **Sobolev under both Lion and SF lr=2e-3** — fern #4012 currently testing on Lion; a second arm on SF lr=2e-3 would complete the picture
+6. **Sobolev under SF lr=2e-3** — fern #4012 testing on Lion; after results, test winning Sobolev weight on SF stack
 
 ## Falsified / Closed Hypotheses
 
@@ -83,3 +83,4 @@ python train.py \
 | #4051 | SF wd sweep {1e-4, 3e-4, 1e-3, 1e-2} | +2.46-11.99% all regress | Polyak+EMA saturate regularization role |
 | #4003 | AdamW clip-R2 {0.05-0.25} | −0.07% noise floor | Direction-norm saturated at 0.25 |
 | SF-AdamW at lr=5e-4 | ALL experiments prior to #4038 | Viable but undertrained | LR was wrong; 2e-3 is the right setting |
+| **#4087** | **SF warmup steps {100, 500, 1000, 2000}** | **Paper default 500 wins; B/C/D regress +7.15%, +3.81%, +1.64%** | **Warmup axis exhausted; 500 is optimal at 30-min/17-epoch budget** |

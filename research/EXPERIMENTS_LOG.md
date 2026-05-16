@@ -2286,3 +2286,52 @@ python train.py \
 - Arm B (lr=1e-3): `models/model-charliepai2i48h4-askeladd-sf-lr-r1-armb-lr1e-3-20260516-172709/metrics.jsonl`
 - Arm D (lr=5e-3): `models/model-charliepai2i48h4-askeladd-sf-lr-r1-armd-lr5e-3-20260516-183721/metrics.jsonl`
 
+---
+
+## 2026-05-16 21:50 — PR #4087 [CLOSED / NULL]: SF-AdamW warmup steps sweep — {100, 500, 1000, 2000}
+
+- **Student branch:** `charliepai2i48h4-edward/sf-warmup-steps-sweep`
+- **Hypothesis:** SF's warmup duration (sf_warmup_steps=500, paper default) has never been tuned for our 30-min wall-clock budget. Paper default was calibrated for longer training. Shorter warmup gives more steps at full LR; longer warmup gives cleaner Polyak iterate burn-in.
+- **Stack:** SF-AdamW lr=5e-4 (stale — canonical has since moved to lr=2e-3), bf16, EMA 0.999, FiLM+two-shot, clip=1.0
+
+### Results
+
+| Arm | warmup | val_avg/mae_surf_p | Δ vs A | Δ % |
+|-----|-------:|---------:|-------:|----:|
+| **A (control)** | **500** | **63.317** | — | — |
+| B | 100 | 67.843 | +4.526 | **+7.15%** regress |
+| C | 1000 | 65.730 | +2.414 | **+3.81%** regress |
+| D | 2000 | 64.355 | +1.039 | **+1.64%** regress |
+
+**Arm A (warmup=500, paper default) wins every val and test split.**
+
+Test 3-split mean (Arm A): 60.521 (sid=62.798, cam_rc=66.605, re_rand=52.160)
+
+Per-epoch trajectory confirmed the mechanism:
+- Epochs 1–4: Arm B (warmup=100) leads briefly due to faster initial activation
+- Epoch 5 onward: Arm A wins and stays ahead — short-warmup noise contaminates Polyak average
+- Arm D (warmup=2000) closes monotonically from worst-at-ep1 to +1.6% behind A at ep17; with longer budget might converge to A
+
+Gradient-norm trajectories confirmed expected mechanism: longer warmup → lower ||g||₂ in ep1, peak shifted later. All arms converge to ~25–35 mean ||g||₂ by ep10.
+
+### Conclusions
+
+**Null result. Warmup axis exhausted.**
+- Paper-default warmup=500 steps is well-calibrated for our ~17-epoch / 30-min budget
+- Shorter warmup (100) contaminates Polyak iterate with too-early noisy samples (worst outcome)
+- Longer warmup (1000, 2000) wastes budget at sub-full LR — Arm D only reaches +1.6% behind A
+- Conclusion likely transfers to lr=2e-3 canonical (mechanism is LR-independent)
+
+**Note:** Ran at stale lr=5e-4 stack. Arm A absolute (63.317) does NOT beat current canonical (54.769). Warmup conclusion transfers; no re-run needed.
+
+### Metric artifacts
+
+- Arm A: `models/model-charliepai2i48h4-edward-sf-warmup-r1-armA-w500-20260516-184849/metrics.jsonl`
+- Arm B: `models/model-charliepai2i48h4-edward-sf-warmup-r1-armB-w100-20260516-192340/metrics.jsonl`
+- Arm C: `models/model-charliepai2i48h4-edward-sf-warmup-r1-armC-w1000-20260516-195821/metrics.jsonl`
+- Arm D: `models/model-charliepai2i48h4-edward-sf-warmup-r1-armD-w2000-20260516-203308/metrics.jsonl`
+
+### Follow-up
+
+**edward → #4157**: SF-AdamW LR fine-tune {1.5e-3, 2e-3, 2.5e-3, 3e-3} — localize the lr=2e-3 peak discovered in askeladd #4038.
+
