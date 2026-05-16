@@ -310,6 +310,31 @@ class Transolver(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Exponential moving average of weights
+# ---------------------------------------------------------------------------
+
+
+class EMAModel:
+    """Exponential moving average of model parameters and buffers.
+
+    Reference: Morales-Brotons et al., "Exponential Moving Average of Weights
+    in Deep Learning: Dynamics and Benefits", TMLR 2024 (arXiv:2312.06434).
+    """
+
+    def __init__(self, model: nn.Module, decay: float = 0.999):
+        self.decay = decay
+        self.shadow = {k: v.detach().clone() for k, v in model.state_dict().items()}
+
+    @torch.no_grad()
+    def update(self, model: nn.Module) -> None:
+        for k, v in model.state_dict().items():
+            if self.shadow[k].dtype.is_floating_point:
+                self.shadow[k].mul_(self.decay).add_(v.detach(), alpha=1 - self.decay)
+            else:
+                self.shadow[k] = v.detach().clone()
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
@@ -558,6 +583,9 @@ else:
     onecycle_mode = False
     print("Scheduler: CosineAnnealingLR(T_max=15)")
 
+ema = EMAModel(model, decay=0.999)
+print(f"EMA: decay=0.999, shadow keys={len(ema.shadow)}")
+
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
 model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{experiment_stamp}"
@@ -643,6 +671,7 @@ for epoch in range(MAX_EPOCHS):
         optimizer.step()
         if onecycle_mode:
             scheduler.step()
+        ema.update(model)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -656,25 +685,36 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate ---
+    # --- Validate live + EMA weights ---
     model.eval()
-    split_metrics = {
+    split_metrics_live = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
-    val_avg = aggregate_splits(split_metrics)
-    avg_surf_p = val_avg["avg/mae_surf_p"]
+    val_avg_live = aggregate_splits(split_metrics_live)
+
+    live_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+    model.load_state_dict(ema.shadow)
+    split_metrics_ema = {
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        for name, loader in val_loaders.items()
+    }
+    val_avg_ema = aggregate_splits(split_metrics_ema)
+    model.load_state_dict(live_state)
+
+    avg_surf_p_live = val_avg_live["avg/mae_surf_p"]
+    avg_surf_p_ema = val_avg_ema["avg/mae_surf_p"]
     dt = time.time() - t0
 
     tag = ""
-    if avg_surf_p < best_avg_surf_p:
-        best_avg_surf_p = avg_surf_p
+    if avg_surf_p_ema < best_avg_surf_p:
+        best_avg_surf_p = avg_surf_p_ema
         best_metrics = {
             "epoch": epoch + 1,
-            "val_avg/mae_surf_p": avg_surf_p,
-            "per_split": split_metrics,
+            "val_avg/mae_surf_p": avg_surf_p_ema,
+            "per_split": split_metrics_ema,
         }
-        torch.save(model.state_dict(), model_path)
+        torch.save(ema.shadow, model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
@@ -686,17 +726,21 @@ for epoch in range(MAX_EPOCHS):
         "lr": epoch_lr,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
-        "val_avg/mae_surf_p": avg_surf_p,
-        "val_splits": split_metrics,
+        "val_avg/mae_surf_p": avg_surf_p_ema,
+        "val_avg/mae_surf_p_live": avg_surf_p_live,
+        "val_avg/mae_surf_p_ema": avg_surf_p_ema,
+        "val_splits": split_metrics_ema,
+        "val_splits_live": split_metrics_live,
+        "val_splits_ema": split_metrics_ema,
         "is_best": tag == " *",
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"live_surf_p={avg_surf_p_live:.4f}  ema_surf_p={avg_surf_p_ema:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
-        print_split_metrics(name, split_metrics[name])
+        print_split_metrics(name + " [ema]", split_metrics_ema[name])
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
