@@ -483,6 +483,9 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_vol_Ux = epoch_vol_Uy = epoch_vol_p = 0.0
+    epoch_surf_Ux = epoch_surf_Uy = epoch_surf_p_l1 = 0.0
+    epoch_mae_surf_p = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -494,29 +497,70 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        err = F.huber_loss(pred, y_norm, delta=0.1, reduction="none")  # [B, N, 3]
+        err_huber = F.huber_loss(pred, y_norm, delta=0.1, reduction="none")  # [B, N, 3]
+        err_l1 = (pred - y_norm).abs()  # [B, N, 3]
+        # Surface error: Huber on Ux/Uy (channels 0,1), L1 on p (channel 2).
+        # Volume error: Huber on all channels.
+        err_surf = torch.cat([err_huber[..., :2], err_l1[..., 2:3]], dim=-1)
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_mask_3d = vol_mask.unsqueeze(-1)
         surf_mask_3d = surf_mask.unsqueeze(-1)
-        vol_loss = (err * vol_mask_3d).sum() / vol_mask_3d.sum().clamp(min=1)
-        surf_loss = (err * surf_mask_3d).sum() / surf_mask_3d.sum().clamp(min=1)
+        vol_loss = (err_huber * vol_mask_3d).sum() / vol_mask_3d.sum().clamp(min=1)
+        surf_loss = (err_surf * surf_mask_3d).sum() / surf_mask_3d.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
+
+        # Per-channel loss components (for diagnostics; not part of gradient).
+        with torch.no_grad():
+            vol_denom = vol_mask.sum().clamp(min=1).float()
+            surf_denom = surf_mask.sum().clamp(min=1).float()
+            vol_loss_Ux = (err_huber[..., 0] * vol_mask).sum() / vol_denom
+            vol_loss_Uy = (err_huber[..., 1] * vol_mask).sum() / vol_denom
+            vol_loss_p  = (err_huber[..., 2] * vol_mask).sum() / vol_denom
+            surf_loss_Ux = (err_huber[..., 0] * surf_mask).sum() / surf_denom
+            surf_loss_Uy = (err_huber[..., 1] * surf_mask).sum() / surf_denom
+            surf_loss_p_l1 = (err_l1[..., 2] * surf_mask).sum() / surf_denom
+            # Train surface-p MAE in physical units (L1 sanity check on residual size).
+            y_std_p = stats["y_std"][..., 2]
+            mae_surf_p_train = (err_l1[..., 2] * surf_mask).sum() * y_std_p / surf_denom
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/vol_loss_step": vol_loss.item(),
+            "train/surf_loss_step": surf_loss.item(),
+            "train/vol_loss_Ux_step": vol_loss_Ux.item(),
+            "train/vol_loss_Uy_step": vol_loss_Uy.item(),
+            "train/vol_loss_p_step": vol_loss_p.item(),
+            "train/surf_loss_Ux_step": surf_loss_Ux.item(),
+            "train/surf_loss_Uy_step": surf_loss_Uy.item(),
+            "train/surf_loss_p_l1_step": surf_loss_p_l1.item(),
+            "train/mae_surf_p_step": mae_surf_p_train.item(),
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_vol_Ux += vol_loss_Ux.item()
+        epoch_vol_Uy += vol_loss_Uy.item()
+        epoch_vol_p  += vol_loss_p.item()
+        epoch_surf_Ux += surf_loss_Ux.item()
+        epoch_surf_Uy += surf_loss_Uy.item()
+        epoch_surf_p_l1 += surf_loss_p_l1.item()
+        epoch_mae_surf_p += mae_surf_p_train.item()
         n_batches += 1
 
     scheduler.step()
-    epoch_vol /= max(n_batches, 1)
-    epoch_surf /= max(n_batches, 1)
+    nb = max(n_batches, 1)
+    epoch_vol /= nb
+    epoch_surf /= nb
+    epoch_vol_Ux /= nb; epoch_vol_Uy /= nb; epoch_vol_p /= nb
+    epoch_surf_Ux /= nb; epoch_surf_Uy /= nb; epoch_surf_p_l1 /= nb
+    epoch_mae_surf_p /= nb
 
     # --- Validate ---
     model.eval()
@@ -532,6 +576,13 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/vol_loss_Ux": epoch_vol_Ux,
+        "train/vol_loss_Uy": epoch_vol_Uy,
+        "train/vol_loss_p": epoch_vol_p,
+        "train/surf_loss_Ux": epoch_surf_Ux,
+        "train/surf_loss_Uy": epoch_surf_Uy,
+        "train/surf_loss_p_l1": epoch_surf_p_l1,
+        "train/mae_surf_p": epoch_mae_surf_p,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
