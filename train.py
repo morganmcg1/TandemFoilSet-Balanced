@@ -286,7 +286,8 @@ def invert_asinh_vel(pred, scale):
 
 def evaluate_split(model, loader, stats, surf_weight, device,
                    asinh_p_scale: float = 0.0,
-                   asinh_vel_scale: float = 0.0) -> dict[str, float]:
+                   asinh_vel_scale: float = 0.0,
+                   vol_weight: float = 1.0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -339,7 +340,7 @@ def evaluate_split(model, loader, stats, surf_weight, device,
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
     out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
-           "loss": vol_loss + surf_weight * surf_loss}
+           "loss": vol_weight * vol_loss + surf_weight * surf_loss}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
     return out
 
@@ -404,6 +405,7 @@ def save_model_artifact(
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
+        "vol_weight": cfg.vol_weight,
         "epochs_configured": cfg.epochs,
     }
 
@@ -475,6 +477,7 @@ class Config:
     sgdr_t0: int = 0  # CosineAnnealingWarmRestarts cycle length; 0 disables (use plain cosine)
     slice_num: int = 64  # physics-attention slice count (node partitioning granularity)
     adamw_beta2: float = 0.999  # AdamW second-moment EMA decay; default 0.999
+    vol_weight: float = 1.0  # volume-loss weight; loss = vol_weight*vol_loss + surf_weight*surf_loss
 
 
 cfg = sp.parse(Config)
@@ -620,7 +623,7 @@ for epoch in range(MAX_EPOCHS):
         surf_mask = mask & is_surface
         vol_loss = (elem_loss * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (elem_loss * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+        loss = cfg.vol_weight * vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -653,7 +656,8 @@ for epoch in range(MAX_EPOCHS):
     split_metrics = {
         name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device,
                              asinh_p_scale=cfg.asinh_p_scale,
-                             asinh_vel_scale=cfg.asinh_vel_scale)
+                             asinh_vel_scale=cfg.asinh_vel_scale,
+                             vol_weight=cfg.vol_weight)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -737,7 +741,8 @@ if best_metrics:
         test_metrics = {
             name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
                                  asinh_p_scale=cfg.asinh_p_scale,
-                                 asinh_vel_scale=cfg.asinh_vel_scale)
+                                 asinh_vel_scale=cfg.asinh_vel_scale,
+                                 vol_weight=cfg.vol_weight)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
