@@ -262,3 +262,68 @@ sq_err = torch.nn.functional.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='n
 # Optimizer: AdamW lr=5e-4 wd=1e-4, batch_size=4
 # surf_weight=10
 ```
+
+---
+
+## 2026-05-16 01:28 — PR #3122: FiLM conditioning on physics params (log Re, AoA, NACA, gap, stagger)
+
+**New best `val_avg/mae_surf_p`: 92.606** (was: 96.464 EMA+bf16+T_max=15 — **−4.00%**; intra-PR Arm B vs Arm A: **−4.88%**)
+
+- **FiLM:** Learned `(γ, β)` scale+shift injected at every `TransolverBlock` layer, conditioned on `[log(Re), AoA_rad, NACA_encoded, gap, stagger]`. Zero-init of final linear ensures stable warm-start (Arm B epoch 1 ≈ Arm A epoch 1).
+- **Stack:** Huber + bf16 AMP + cosine T_max=15 + EMA decay=0.999 (full current best stack)
+- **Params:** 845,527 vs 662,359 baseline (+27.6%)
+- **Best epoch:** 18 / 19 run (30-min budget, 7% slower per epoch)
+- **Peak VRAM:** 35.94 GB (+2.49 GB vs Arm A 33.45 GB)
+- **Model:** 5-layer Transolver, `n_hidden=128`, `n_head=4`, `slice_num=64` (unchanged)
+- **Optimizer:** AdamW lr=5e-4 wd=1e-4, batch_size=4 (unchanged)
+
+### Val surface pressure MAE (lower is better)
+
+| Split | Arm A (full stack, no FiLM) | **Arm B (+ FiLM)** | Δ % |
+|---|---:|---:|---:|
+| `val_single_in_dist`     | 112.950 | **107.788** | −4.57% |
+| `val_geom_camber_rc`     | 105.171 | **101.033** | −3.93% |
+| `val_geom_camber_cruise` |  77.396 |  **73.993** | −4.41% |
+| `val_re_rand`            |  93.922 |  **87.611** | **−6.72%** |
+| **val_avg**              | **97.360** | **92.606** | **−4.88%** |
+
+Arm B vs merged baseline 96.464: **−4.00%** ✅
+
+### Test surface pressure MAE (3 finite splits; `test_geom_camber_cruise` NaN — pre-existing cruise-sample overflow)
+
+| Split | Arm A | **Arm B (FiLM)** | Δ % |
+|---|---:|---:|---:|
+| `test_single_in_dist`    |  98.801 |  **92.949** | −5.93% |
+| `test_geom_camber_rc`    |  96.102 |  **90.448** | −5.88% |
+| `test_re_rand`           |  86.870 |  **83.618** | −3.74% |
+| **avg (3 finite splits)** | **93.924** | **89.005** | **−5.24%** |
+
+*Note: `test_avg/mae_surf_p` is NaN for both arms due to the cruise-sample overflow in `data/scoring.py` (read-only). The 3-split partial average is the reliable test metric.*
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-frieren-film-cond-r2-armb-film-20260516-002418/metrics.jsonl` ← **winner**
+- `models/model-charliepai2i48h4-frieren-film-cond-r2-arma-baseline-20260515-232346/metrics.jsonl` (paired baseline)
+
+### Reproduce
+
+```bash
+cd target/
+python train.py --experiment_name film-cond-bf16-tmax15-ema \
+  --amp_dtype bf16 --cosine_t_max 15 --use_ema --ema_decay 0.999 \
+  --film_cond
+```
+
+### Current best config (carry forward to all new experiments)
+
+```python
+# Loss: Huber (smooth_l1_loss, beta=1.0)
+sq_err = torch.nn.functional.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+# AMP: --amp_dtype bf16
+# Scheduler: --cosine_t_max 15
+# EMA: --use_ema --ema_decay 0.999  (Karras-style warmup ramp built in)
+# FiLM: --film_cond  (zero-init γ=1, β=0 at start; conditions on log_Re, AoA, NACA, gap, stagger)
+# Model: n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2
+# Optimizer: AdamW lr=5e-4 wd=1e-4, batch_size=4
+# surf_weight=10
+```
