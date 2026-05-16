@@ -912,3 +912,17 @@ _New entries appended as each PR is reviewed._
 - results: arm-1 (3e-5): val=73.22/test=64.25; arm-2 (3e-4): val=75.66/test=66.35
 - Key findings: WD=1e-4 is optimal. Lighter WD closer to baseline than heavier (asymmetric). Model is regularization-constrained — clip+LS already regularize; increasing WD forces larger γ_mlp as compensation (counterintuitive). WD range {3e-5 to 3e-4} falsified.
 
+
+---
+
+## 2026-05-16 15:30 — PR #4007 (charliepai2i48h5-frieren): Width scaling n_hidden=144 on BF16+LS+n10 — CLOSED
+
+- branch: `charliepai2i48h5-frieren/bf16-width-scaling-n144`
+- hypothesis: BF16's −21% memory freed headroom for wider model; LayerScale gates extra channels selectively
+- results: val=68.71/test=60.83 vs baseline 67.19/58.05 (+2.3% val, +4.8% test worse)
+- Key findings:
+  - n=144 ran 15 epochs (vs 17 for n=128) — 14 s/epoch slower (125 vs 111)
+  - best_epoch=15 (LAST), val still descending Δ(ep14→15)=−5.9 — needed ~17+ epochs to match baseline
+  - Per-split: single_in_dist regresses most (+11%), cruise unchanged, others worse
+  - Conclusion: width scaling bottlenecked by epoch count, not capacity. n_hidden=120 (narrower) might fit budget better — assigned as PR #4014
+  - Peak GPU memory 39.87 GB (vs 33 GB baseline)
