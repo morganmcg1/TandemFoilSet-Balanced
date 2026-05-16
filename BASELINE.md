@@ -2,6 +2,39 @@
 
 ## Current Best
 
+### 2026-05-16 21:15 — PR #4083: bs=2 + n_freqs=8 compound — charliepai2i48h5-alphonse
+
+- **val_avg/mae_surf_p**: **58.27** (best_epoch=18/18, timeout-bound, still descending)
+- **test_avg/mae_surf_p**: **51.12** (from best-val checkpoint)
+- **Improvement over prior best**: -3.96% val / -3.75% test vs PR #4026 (60.67/53.11)
+- **Cumulative improvement**: -54.7% val vs round-5 start (~128.69)
+- **Per-split test surface p MAE**:
+  | Split | test surf_p | Δ vs prior (60.67/53.11) |
+  |---|---|---|
+  | single_in_dist | 57.42 | -0.99% ✓ |
+  | geom_camber_rc | 64.11 | -3.45% ✓ |
+  | geom_camber_cruise | 33.68 | -5.11% ✓ |
+  | re_rand | 49.27 | -6.23% ✓ |
+- **Metric artifacts**: `models/model-bf16-layerscale-bs2-n8-20260516-184225/metrics.jsonl`
+- **Stack**: BF16 + LayerScale γ-init=0.01 + n_freqs=**8** + **batch_size=2** + Huber-0.3 + T_max=20 + clip=0.25 (no EMA)
+- **Key findings**:
+  - **All 4 test splits improve** — compound is ~89% additive (expected 57.56 from linear decomp, observed 58.27)
+  - arm-2 (lr_t_max=18) val=60.75 — regresses; cosine reaches lr≈0 by epoch 18, premature freeze
+  - clip_frac drops from 1.000 → 0.987 at epoch 18 — first sign of late-epoch gradient escape
+  - Memory unchanged: 18.43 GB (vs 18.5 GB with n=10); throughput 102.4 s/epoch
+  - best_epoch=18/18 still timeout-bound — more epochs would help
+- **Reproduce**:
+  ```bash
+  cd target && python train.py --epochs 50 \
+      --bf16 --batch_size 2 \
+      --layer_scale_init 0.01 \
+      --n_freqs 8 --huber_delta 0.3 --lr_t_max 20 --grad_clip_max_norm 0.25 \
+      --experiment_name bf16-layerscale-bs2-n8 \
+      --agent charliepai2i48h5-alphonse
+  ```
+
+---
+
 ### 2026-05-16 19:10 — PR #4026: batch_size=2 on BF16+LS+n10 — charliepai2i48h5-alphonse
 
 - **val_avg/mae_surf_p**: **60.67** (best_epoch=18/18, timeout-bound, still descending)
