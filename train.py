@@ -161,9 +161,27 @@ class PhysicsAttention(nn.Module):
         return self.to_out(out_x)
 
 
+class DropPath(nn.Module):
+    """Stochastic Depth (DropPath) — drops entire residual sub-blocks with probability drop_prob."""
+
+    def __init__(self, drop_prob: float = 0.0):
+        super().__init__()
+        self.drop_prob = drop_prob
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.drop_prob == 0.0 or not self.training:
+            return x
+        keep_prob = 1.0 - self.drop_prob
+        shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+        mask = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
+        mask.floor_()
+        return x.div(keep_prob) * mask
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32, cond_dim=0):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32, cond_dim=0,
+                 drop_path: float = 0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -177,6 +195,7 @@ class TransolverBlock(nn.Module):
         self.cond_dim = cond_dim
         if cond_dim > 0:
             self.film = ConditionMLP(cond_dim, hidden_dim)
+        self.drop_path = DropPath(drop_path)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -185,11 +204,11 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx, cond=None):
-        fx = self.attn(self.ln_1(fx)) + fx
+        fx = self.drop_path(self.attn(self.ln_1(fx))) + fx
         if self.cond_dim > 0 and cond is not None:
             gamma, beta = self.film(cond)
             fx = gamma.unsqueeze(1) * fx + beta.unsqueeze(1)
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = self.drop_path(self.mlp(self.ln_2(fx))) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -199,6 +218,7 @@ class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False, cond_dim=0,
+                 drop_path: float = 0.0,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -223,6 +243,7 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 cond_dim=cond_dim,
+                drop_path=drop_path,
             )
             for i in range(n_layers)
         ])
@@ -402,6 +423,7 @@ class Config:
     huber_delta_p: float = 0.25   # Huber delta for pressure channel p (per-channel)
     cond_dim: int = 11         # FiLM conditioning dim; 0 disables FiLM
     clip_grad_norm: float = 0.0  # Gradient clip max_norm; 0 disables
+    drop_path: float = 0.0     # Stochastic depth probability per residual sub-block; 0 disables
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -445,6 +467,7 @@ model_config = dict(
     slice_num=64,
     mlp_ratio=2,
     cond_dim=cfg.cond_dim,  # log(Re), AoA1, NACA1(3), AoA2, NACA2(3), gap, stagger = 11; 0 disables FiLM
+    drop_path=cfg.drop_path,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
