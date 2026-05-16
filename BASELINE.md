@@ -2,6 +2,41 @@
 
 ## Current Best
 
+### 2026-05-16 16:55 — PR #4009: Gradient clip relaxation clip=1.0 on BF16+LS+n10 — charliepai2i48h5-nezuko
+
+- **val_avg/mae_surf_p**: **65.70** (best_epoch=17/50, timeout-bound, still descending)
+- **test_avg/mae_surf_p**: **57.80** (from best-val checkpoint)
+- **Improvement over prior best**: -2.22% val / -0.44% test vs BF16+LS+n10+clip=0.25 (67.19/58.05)
+- **Cumulative improvement**: -49.0% val vs round-5 start (~128.69)
+- **Per-split test surface p MAE**:
+  | Split | test surf_p | Δ vs prior (67.19/58.05) |
+  |---|---|---|
+  | single_in_dist | 65.24 | -3.24% ✓ |
+  | geom_camber_rc | 71.43 | +2.35% |
+  | geom_camber_cruise | 38.31 | -0.91% ✓ |
+  | re_rand | 56.21 | -0.25% ✓ |
+- **Metric artifacts**: `models/model-bf16-layerscale-clip10-20260516-152629/metrics.jsonl`
+- **Stack**: BF16 + LayerScale γ-init=0.01 + n_freqs=10 + Huber-0.3 + T_max=20 + **clip=1.0** (no EMA)
+- **Key findings**:
+  - clip=0.25 was double-regularizing with LayerScale's gating — clip_frac=1.000 throughout (every step clipped)
+  - clip=1.0: clip_frac drops from 1.0 → 0.95 by epoch 17 — first run where ~5% of steps escape clipping
+  - The mechanism is mostly "larger effective step" (clip acts as lr-scale in the clip-bound regime)
+  - arm-1 (clip=0.5): val=66.07/test=57.69 — also beats baseline but weaker on val
+  - LayerScale γ dynamics healthy: no instability, γ_attn 0.009-0.018, γ_mlp 0.032-0.045
+  - Peak memory 36.91 GB (same as no-clip-relaxation baseline), ~111 s/epoch
+  - **3 out of 4 test splits improve; rc regresses +2.35%**
+- **Reproduce**:
+  ```bash
+  cd target && python train.py --epochs 50 \
+      --bf16 \
+      --layer_scale_init 0.01 \
+      --n_freqs 10 --huber_delta 0.3 --lr_t_max 20 --grad_clip_max_norm 1.0 \
+      --experiment_name bf16-layerscale-clip10 \
+      --agent charliepai2i48h5-nezuko
+  ```
+
+---
+
 ### 2026-05-16 14:35 — PR #3527: BF16 mixed precision + LayerScale γ=0.01 + n_freqs=10 — charliepai2i48h5-tanjiro
 
 - **val_avg/mae_surf_p**: **67.19** (best_epoch=17/50, timeout-bound, still descending)
