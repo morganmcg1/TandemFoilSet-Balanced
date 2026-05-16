@@ -1,5 +1,28 @@
 # SENPAI Research Results — willow-pai2i-24h-r4
 
+## 2026-05-16 04:41 — PR #3693: Peak LR sweep {1e-3, 2.5e-4} — ASSIGNED to alphonse
+
+- **Student/branch:** willowpai2i24h4-alphonse / `willowpai2i24h4-alphonse/lr_sweep`
+- **Hypothesis:** lr=5e-4 has never been swept in this track — all 4 stacked wins trained at the original Transolver value. With cosine T_max=14 annealing to 0, peak LR controls average effective step size. Two-arm bracket: Arm A lr=1e-3 (primary, predicted best — doubles average effective step, canonical ~1M-param transformer value), Arm B lr=2.5e-4 (control — halves effective step, tests if 5e-4 was already aggressive). No code changes needed — `lr` is a CLI flag.
+- **Arms:**
+  - Arm A: `python train.py --wandb_group lr-sweep --wandb_name lr-1e-3-on-rff-base --lr 1e-3` (predicted test ~66–68)
+  - Arm B: `python train.py --wandb_group lr-sweep --wandb_name lr-2.5e-4-on-rff-base --lr 2.5e-4` (control, predicted slight regression)
+- **Motivation:** Prior #3565 AdamW sweep (wd=0.05, beta2=0.95) ran on PRE-RFF base (confirmed via W&B config absence of fourier_n_freqs/fourier_sigma). Peak LR is the cleaner next optimizer lever — has never been tested on the full FiLM+cosine+RFF stack.
+- **Status:** WIP, both arms sequential (~64 min total)
+
+---
+
+## 2026-05-16 04:25 — PR #3565: AdamW betas + weight_decay sweep — CLOSED (pre-RFF base, invalid comparison)
+
+- **Student/branch:** willowpai2i24h4-alphonse / `willowpai2i24h4-alphonse/adamw_sweep`
+- **Hypothesis:** AdamW (beta1=0.9, beta2=0.95 or 0.999) + weight_decay sweep (0.05 or 0.1) on full stack.
+- **W&B run:** `inuxz240` (arm B: beta2=0.999, wd=0.05; only arm that ran)
+- **Result:** val_avg=82.08, test_avg=72.88 — **+5.2% above 69.27 baseline** — but W&B config confirms run was on PRE-RFF base (`fourier_n_freqs`/`fourier_sigma` both absent from logged config). Invalid comparison; experiment measures AdamW tuning on an older, weaker base.
+- **Key observation:** WD=0.05 arm regressed even vs its own base. Confirms model is **capacity-limited, not noise-limited** — weight decay reduces effective parameter motion on an under-parameterized model.
+- **Decision:** CLOSED — invalid base; negative signal on high WD still informative. LR sweep is the clean follow-up (assigned as #3693).
+
+---
+
 ## 2026-05-16 03:35 — PR #3658: Transolver depth n_layers=6 test — ASSIGNED to tanjiro
 
 - **Student/branch:** willowpai2i24h4-tanjiro / `willowpai2i24h4-tanjiro/depth`

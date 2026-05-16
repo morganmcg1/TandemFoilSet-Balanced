@@ -1,6 +1,6 @@
 # SENPAI Research State — TandemFoilSet (willow-pai2i-24h-r4)
 
-- **As of:** 2026-05-16 04:25 UTC
+- **As of:** 2026-05-16 04:42 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r4`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced`
 - **W&B:** `wandb-applied-ai-team/senpai-v1`
@@ -30,7 +30,7 @@ All remaining PRs must beat **test_avg/mae_surf_p < 69.27**.
 | 2 | frieren  | #3504 | Richer FiLM conditioning (cond_dim 1→11) — SENT BACK for full-stack rebase | WIP (pod picked up 03:21) |
 | 3 | thorfinn | #3468 | Per-block FiLM heads — v2; CONFLICTING needs rebase resolution | WIP (pod still rate-limited at 03:19; next iter ~03:24) |
 | 4 | tanjiro  | #3658 | **Transolver depth test: n_layers 5 → 6 with matched cosine_tmax** (first architecture experiment in this track) | WIP (assigned 03:35) |
-| 5 | alphonse | #3565 | AdamW betas=(0.9,0.95) + weight_decay=0.05 sweep (3 arms) | WIP (pod picked up 03:20) |
+| 5 | alphonse | #3693 | **Peak LR sweep {1e-3, 2.5e-4} on RFF base** (lr=5e-4 never swept in this track) | WIP (assigned 04:41; pod will pick up on next poll) |
 | 6 | askeladd | #3351 | EMA β=0.99 (shorter horizon) — CONFLICTING needs rebase resolution | WIP (pod picked up 03:21) |
 | 7 | edward   | #3599 | RFF σ sweep {0.5,1.0,2.0} × n_freqs {16,32} — R3 refinement on own win | WIP (pod picked up 03:20) |
 | 8 | fern     | #3258 | Grad-clip 1.0 + 5-epoch warmup — MERGEABLE | WIP (pod picked up 03:21) |
@@ -72,7 +72,7 @@ All remaining PRs must beat **test_avg/mae_surf_p < 69.27**.
 - **tanjiro Transolver depth test (#3658):** n_layers 5 → 6 on full FiLM+RFF stack. First architecture-side experiment in this track (4 prior wins all loss/input/schedule). +114K params (+17%), +17% compute → student matches cosine_tmax to actual achievable epochs (~11-12). Predicted hopeful test ~65–66 (5% gain), conservative ~67–68 (2-3%).
 - **frieren richer FiLM rebased (#3504):** cond_dim=11, film_mid=64 first. Old gain −7.16% (film_mid=64 on #3263 ref). On new RFF+cosine+FiLM base, predicted hopeful test ~64.4, conservative ~65.8–67.2. Use film_mid=64 due to VRAM limits (mid128 was 94.0 GiB, RFF adds overhead).
 - **nezuko surface-only decoder head (#3618):** Parallel zero-init 128→128→3 head on `h = ln_3(fx)` after block 5, gated by `is_surface`. Orthogonal to all 4 prior wins (output-head specialization vs loss/input/schedule/encoding). +16,899 params (+2.5%). Predicted conservative ~2–4% gain (test ~66–68), hopeful 5–7% (test ~64–66), pessimistic wash.
-- **alphonse AdamW sweep (#3565):** beta2=(0.999→0.95) + weight_decay=(1e-4→0.05). 3 arms. Standard transformer optimizer recipe. Predicted val ~85–91, test ~65–68. Conservative: ~2% gain.
+- **alphonse LR sweep (#3693):** Peak LR {1e-3, 2.5e-4} bracketing untested default 5e-4. No code changes (CLI flag). Arm A lr=1e-3 is primary (canonical value for ~1M-param transformers at batch=4). Predicted Arm A: test ~66–68 (2–4% gain); Arm B lr=2.5e-4: expected slight regression. #3565 AdamW sweep closed — ran on pre-RFF base (invalid comparison), also confirmed high WD hurts capacity-limited models.
 - **askeladd EMA β=0.99 (#3351):** β=0.99 (100-step horizon) on new stacked base. Cosine T_max=14 anneals LR→0, which may reduce oscillation benefit. Conservative expectation: small gain (~1–2%) or wash. Rebasing now (branch CONFLICTING).
 - **fern grad-clip+warmup (#3258):** clip=1.0, warmup=5 on new stacked base. Grad-norm median was 60, peak 1004. Cosine LR may have already tamed late-epoch norms. Predicted conservative: 3–5% gain, pessimistic: wash. Rebasing now.
 - **edward RFF σ/n_freqs sweep (#3599):** σ {0.5, 2.0} × n_freqs {16, 32}, brackets the winning σ=1.0 / n_freqs=16. CLI-only, no code changes. Conservative: σ=1.0 was already optimal → wash. Hopeful: n_freqs=32 doubles spatial resolution → modest 1–2% gain.
@@ -95,7 +95,8 @@ All remaining PRs must beat **test_avg/mae_surf_p < 69.27**.
 4. ✗ Per-block FiLM heads ← REBASE IN FLIGHT (#3468)
 5. ✗ Richer FiLM conditioning ← REBASE IN FLIGHT (#3504)
 6. ✗ Volume MAE reformulation ← IN FLIGHT (#3550)
-7. ✗ AdamW betas / weight-decay sweep ← IN FLIGHT (#3565)
+7. ✗ AdamW betas / weight-decay sweep ← CLOSED (#3565; pre-RFF base, wd=0.05 hurts capacity-limited models)
+7b. **Peak LR sweep {1e-3, 2.5e-4}** ← IN FLIGHT (#3693 alphonse)
 8. ✗ RFF σ sweep {0.5, 1.0, 2.0} + n_freqs {16, 32} ← IN FLIGHT (#3599 edward)
 9. ✗ Surface-only decoder head (parallel zero-init) ← IN FLIGHT (#3618 nezuko)
 10. ✗ **Transolver depth n_layers 5 → 6** ← IN FLIGHT (#3658 tanjiro)
@@ -112,7 +113,7 @@ All remaining PRs must beat **test_avg/mae_surf_p < 69.27**.
 
 ## Next immediate action
 
-**All 8 students active.** Monitor for results from rebase reruns (#3468 thorfinn, #3406 tanjiro, #3504 frieren, #3258 fern, #3351 askeladd) and fresh assignments (#3618 nezuko, #3565 alphonse, #3599 edward).
+**All 8 students active.** Monitor for results from: rebase reruns (#3468 thorfinn, #3504 frieren, #3258 fern, #3351 askeladd) and fresh assignments (#3618 nezuko, #3693 alphonse LR sweep, #3599 edward RFF σ, #3658 tanjiro depth).
 
 Key monitors:
 - #3468 thorfinn per-block FiLM v2 on cosine+RFF base: predicted hopeful test ~64–66
