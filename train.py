@@ -19,11 +19,13 @@ from __future__ import annotations
 
 import math
 import os
+import pickle
 import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -79,6 +81,81 @@ class FourierEncoder(nn.Module):
         cos_f = torch.cos(phases)
         out = torch.stack([sin_f, cos_f], dim=-1)  # [..., 2, n_bands, 2]
         return out.reshape(*pos.shape[:-1], 4 * self.n_bands)
+
+
+# ---------------------------------------------------------------------------
+# Residual linear baseline (PR #3820)
+# ---------------------------------------------------------------------------
+
+
+class BaselinePredictor(nn.Module):
+    """Per-sample DC-offset predictor from condition features.
+
+    Loads the offline Ridge fit (``fit_linear_baseline.py``) and applies it to
+    a batch of per-sample condition feature vectors, returning a [B, 3]
+    DC offset (Ux, Uy, p) that is subtracted from y before training (residual
+    target) and added back at eval time.
+
+    Wrapped in ``nn.Module`` so the buffers move to ``device`` and follow the
+    standard PyTorch lifecycle, but the parameters are frozen — this is a
+    fitted-offline statistical preconditioner, not a learned component.
+    """
+
+    def __init__(self, baseline_path: str | Path):
+        super().__init__()
+        with open(baseline_path, "rb") as f:
+            payload = pickle.load(f)
+        self.feature_indices: list[int] = list(payload["feature_indices"])
+        self.extra_features: list[str] = list(payload.get("extra_features", []))
+        # Register tensors as buffers so they follow .to(device)
+        self.register_buffer(
+            "feature_means",
+            torch.tensor(payload["feature_means"], dtype=torch.float32),
+        )
+        self.register_buffer(
+            "feature_stds",
+            torch.tensor(payload["feature_stds"], dtype=torch.float32),
+        )
+        self.register_buffer(
+            "coef_per_ch",
+            torch.tensor(payload["coef_per_ch"], dtype=torch.float32),
+        )
+        self.register_buffer(
+            "intercept_per_ch",
+            torch.tensor(payload["intercept_per_ch"], dtype=torch.float32),
+        )
+        self.register_buffer(
+            "residual_y_mean",
+            torch.tensor(payload["residual_y_mean"], dtype=torch.float32),
+        )
+        self.register_buffer(
+            "residual_y_std",
+            torch.tensor(payload["residual_y_std"], dtype=torch.float32),
+        )
+        self.r2_train_per_ch: list[float] = list(map(float, payload["r2_train_per_ch"]))
+        self.cv_r2_per_ch: list[float] = list(map(float, payload["cv_r2_per_ch"]))
+        self.alpha_per_ch: list[float] = list(map(float, payload["alpha_per_ch"]))
+
+    @torch.no_grad()
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """x: [B, N, 24] raw (un-normalized) features. Returns [B, 3] DC offset.
+
+        Reads condition features from row 0 (per-sample constant — pad_collate
+        pads with zeros at the end, so row 0 is always a real node).
+        """
+        # cond: [B, F_raw]
+        cond_raw = x[:, 0, self.feature_indices]
+        # Build augmented features matching the offline fit (currently log_re_sq).
+        # Index 0 in feature_indices is 13 = log_Re.
+        extras = []
+        if "log_re_sq" in self.extra_features:
+            extras.append((cond_raw[:, 0] ** 2).unsqueeze(-1))
+        cond_full = torch.cat([cond_raw] + extras, dim=-1) if extras else cond_raw
+        # Standardize
+        cond_std = (cond_full - self.feature_means) / self.feature_stds
+        # Per-channel: coef [3, F] @ cond_std.T -> [3, B], add intercept
+        baseline = cond_std @ self.coef_per_ch.T + self.intercept_per_ch  # [B, 3]
+        return baseline
 
 
 # ---------------------------------------------------------------------------
@@ -311,12 +388,18 @@ class Transolver(nn.Module):
 # ---------------------------------------------------------------------------
 
 def evaluate_split(model, fourier_encoder, loader, stats, surf_weight,
-                   smooth_l1_beta, device) -> dict[str, float]:
+                   smooth_l1_beta, device,
+                   baseline: BaselinePredictor | None = None) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    When ``baseline`` is provided, the model is trained on a residualized
+    target ``y - baseline(cond)`` in ``stats``-normalized space (where
+    ``stats`` are the residual stats). At eval time we denormalize, add the
+    baseline back, and compute MAE against the ORIGINAL physical ``y``.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -341,7 +424,12 @@ def evaluate_split(model, fourier_encoder, loader, stats, surf_weight,
             y = torch.where(torch.isfinite(y), y, torch.zeros_like(y))
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            if baseline is not None:
+                y_baseline = baseline(x)  # [B, 3] in physical y-space
+                y_target = y - y_baseline.unsqueeze(1)  # residualized y
+            else:
+                y_target = y
+            y_norm = (y_target - stats["y_mean"]) / stats["y_std"]
             ff = fourier_encoder(x_norm[..., :2])
             x_aug = torch.cat([x_norm, ff], dim=-1)
             pred = model({"x": x_aug})["preds"]
@@ -360,6 +448,8 @@ def evaluate_split(model, fourier_encoder, loader, stats, surf_weight,
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            if baseline is not None:
+                pred_orig = pred_orig + y_baseline.unsqueeze(1)
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -499,6 +589,10 @@ class Config:
     # (~14 epochs in the 30-min cap); cfg.epochs=50 would never trigger SWA
     # if we keyed off 50%, so we use the actual-training-aware default.
     swa_start_epoch: int = 7
+    # Residual linear baseline (PR #3820): subtract a per-sample linear DC
+    # offset from y before normalization, add it back at eval time.
+    use_residual_baseline: bool = False
+    linear_baseline_path: str = "data/linear_baseline.pkl"
 
 
 cfg = sp.parse(Config)
@@ -510,6 +604,42 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
+
+# --- Residual linear baseline (PR #3820): subtract per-sample DC offset from y ---
+baseline_predictor: BaselinePredictor | None = None
+baseline_info: dict = {}
+if cfg.use_residual_baseline:
+    baseline_predictor = BaselinePredictor(cfg.linear_baseline_path).to(device)
+    # Override stats so normalization uses residual mean/std rather than the
+    # original y stats. The MAE metric is still computed against the original
+    # y (in physical space) by adding the baseline back to predictions.
+    stats = dict(stats)
+    stats["y_mean"] = baseline_predictor.residual_y_mean.to(device)
+    stats["y_std"] = baseline_predictor.residual_y_std.to(device)
+    baseline_info = {
+        "baseline_r2_train_Ux": baseline_predictor.r2_train_per_ch[0],
+        "baseline_r2_train_Uy": baseline_predictor.r2_train_per_ch[1],
+        "baseline_r2_train_p":  baseline_predictor.r2_train_per_ch[2],
+        "baseline_cv_r2_Ux": baseline_predictor.cv_r2_per_ch[0],
+        "baseline_cv_r2_Uy": baseline_predictor.cv_r2_per_ch[1],
+        "baseline_cv_r2_p":  baseline_predictor.cv_r2_per_ch[2],
+        "baseline_alpha_Ux": baseline_predictor.alpha_per_ch[0],
+        "baseline_alpha_Uy": baseline_predictor.alpha_per_ch[1],
+        "baseline_alpha_p":  baseline_predictor.alpha_per_ch[2],
+        "baseline_residual_y_mean": baseline_predictor.residual_y_mean.cpu().tolist(),
+        "baseline_residual_y_std":  baseline_predictor.residual_y_std.cpu().tolist(),
+    }
+    print(
+        f"Residual baseline loaded from {cfg.linear_baseline_path}:\n"
+        f"  R² train  (Ux={baseline_predictor.r2_train_per_ch[0]:+.4f}, "
+        f"Uy={baseline_predictor.r2_train_per_ch[1]:+.4f}, "
+        f"p={baseline_predictor.r2_train_per_ch[2]:+.4f})\n"
+        f"  CV R²     (Ux={baseline_predictor.cv_r2_per_ch[0]:+.4f}, "
+        f"Uy={baseline_predictor.cv_r2_per_ch[1]:+.4f}, "
+        f"p={baseline_predictor.cv_r2_per_ch[2]:+.4f})\n"
+        f"  residual mean: {baseline_predictor.residual_y_mean.cpu().tolist()}\n"
+        f"  residual std:  {baseline_predictor.residual_y_std.cpu().tolist()}"
+    )
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
@@ -577,6 +707,7 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        **baseline_info,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -616,7 +747,12 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        if baseline_predictor is not None:
+            y_baseline = baseline_predictor(x)  # [B, 3] in physical y-space
+            y_target = y - y_baseline.unsqueeze(1)
+        else:
+            y_target = y
+        y_norm = (y_target - stats["y_mean"]) / stats["y_std"]
         ff = fourier_encoder(x_norm[..., :2])
         x_aug = torch.cat([x_norm, ff], dim=-1)
 
@@ -673,7 +809,8 @@ for epoch in range(MAX_EPOCHS):
     model.eval()
     split_metrics = {
         name: evaluate_split(model, fourier_encoder, loader, stats,
-                             cfg.surf_weight, cfg.smooth_l1_beta, device)
+                             cfg.surf_weight, cfg.smooth_l1_beta, device,
+                             baseline=baseline_predictor)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -743,7 +880,8 @@ if swa_active:
     print("Evaluating SWA model on validation splits...")
     swa_val_metrics = {
         name: evaluate_split(swa_model, fourier_encoder, loader, stats,
-                             cfg.surf_weight, cfg.smooth_l1_beta, device)
+                             cfg.surf_weight, cfg.smooth_l1_beta, device,
+                             baseline=baseline_predictor)
         for name, loader in val_loaders.items()
     }
     swa_val_avg = aggregate_splits(swa_val_metrics)
@@ -797,7 +935,8 @@ if best_metrics:
         }
         test_metrics = {
             name: evaluate_split(model, fourier_encoder, loader, stats,
-                                 cfg.surf_weight, cfg.smooth_l1_beta, device)
+                                 cfg.surf_weight, cfg.smooth_l1_beta, device,
+                                 baseline=baseline_predictor)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
@@ -818,7 +957,8 @@ if best_metrics:
             print("\nEvaluating SWA model on held-out test splits...")
             swa_test_metrics = {
                 name: evaluate_split(swa_model, fourier_encoder, loader, stats,
-                                     cfg.surf_weight, cfg.smooth_l1_beta, device)
+                                     cfg.surf_weight, cfg.smooth_l1_beta, device,
+                                     baseline=baseline_predictor)
                 for name, loader in test_loaders.items()
             }
             swa_test_avg = aggregate_splits(swa_test_metrics)
