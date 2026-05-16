@@ -867,6 +867,10 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    with torch.no_grad():
+        param_norm = float(
+            torch.sqrt(sum(p.detach().float().pow(2).sum() for p in model.parameters())).item()
+        )
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -879,6 +883,7 @@ for epoch in range(MAX_EPOCHS):
         "train/sample_scale_mean": epoch_scale_mean,
         "train/sample_scale_std": epoch_scale_std,
         "train/cautious_mask_mean": epoch_mask_mean,
+        "train/parameter_norm": param_norm,
         "train/torch_compile_active": torch_compile_active,
         "train/torch_compile_mode": cfg.torch_compile_mode if torch_compile_active else None,
         "val_avg/mae_surf_p": avg_surf_p,
