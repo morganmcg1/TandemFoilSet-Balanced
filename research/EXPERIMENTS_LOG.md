@@ -965,6 +965,57 @@ Slice_num axis fully closed. Bottleneck is now per-batch matmul overhead. bf16 i
 
 ---
 
+## 2026-05-16 21:45 — PR #4071 — Schedule-Free AdamW on bf16+GEGLU (MERGED → **NEW BEST, -10.9%**)
+
+- **Branch:** `charliepai2i48h1-fern/schedule-free-adamw-on-film` (rebased for bf16+GEGLU retest)
+- **Hypothesis:** Replace cosine annealing with Schedule-Free AdamW (Defazio et al. 2024, arXiv:2405.15682). Cosine T_max=50 with only 23 effective epochs puts LR at ~59% of peak at the terminal step, meaning the last ~10 epochs are making under-powered gradient updates. SF removes this fragility and keeps effective LR at full strength throughout the compute budget.
+- **Results vs baseline (val=50.57, test=43.94):**
+
+| Metric | Baseline (bf16+GEGLU) | Schedule-Free AdamW | Δ |
+|--------|-----------------------:|--------------------:|--:|
+| `val_avg/mae_surf_p` | **50.57** | **45.07** | **-10.9% ✓ WIN** |
+| `test_avg/mae_surf_p` | **43.94** | **38.58** | **-12.2% ✓** |
+| `val_single_in_dist` | 56.18 | 48.79 | -13.1% |
+| `val_geom_camber_rc` | 63.01 | 58.57 | -7.1% |
+| `val_geom_camber_cruise` | 32.57 | 26.72 | -18.0% |
+| `val_re_rand` | 50.52 | 46.21 | -8.5% |
+| `test_single_in_dist` | 49.90 | 43.26 | -13.3% |
+| `test_geom_camber_rc` | 56.89 | 51.59 | -9.3% |
+| `test_geom_camber_cruise` | 26.45 | 22.20 | -16.1% |
+| `test_re_rand` | 42.52 | 37.26 | -12.4% |
+| sec/epoch | 78.9s | 79.2s | +0.4% (negligible) |
+| epochs in 30-min cap | 23 | 23 | same |
+| peak VRAM | 25.7 GB | 25.96 GB | +0.3% |
+| n_params | 737,491 | 737,491 | unchanged |
+
+- **Metrics path:** `models/model-charliepai2i48h1-fern-sf-adamw-on-bf16-geglu-20260516-204614/metrics.jsonl`
+- **Decision:** MERGED. All 8 val+test splits improved. Zero compute overhead. Run still descending at terminal epoch (-0.79 pts from ep22→ep23). **New best: val=45.07, test=38.58.**
+- **Analysis:** Largest gains on cruise-camber OOD (-18.0% val) and single-in-dist (-13.1%), same pattern as GEGLU — SF is unlocking more of the GEGLU+bf16 compute budget rather than a new generalization direction. Cosine at epoch 23 (T_max=50) was at 59% of peak; SF keeps full-strength LR → late epochs make ~1.5-2× larger updates.
+- **Key implementation note:** Must call `optimizer.train()` before each training step and `optimizer.eval()` before val/test evaluation. Missing this silently evaluates at wrong iterate.
+- **Orthogonality:** SF operates on optimizer iterate; EMA on shadow model parameters. Both coexist cleanly — no redundancy or competition confirmed over 2 runs (FiLM-only and bf16+GEGLU).
+- **Total improvement from calibration baseline:** 143.52 → 45.07 = **-68.6%** in 16 merged PRs.
+
+---
+
+## 2026-05-16 21:45 — PR #4041 v2 — FiLM two-stage on bf16+GEGLU (CLOSED — FiLM-broadcast-scalar axis exhausted)
+
+- **Branch:** `charliepai2i48h1-alphonse/film-re-aoa` (multiple rebases)
+- **Hypothesis:** Two-stage FiLM head (separate base [Re,AoA0,AoA1,NACA0] and geometry [NACA1,gap,stagger] heads, gated by `is_tandem`) should disentangle single-foil vs tandem conditioning without structural-zero corruption.
+- **Journey across 3 iterations:**
+
+| Iteration | val_avg | vs contemporary baseline | Key finding |
+|-----------|--------:|------------------------:|-------------|
+| v1 (fp32, 11 scalars, no gate) | 69.56 | +0.76 vs 68.80 | structural-zero bug: single-foil gets corrupted geometry signal → +4.04 regression |
+| v2 (fp32, two-stage + is_tandem gate) | 67.59 | **-1.21 vs 68.80 ✓** | gate fixed structural-zero (-1.04 on single), -4.44 on cruise OOD |
+| **v2 (bf16+GEGLU, this final result)** | **52.14** | **+1.57 vs 50.57 ✗** | single-foil regression returned (+3.19); GEGLU absorbs the disentanglement gain |
+
+- **Metrics path (final run):** `models/model-film-two-stage-v2-bf16-20260516-205540/metrics.jsonl`
+- **Decision:** CLOSED. FiLM-broadcast-scalar axis saturated at the GEGLU frontier.
+- **Why GEGLU absorbs v2's gain:** GEGLU applies per-channel gating at every block across the full per-node tensor — a strictly more flexible gating mechanism than the broadcast-scalar `is_tandem * film_geom` gate. The model can already learn "ignore zero-conditioning inputs on single-foil samples" via GEGLU's block-level gating. The marginal information per FiLM site is small once GEGLU exists.
+- **Next axis:** Per-node geometric conditioning (signed-distance, surface-normal features injected at the FiLM site) is the natural escalation from broadcast scalars. Also: GEGLU in the mlp2 readout head is the next probe (assigned to alphonse as #4168).
+
+---
+
 ## 2026-05-16 21:26 — PR #4137 — GEGLU + mlp_ratio 1→2 (CLOSED — regression, wall-clock-driven)
 
 - **Branch:** `charliepai2i48h1-frieren/geglu-mlp-ratio-2`

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 21:30 UTC
+- **Updated:** 2026-05-16 21:50 UTC
 - **Track:** Charlie local-metrics arm (`charlie-pai2i-48h-r1`)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-48h-r1`
 - **Target base:** `icml-appendix-charlie`
@@ -13,15 +13,15 @@ down vs the baseline Transolver config in `target/train.py`.
 
 ## Current best baseline
 
-**val_avg/mae_surf_p = 50.57**, **test_avg/mae_surf_p = 43.94** (PR #4105,
-GEGLU FFN on bf16 + FiLM-Re+AoA, best epoch 23, still descending at termination).
+**val_avg/mae_surf_p = 45.07**, **test_avg/mae_surf_p = 38.58** (PR #4071,
+Schedule-Free AdamW on bf16+GEGLU + FiLM-Re+AoA, best epoch 23, still descending at termination).
 
-Per-split val: single=56.18, rc=63.01, cruise=32.57, re_rand=50.52.
-Per-split test: single=49.90, rc=56.89, cruise=26.45, re_rand=42.52.
+Per-split val: single=48.79, rc=58.57, cruise=26.72, re_rand=46.21.
+Per-split test: single=43.26, rc=51.59, cruise=22.20, re_rand=37.26.
 
-**Total improvement from calibration baseline:** 143.52 → 50.57 = **-64.8%**
+**Total improvement from calibration baseline:** 143.52 → 45.07 = **-68.6%**
 
-## Round wins merged (R1–R15)
+## Round wins merged (R1–R17)
 
 | PR | Hypothesis | val_avg | Δ vs prior | Decision |
 |----|------------|--------:|-----:|----------|
@@ -37,7 +37,8 @@ Per-split test: single=49.90, rc=56.89, cruise=26.45, re_rand=42.52.
 | #4004 | FiLM-on-Re | 71.46 | -9.6% | MERGED |
 | #4018 | FiLM-Re+AoA | 68.80 | -3.7% | MERGED |
 | #4064 | bf16 autocast | 59.08 | -14.1% | MERGED |
-| **#4105** | **GEGLU FFN on bf16** | **50.57** | **-14.4%** | **MERGED — current baseline** |
+| #4105 | GEGLU FFN on bf16 | 50.57 | -14.4% | MERGED |
+| **#4071** | **Schedule-Free AdamW on bf16+GEGLU** | **45.07** | **-10.9%** | **MERGED — current baseline** |
 
 ## Key architecture (current baseline configuration)
 
@@ -47,34 +48,36 @@ Per-split test: single=49.90, rc=56.89, cruise=26.45, re_rand=42.52.
 | Conditioning | FiLM head [log_Re, AoA0, AoA1] (3-scalar → per-block γ,β) |
 | Precision | bf16 autocast (forward + loss; reductions in fp32) |
 | FFN | **GEGLU gating** (PR #4105): `FFN(x) = W2(GELU(W1a(x)) * W1b(x))` |
-| Optim | AdamW, lr=5e-4, weight_decay=1e-4, batch=4, cosine T_max=50 |
+| Optim | **Schedule-Free AdamW** (PR #4071): `schedulefree.AdamWScheduleFree(lr=5e-4, weight_decay=1e-4, warmup_steps=200)` — no LR scheduler |
 | Loss | SmoothL1 (Huber, beta=0.25), surf_weight=10.0 |
 | EMA | decay=0.997, applied as val/test checkpoint |
-| Compute | ~78.9s/epoch, **23 epochs** in 30-min cap, peak VRAM 25.7 GB |
+| Compute | ~79.2s/epoch, **23 epochs** in 30-min cap, peak VRAM 25.96 GB |
 
 ## Dominant discovery: orthogonal wins compound; compute headroom still binding
 
-In one day (R14→R15) we landed two -14% jumps that stack: bf16 (#4064) cut sec/epoch -27% → +7 epochs → -14.1%. GEGLU (#4105) +6% sec/epoch but per-epoch quality gain dominates → -14.4%. Total -27% in 2 PRs. **The model is still descending at termination in BOTH wins** — the compute-bound thesis still holds.
+In R14→R17 we landed three major jumps stacking cleanly: bf16 (#4064) -14.1%; GEGLU (#4105) -14.4%; Schedule-Free AdamW (#4071) -10.9%. Total -35% in 3 PRs. **The model is still descending at termination in ALL wins** — the compute-bound thesis holds strongly.
+
+Key insight from R17: cosine T_max=50 with only 23 effective epochs puts LR at ~59% of peak at the terminal step — late epochs were under-powered. Schedule-Free removes this fragility for all future levers.
 
 Three orthogonal levers still in play:
-1. **Fewer seconds per epoch** — torch.compile (nezuko, pending bf16+GEGLU retest), n_layers=4 (edward, pending bf16+GEGLU retest)
-2. **More informative gradient per step** — Schedule-Free AdamW (fern, pending), cosine T_max=epochs (queued for thorfinn)
-3. **More expressive per-step update** — SwiGLU (next probe), GEGLU + mlp_ratio=2 (next probe), FiLM-two-stage (alphonse, pending bf16+GEGLU retest), per-node geometric conditioning (next-axis idea)
+1. **Fewer seconds per epoch** — torch.compile (nezuko, pending bf16+GEGLU+SF retest), n_layers=4 (edward, pending retest)
+2. **More expressive per-step update** — SwiGLU vs GEGLU (frieren #4155), GEGLU in readout head (alphonse #4168), slice_num=8 (tanjiro #4107 rebase)
+3. **More capacity / conditioning** — per-node geometric conditioning (signed-distance, surface-normal features) is the natural escalation now that broadcast-scalar FiLM axis is saturated
 
 ## Currently in flight (8 WIP — all students active, zero idle GPUs)
 
 | PR | Student | Hypothesis | Theme | Status |
 |----|---------|------------|-------|--------|
-| #4041 v2 | alphonse  | FiLM two-stage (base+geom, is_tandem gate) on bf16+GEGLU | FiLM architecture | WIP (sent back for bf16+GEGLU rebase) |
-| #4068 | edward    | n_layers 5→4 on bf16+GEGLU | compute | WIP (sent back for bf16+GEGLU rebase) |
-| #4069 | nezuko    | torch.compile(dynamic=True) on bf16+GEGLU | compute | WIP (sent back for bf16+GEGLU rebase) |
-| #4071 | fern      | Schedule-Free AdamW on bf16+GEGLU | optim | WIP — rebased onto bf16+GEGLU, training |
-| #4107 | tanjiro   | slice_num 12→8 on bf16+GEGLU | compute | WIP (sent back for bf16+GEGLU rebase — won old baseline 59.08→57.82) |
-| #4134 | thorfinn  | Cosine T_max 50→25 (align to actual epochs) | LR schedule | WIP — R16 |
+| #4168 | alphonse  | GEGLU in mlp2 readout head (final output projection) | FFN gating | WIP — R17-late |
+| #4177 | fern      | EMA decay re-tune on SF stack: probe {0.995, 0.999} vs 0.997 | optim | WIP — R17-late, just assigned |
+| #4068 | edward    | n_layers 5→4 on bf16+GEGLU+SF stack | compute | WIP (needs full-stack rebase incl. SF) |
+| #4069 | nezuko    | torch.compile(dynamic=True) on bf16+GEGLU+SF stack | compute | WIP (needs full-stack rebase incl. SF) |
+| #4107 | tanjiro   | slice_num 12→8 on bf16+GEGLU+SF stack | compute | WIP (needs full-stack rebase) |
+| #4134 | thorfinn  | Cosine T_max 50→25 (superseded by SF merge — result interesting but not decision-making) | LR schedule | WIP — R16 |
 | #4136 | askeladd  | batch=8 + lr=1e-3 (linear scaling) on GEGLU | data parallelism | WIP — R16 |
-| #4155 | frieren   | SwiGLU vs GEGLU (replace `F.gelu` with `F.silu` in gate) | FFN nonlinearity | WIP — R16-late, fresh assignment |
+| #4155 | frieren   | SwiGLU vs GEGLU (replace `F.gelu` with `F.silu` in gate) | FFN nonlinearity | WIP — R16-late |
 
-**Note on the 5 sent-back PRs:** All five (#4041 v2, #4068, #4069, #4071, #4107) had architectural/optimization wins against an OLDER baseline but couldn't merge once the new bf16 baseline (59.08), then bf16+GEGLU baseline (50.57), landed underneath them. Each is fully orthogonal to the merged wins, so a compound win is expected on rebase.
+**Baseline update comment sent to #4068, #4069, #4107** notifying them of the new val=45.07 target and full-stack (bf16+GEGLU+SF) rebase requirement.
 
 ## Closed axes (final state)
 
@@ -90,20 +93,25 @@ Three orthogonal levers still in play:
 | surf_weight (10.0) | CLOSED |
 | lr peak (5e-4 vs 7.5e-4) | SATURATED — closed at 5e-4 |
 | batch=8 (no LR scaling) | CLOSED — needs linear-scaling lr=1e-3 variant (in flight #4136) |
-| FiLM-full naive (11 scalars) | CLOSED — sent back to two-stage v2 (in flight) |
-| **mlp_ratio (also CLOSED for GEGLU)** | CLOSED — #4137 regression +1.58%; wall-clock-saturation (2 epochs lost × 1.1 pts/epoch ≈ 2.2 pts deficit > 0.80 pts observed) |
+| FiLM-full naive (11 scalars) | CLOSED — two-stage v2 ran; closed below |
+| **FiLM-broadcast-scalar axis** | CLOSED (R17) — #4041 v2 on bf16+GEGLU regressed +1.57%; GEGLU's block-level gating subsumes the disentanglement that broadcast FiLM was buying |
+| **mlp_ratio (also CLOSED for GEGLU)** | CLOSED — #4137 regression +1.58%; wall-clock-saturation |
+| **cosine T_max tuning** | SUPERSEDED — Schedule-Free AdamW (#4071) merged; SF removes T_max fragility by construction; thorfinn's T_max=25 probe (#4134) is still running but outcome is moot for future assignments |
 
-## Potential next research directions (post-R15)
+## Potential next research directions (post-R17)
 
-1. **GLU-family probes:** SwiGLU (SiLU gate) vs GEGLU comparison. Llama uses SiLU; might edge GEGLU on smooth pressure fields. Single-line change.
-2. **GEGLU + mlp_ratio=2:** With +245k FFN params already paying for itself, doubling FFN width is the natural next capacity bump.
-3. **GEGLU in mlp2 readout head:** The final readout MLP is still vanilla `Linear → GELU → Linear`. Replicate the win there.
-4. **Cosine T_max=epochs_reached (queued for thorfinn):** At epoch 25 the baseline's effective LR is 50% of peak (under-annealed). Shorter T_max would let LR fully decay → sharper minimum on this 25-epoch budget.
-5. **Longer training off-policy run:** GEGLU was still descending at 1.7 pts/epoch at terminal epoch 23 within the 30-min cap. A 45-60 min run would test whether the late-training compounds.
-6. **Per-node geometric conditioning:** Signed-distance or surface-normal features fed at each FiLM site (not broadcast scalars). Bigger architectural step.
-7. **batch=8 + linear-scaling lr=1e-3:** Revisit batch size after GEGLU stabilizes — this time with linear-scaling LR.
-8. **pad_collate ceiling investigation:** sec/epoch wall-clock floor identified as `pad_collate(max_n)` + Python/dataloader, not compute. Profiling could surface 10-20% throughput gains.
-9. **Multi-seed confirmation of bf16+GEGLU baseline:** Before ICML deadline, 3 seeds of the current config to tighten the variance estimate (currently ±5-10 pts).
+1. **GEGLU in mlp2 readout head** — IN FLIGHT (#4168 alphonse). Single-line change; same gating as block MLPs; +16k params.
+2. **SwiGLU vs GEGLU** — IN FLIGHT (#4155 frieren). Replace `F.gelu` with `F.silu`; LLaMA/PaLM choice; smooth pressure fields may favor SiLU.
+3. **slice_num=8 on full stack (bf16+GEGLU+SF)** — IN FLIGHT (#4107 tanjiro rebase). Predicted compound target val ≤ 40; if wins → probe slice_num=6/4.
+4. **n_layers 5→4 on full stack** — IN FLIGHT (#4068 edward). Predicted sec/epoch ~62-68s → 27-29 epochs; target val ≤ 42.
+5. **torch.compile(dynamic=True) on full stack** — IN FLIGHT (#4069 nezuko). Expected ~-15% sec/epoch → +4 epochs; target val ≤ 42.
+6. **EMA decay re-tune on SF stack** — SF keeps LR at full strength longer; EMA 0.997 was tuned for cosine. Probe 0.995, 0.997, 0.999 on SF baseline. Cheap 3-arm sweep.
+7. **SF warmup_steps sweep** — 200 worked; sharp early epoch (ep1 val=251) suggests probing {50, 500} could improve early-epoch stability.
+8. **Per-node geometric conditioning** — Escalation from broadcast-scalar FiLM (now closed). Signed-distance or surface-normal features injected at each FiLM site per mesh node. Bigger architecture step; may need its own paper contribution.
+9. **GEGLU in attention output projection** — The `to_out` linear in PhysicsAttention is still vanilla. A similar GEGLU probe there (in_dim=hidden*n_head, out_dim=hidden) could replicate the block-FFN win.
+10. **Multi-seed confirmation (3 seeds)** — Before ICML deadline, tighten variance on the current val=45.07 baseline (±5-10 pt single-seed noise).
+11. **Batch=8 + lr=1e-3 on SF stack** — In flight as askeladd #4136 (was dispatched before SF merge). The linear-scaling argument still applies; SF may interact differently with larger batches.
+12. **fern re-assignment** — fern is idle after #4071 merge. Top candidates: EMA decay re-tune (#6 above), warmup_steps sweep (#7), or attention-output GEGLU (#9).
 
 ## Round 16 dispatched (R16)
 
@@ -114,8 +122,12 @@ Three orthogonal levers still in play:
 | #4137 | frieren   | GEGLU + mlp_ratio 1→2 | CLOSED (regression +1.58% val, wall-clock-driven) — frieren reassigned to #4155 |
 | #4155 | frieren   | SwiGLU vs GEGLU (replace `F.gelu` with `F.silu` in gate; same params, same sec/epoch) | WIP — R16-late follow-up |
 
-## R16-late closures / sent-backs (this iteration)
+## R17 actions (this iteration)
 
-- **#4137 CLOSED**: GEGLU + mlp_ratio=2 regressed +1.58% val (50.57 → 51.37). Per-epoch slope still positive but +33.6% params / +10% sec/epoch cost 2 epochs of training; wall-clock saturation argument applies (would apply equally with T_max=25, so no reopen). Cruise tied, single_in_dist regressed most (epoch-sensitive split). mlp_ratio axis stays CLOSED for GEGLU too.
-- **#4107 SENT BACK**: tanjiro slice_num=8 won old bf16 baseline (59.08→57.82, -2.13%) but submitted after GEGLU merge. Same baseline-shift problem as #4068/#4069/#4071/#4041 v2. Trajectory hint: 12→8 step (-2.13%) out-improved 16→12 (-0.34%) → optimum likely below 8. slice_num=6/4 are next steps after successful bf16+GEGLU rebase.
-- **frieren reassigned (#4155)**: SwiGLU vs GEGLU is a clean A/B — same param count, same sec/epoch, single-line change (`F.gelu` → `F.silu`). LLaMA/PaLM picked SiLU over GELU; CFD pressure fields are smooth so the smoother gate may edge GEGLU. If wins: GLU-family axis splits open; if loses/ties: GEGLU confirmed and we move on.
+- **#4071 MERGED** (fern Schedule-Free AdamW): val=45.07, test=38.58, -10.9% win, all 8 splits improved, zero compute overhead. New baseline.
+- **#4041 CLOSED** (alphonse FiLM-broadcast-scalar axis): v2 on bf16+GEGLU regressed +1.57%; GEGLU's block-level gating absorbs the disentanglement benefit. FiLM-broadcast-scalar axis closed. Alphonse reassigned to #4168 (GEGLU readout head).
+- **#4137 CLOSED** (frieren GEGLU+mlp_ratio=2): regression +1.58%; wall-clock saturation. mlp_ratio axis CLOSED for GEGLU too.
+- **#4107 SENT BACK** (tanjiro slice_num=8): won old bf16 baseline (-2.13%) but needs full stack (bf16+GEGLU+SF) rebase. Predicted target val ≤ 40.
+- **frieren reassigned** (#4155 SwiGLU).
+- **alphonse reassigned** (#4168 GEGLU readout head).
+- **fern now idle** — needs next assignment this cycle.
