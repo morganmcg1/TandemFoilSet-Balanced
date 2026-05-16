@@ -2,6 +2,69 @@
 
 Primary ranking metric is `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across the four validation splits). Test-time decision metric is `test_avg/mae_surf_p`. Lower is better.
 
+## 2026-05-16 04:21 — PR #3582: torch.compile() for more effective epochs (current best)
+
+Stacks on top of PR #3465 T_max=25 alignment + PR #3466 Cautious AdamW + PR #3373 bf16 + PR #3265 FiLM + PR #3337 surf-L1 + PR #3281 EMA + PR #3266 scale-invariant loss + NaN fix. Wraps the Transolver in `torch.compile(mode="default", dynamic=True)` to reduce per-forward overhead. **Result: 1.88× per-epoch speedup (108s → 57s), unlocking 32 effective epochs within the 30-min wall-clock cap vs 17 at prior baseline.** The −18.83% val improvement comes entirely from the additional 15 epochs — at matched epoch number the compile arm is ~3% worse than the pre-compile baseline (small fp32 accumulation-order differences from kernel fusion). Model still descending at −0.7/epoch at the epoch-32 cutoff; schedule realignment is the next axis.
+
+> **Note on verified stack state:** Both compile arms ran with `bernoulli_residual=False` (confirmed via config.yaml). Investigation revealed the prior baseline (`thorfinn-tmax25_em10` at commit `3a3104a`) also ran without bernoulli — the field was absent from that branch's Config dataclass. The actual merged stack is a **7-mechanism stack**: scale-inv + EMA + surf-L1 + FiLM + bf16 + Cautious AdamW + T_max=25 + compile. Bernoulli residual claim from PR #3466 is suspect; enabling it properly is a pending cleanup item.
+
+**Primary** (Arm A: `torch.compile(mode="default", dynamic=True)`, full merged stack + compile)
+- `val_avg/mae_surf_p` = **61.2023** (best epoch 32 / 50, run cut by 30-min wall clock)
+- `test_avg/mae_surf_p` = **54.0076**
+- **Cumulative round-5 improvement:** −50.59% val_avg (123.88 → 61.20), −52.78% test_avg (114.37 → 54.01)
+
+**Per-split surface pressure MAE (Arm A — winner)**
+
+| Split | val_mae_surf_p | test_mae_surf_p | Δ val vs prior (75.40) | Δ test vs prior (65.86) |
+|---|---:|---:|---:|---:|
+| single_in_dist | 65.4371 | 59.1840 | −22.9% | −19.9% |
+| geom_camber_rc | 76.7732 | 70.5756 | −10.6% | −8.6% |
+| geom_camber_cruise | 41.4908 | 34.1383 | −28.0% | −26.8% |
+| re_rand | 61.1080 | 52.1313 | −16.5% | −20.6% |
+| **avg** | **61.2023** | **54.0076** | **−18.83%** | **−18.00%** |
+
+All 8 val/test cells improve. Biggest gains: `geom_camber_cruise` (−28% val) and `single_in_dist` (−22.9% val).
+
+**Throughput and VRAM**
+
+| | Baseline (no compile) | Arm A (default) | Arm B (reduce-overhead) |
+|---|---:|---:|---:|
+| Steady-state s/epoch | 108.0 | **57.3** | 57.4 |
+| Effective epochs (30min) | 17 | **32** | 32 |
+| Peak VRAM | ~35.5 GB | **24.4 GB** | 26.4 GB |
+
+**Model config (same as prior baseline, with compile wrapper)**
+- Transolver — n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2
+- 829,015 parameters (note: prior BASELINE.md listed 662,359 — likely pre-FiLM count; actual merged-stack model is 829K)
+- CautiousAdamW lr=5e-4, wd=1e-4, batch_size=4, surf_weight=10.0
+- CosineAnnealingLR(T_max=25, eta_min_factor=0.10, eta_min=5e-5)
+- bf16 AMP, EMA decay=0.999, surf_p_l1_weight=1.0
+- bernoulli_residual=False (see note above — verify + enable pending)
+- **torch_compile=True, torch_compile_mode="default", dynamic=True**
+- `dynamic=True` handles variable padded mesh sizes (74K–242K nodes) without recompiling per shape
+- EMA deepcopy BEFORE compile so EMA shadow holds raw `Transolver` (avoids compiled module deepcopy issues)
+- `torch.set_float32_matmul_precision("high")` enables TF32 when compile is active
+- Cautious mask mean ≈ 0.617 (stable throughout, invariant to LR per PR #3581 close)
+
+**Metric artifacts**
+- `models/model-charliepai2i24h5-fern-torch_compile_default-20260516-015149/metrics.jsonl`
+- `models/model-charliepai2i24h5-fern-torch_compile_default-20260516-015149/metrics.yaml`
+- `models/model-charliepai2i24h5-fern-torch_compile_default-20260516-015149/config.yaml`
+
+**Reproduce**
+```bash
+cd target/ && python train.py \
+    --agent charliepai2i24h5-fern \
+    --experiment_name "baseline_repro_compile" \
+    --torch_compile \
+    --t_max 25 --eta_min_factor 0.10 \
+    --surf_p_l1_weight 1.0 \
+    --epochs 50
+```
+(Wall clock capped by `SENPAI_TIMEOUT_MINUTES`; run hit 32 epochs in 30 min with compile enabled.)
+
+---
+
 ## 2026-05-16 02:15 — PR #3465: Cosine schedule T_max alignment (current best)
 
 Stacks on top of PR #3466 Bernoulli residual + PR #3315 Cautious AdamW + PR #3373 bf16 + PR #3265 FiLM + PR #3337 surf-L1 + PR #3281 EMA + PR #3266 scale-invariant loss + NaN fix. Changes `CosineAnnealingLR` from `T_max=50` (default, predated bf16 epoch unlock) to `T_max=25` to match the actual training epoch budget with bf16 (~17–19 epochs). Also sets `eta_min_factor=0.10` (min LR = `0.1 × 5e-4 = 5e-5`) so the cosine curve still has gradient signal at its floor — whereas the previous default `eta_min=0` caused the LR to zero out before the run hit wall clock. **This is a pure schedule fix: the cosine curve now actually decays through a useful range within the wall-clock window instead of lingering at near-zero LR for half its scheduled life.** Mechanism is orthogonal to all 7 previously-merged axes (optimizer, precision, conditioning, loss, target reformulation, EMA averaging).
