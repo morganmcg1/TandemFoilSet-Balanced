@@ -891,3 +891,41 @@ Per-split val:
 |---|---|---|---|
 | #3854 | fern | slice-num-sweep-nhead2 (32, 128) | Is slice_num=64 optimal for dim_head=64? |
 | #3858 | frieren | attn-dropout-nhead2 (attn_drop=0.1) | Does attention dropout improve OOD generalization? |
+
+## 2026-05-16 10:30 — Round-6 status resolution + Round-7 new assignments
+
+### Fleet-wide rate-limit investigation
+
+6 Round-6 PRs (#3766, #3789, #3790, #3793, #3795, #3796) stuck in stale_wip for 2+ hours due to GitHub REST API HTTP 403s in student heartbeat scripts. All pods alive; students unable to fetch their PR assignments. Rate limit reset at ~09:37 UTC. Students recovered at 10:21-10:23 UTC iteration.
+
+### Round-6 W&B findings (via advisor query, 10:25 UTC)
+
+| PR | Student | Best val | vs baseline 64.34 | Status |
+|---|---|---|---|---|
+| #3789 | thorfinn | **63.74** (run hy29un5q) | **−0.93% WIN** | 3rd run in progress; awaiting terminal |
+| #3790 | nezuko | 65.65 (run b7a77hcg) | +2.0% worse | 2 crashes in sweep; axis closed on SwiGLU |
+| #3793 | alphonse | 65.29 (run vfabzyyz) | +1.5% worse | Possibly 3rd arm running; awaiting terminal |
+| #3795 | tanjiro | 76.08 (run u5dh5ve1) | +18% worse | CLOSED — gating at I/O boundary breaks projections |
+| #3796 | askeladd | 67.02 (run nxkw1l2a) | +4.2% worse | 3rd run in progress; possibly scale=0.375 |
+| #3766 | edward | 90.59 (run u2n6926n) | +41% worse | CLOSED — DropPath on 5-layer fails at 14ep budget |
+
+### Advisor comments posted
+
+- **#3789 thorfinn**: confirmed W&B winner (val=63.74), requested terminal SENPAI-RESULT with test_3split metric
+- **#3790 nezuko**: confirmed regression pattern (65.65), requested terminal SENPAI-RESULT to close
+- **#3793 alphonse**: confirmed regression (65.29), noted 3rd arm activity, requested terminal SENPAI-RESULT
+- **#3796 askeladd**: noted scale=0.25 regresses, 3rd run observed, requested terminal once arm completes
+
+### Closures this cycle
+
+| PR | Closure reason |
+|---|---|
+| #3766 edward DropPath | val=90.59 (−41% worse) — 5-layer shallow network can't afford full-block drops at 14ep budget |
+| #3795 tanjiro SwiGLU-all | val=76.08 (−18% worse) — I/O boundary gating breaks monotonic projections; blocks-only scope confirmed correct |
+
+### New assignments (Round-7 additions)
+
+| PR | Student | Hypothesis | Key test |
+|---|---|---|---|
+| #3874 | edward | LR warmup (1-2 ep linear) on SwiGLU+n_head=2 | Does cold-start fix unlock warmup benefit at this scale? |
+| #3877 | tanjiro | PhysicsAttention temperature_init=0.2 on SwiGLU+n_head=2 | Does sharper slice assignment from step 1 help? |
