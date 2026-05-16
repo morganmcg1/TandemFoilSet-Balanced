@@ -570,6 +570,7 @@ class Config:
     optimizer: str = "adamw"   # 'adamw' or 'lion'
     beta1: float = 0.9   # Optimizer momentum coefficient (Adam/Lion)
     beta2: float = 0.999  # Optimizer second-moment coefficient (Adam) / EMA coeff (Lion)
+    warmup_epochs: int = 0   # Linear LR warmup epochs (0 = no warmup, T_max=15 cosine; >0 = SequentialLR LinearLR(1e-6→1.0)+CosineAnnealingLR(T_max=epochs-warmup_epochs))
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -640,9 +641,23 @@ elif cfg.optimizer == "adamw":
     print(f"Optimizer: AdamW (lr={cfg.lr}, betas=({cfg.beta1}, {cfg.beta2}), wd={cfg.weight_decay})")
 else:
     raise ValueError(f"Unknown optimizer: {cfg.optimizer!r} (expected 'adamw' or 'lion')")
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer, T_max=15, eta_min=cfg.eta_min
-)
+if cfg.warmup_epochs > 0:
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=1e-6, end_factor=1.0,
+        total_iters=cfg.warmup_epochs,
+    )
+    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=cfg.epochs - cfg.warmup_epochs, eta_min=cfg.eta_min,
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[cfg.warmup_epochs],
+    )
+    print(f"Scheduler: LinearLR(warmup={cfg.warmup_epochs}, 1e-6→1.0) → CosineAnnealingLR(T_max={cfg.epochs - cfg.warmup_epochs}, eta_min={cfg.eta_min})")
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=15, eta_min=cfg.eta_min
+    )
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
