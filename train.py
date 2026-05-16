@@ -543,6 +543,8 @@ class Config:
     optimizer_name: str = "adamw"  # "adamw" or "lion"
     lion_beta1: float = 0.9
     lion_beta2: float = 0.99
+    warmup_steps: int = 0    # Linear warmup over N optimizer steps; 0 disables warmup.
+    warmup_start_factor: float = 1e-3  # LR multiplier at step 0 when warmup is enabled.
 
 
 def _residual_err(pred, target, loss_type, beta):
@@ -615,9 +617,42 @@ elif cfg.optimizer_name == "adamw":
     print(f"Optimizer: AdamW(lr={cfg.lr}, wd={cfg.weight_decay})")
 else:
     raise ValueError(f"Unknown optimizer_name: {cfg.optimizer_name!r}")
-cosine_t_max = cfg.cosine_t_max if cfg.cosine_t_max is not None else MAX_EPOCHS
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cosine_t_max)
-print(f"Scheduler: CosineAnnealingLR(T_max={cosine_t_max})  [epochs cap = {MAX_EPOCHS}]")
+cosine_t_max_epochs = cfg.cosine_t_max if cfg.cosine_t_max is not None else MAX_EPOCHS
+steps_per_epoch = len(train_loader)
+total_cosine_steps = cosine_t_max_epochs * steps_per_epoch
+if cfg.warmup_steps > 0:
+    if cfg.warmup_steps >= total_cosine_steps:
+        raise ValueError(
+            f"warmup_steps={cfg.warmup_steps} >= total_cosine_steps={total_cosine_steps} "
+            f"(cosine_t_max={cosine_t_max_epochs} epochs * {steps_per_epoch} steps/epoch)."
+        )
+    warmup = torch.optim.lr_scheduler.LinearLR(
+        optimizer,
+        start_factor=cfg.warmup_start_factor,
+        end_factor=1.0,
+        total_iters=cfg.warmup_steps,
+    )
+    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=total_cosine_steps - cfg.warmup_steps,
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup, cosine], milestones=[cfg.warmup_steps],
+    )
+    print(
+        f"Scheduler: LinearLR(start={cfg.warmup_start_factor}, steps={cfg.warmup_steps}) "
+        f"-> CosineAnnealingLR(T_max={total_cosine_steps - cfg.warmup_steps}) "
+        f"[per-batch step, cosine_t_max={cosine_t_max_epochs} epochs * {steps_per_epoch} steps/epoch, "
+        f"epochs cap = {MAX_EPOCHS}]"
+    )
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=total_cosine_steps,
+    )
+    print(
+        f"Scheduler: CosineAnnealingLR(T_max={total_cosine_steps}) "
+        f"[per-batch step, cosine_t_max={cosine_t_max_epochs} epochs * {steps_per_epoch} steps/epoch, "
+        f"epochs cap = {MAX_EPOCHS}]"
+    )
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -693,14 +728,18 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        scheduler.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({
+            "train/loss": loss.item(),
+            "lr": scheduler.get_last_lr()[0],
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
