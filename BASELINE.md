@@ -1,6 +1,51 @@
 # BASELINE — TandemFoilSet (willow-pai2i-24h-r4)
 
-## Current best — PR #3262 (edward, merged 2026-05-16 01:27 UTC)
+## Current best — PR #3258 (fern, merged 2026-05-16 06:xx UTC)
+
+**Gradient clip 1.0 + 5-epoch linear LR warmup, stacked on top of #3262 RFF + #3358 cosine T_max=14 + #3263 FiLM(log_Re) + #3257 surf-MAE+p_weight=3.**
+
+| Metric | Value | W&B run | Δ vs prior baseline |
+|--------|------:|---------|---------------------|
+| `val_avg/mae_surf_p` | **77.6469** | `vrnb926l` (fern) | **−2.06%** (from 79.28) |
+| `test_avg/mae_surf_p` | **66.8695** | `vrnb926l` (fern) | **−3.47%** (from 69.27) |
+| `test_single_in_dist/mae_surf_p` | 78.6500 | `vrnb926l` | −0.06% |
+| `test_geom_camber_rc/mae_surf_p` | 77.6600 | `vrnb926l` | −2.43% |
+| `test_geom_camber_cruise/mae_surf_p` | 46.1700 | `vrnb926l` | −6.10% |
+| `test_re_rand/mae_surf_p` | 65.0000 | `vrnb926l` | −6.68% |
+
+**Cumulative path:** vanilla 106.23 → #3257 94.35 → #3263 90.06 → #3358 80.08 → #3262 69.27 → #3258 **66.87** (**−37.0% from vanilla in 5 PRs**).
+
+All subsequent PRs must beat **test_avg/mae_surf_p < 66.87**.
+
+### What changed
+- **`grad_clip=1.0`**: `clip_grad_norm_(model.parameters(), max_norm=cfg.grad_clip)` in the training step. Clip binds on 100% of steps (pre-clip grad-norm median 70, max 432 — compressed from pre-stack 56/1110 by the cosine+RFF base but still substantial).
+- **`warmup_epochs=5`**: 5-epoch linear LR warmup from 1e-4 → 5e-4, then cosine T_max=9 (=14−5) to 0. LR schedule lands peak exactly at epoch 5, cosine tail expires just at 14-epoch wall-clock cap.
+- **No architecture/loss/schedule changes** beyond these two training-stability flags.
+- **Param delta:** 0 (no new parameters — pure training change).
+- **All `_skipped_y_samples` correct:** cruise = 1 (canonical), other splits = 0. `n_nonfinite_pred=0` across all splits.
+
+### Mechanism summary
+Pre-clip gradient norms are 1–3 orders of magnitude above 1.0 on every training batch — the unclipped optimizer is dominated by outlier batches from high-Re meshes and sharp LE pressure gradients. The cosine T_max=14 base already tames the late-epoch tail (max 432 vs pre-stack 1110), but the typical-step norm is unchanged (median 70 vs 56 pre-stack; RFF's 32 high-frequency features slightly amplify early-layer grads). Clipping removes per-batch variance without altering the systematic gradient direction; warmup provides stable slice-routing initialization before peak LR is applied. The gain concentrates on the harder OOD splits (re_rand −6.68%, cruise −6.10%, rc −2.43%), exactly the signature of variance-reduction — in-dist is flat (−0.06%).
+
+### Model config
+- `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2`
+- `lr=5e-4, weight_decay=1e-4, batch_size=4, surf_weight=10, p_channel_weight=3, surface-MAE loss, epochs=50`
+- **FiLM:** `cond_dim=1 (log_Re), mid_dim=64, hidden=128, zero-init`
+- **Cosine LR:** `T_max=14` with 5-epoch linear warmup (effective cosine T_max=9)
+- **RFF:** `fourier_n_freqs=16, fourier_sigma=1.0` on (x, z) coordinates
+- **`grad_clip=1.0, warmup_epochs=5`**
+- Peak VRAM: 90.82 GB / 95.0%, wall-clock: ~31.9 min, 14 epochs of 50
+
+### Reproduce command
+
+```bash
+cd target && python train.py --wandb_group grad-clip-warmup --wandb_name clip1.0-wu5-on-rff-base \
+    --grad_clip 1.0 --warmup_epochs 5
+```
+
+---
+
+## Previous best — PR #3262 (edward, merged 2026-05-16 01:27 UTC)
 
 **Random Fourier Features positional encoding (σ=1.0, n_freqs=16), stacked on top of #3358 cosine T_max=14 + #3263 FiLM(log_Re) + #3257 surf-MAE+p_weight=3.**
 
@@ -91,6 +136,7 @@ cd target && python train.py --wandb_group cosine-tmax --wandb_name cosine-tmax1
 
 | Date | PR | Hypothesis | val_avg | test_avg | Merge |
 |------|----|------------|--------:|--------:|:-----:|
+| 2026-05-16 | #3258 (fern) | Grad-clip 1.0 + 5-epoch warmup | **77.65** | **66.87** | ✓ R3#1 |
 | 2026-05-16 | #3262 (edward) | RFF σ=1.0, n_freqs=16 on (x,z) coords | **79.28** | **69.27** | ✓ R2#2 |
 | 2026-05-16 | #3358 (alphonse) | Cosine LR T_max=14 (matched to wall-clock cap) | **90.44** | **80.08** | ✓ R2#1 |
 | 2026-05-15 | #3263 (thorfinn) | FiLM(log_Re) conditioning on hidden state | 100.24 | 90.06 | ✓ R1#2 |
