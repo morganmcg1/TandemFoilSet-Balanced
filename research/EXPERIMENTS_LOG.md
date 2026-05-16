@@ -1,5 +1,52 @@
 # SENPAI Research Results
 
+## 2026-05-16 17:40 — Round-11 results: fern WIN; 6 closes; tanjiro rebase
+
+### Merged: PR #3854 (fern) — slice_num=16 + Huber δ=0.5 — **MASSIVE WIN**
+
+| Metric | bg8etivu | vs prior baseline #3924 (60.89/59.21) |
+|---|---|---|
+| val_avg/mae_surf_p | **57.6953** | **−5.25%** |
+| test_3split/mae_surf_p | **56.8613** | **−3.96%** |
+
+Per-split val all improve (-3.24% to -7.45%). Per-split test all improve (-2.22% to -6.24%). Biggest single-experiment win since SwiGLU. Two 2× slice_num reductions (64→32→16) both paid; further coarsening hypothesis open (slice=8?). NO SGDR in this run.
+
+Also from fern arm A: `j69705re` slice=32+δ=0.5 val=60.8438 / test=59.1007 — essentially ties old SGDR baseline (within noise). Confirms slice direction matters, slice=16 dominates slice=32.
+
+### Closed: PR #4017 (edward) — p_weight=3.0
+
+Two seeds: ok30dnd1 val=60.29 / test=60.34 (val win, test +1.91% reg), ixn7xqrc val=62.50 / test=61.00 (both regress). Mean val=61.40, mean test=60.67. Student's own decomposition showed ~30% of arm-1's val gain came from val_geom_camber_cruise — the split that test_3split excludes. Mechanism does not generalize.
+
+### Closed: PR #4013 (frieren) — SGDR T_0=8 + Huber δ=0.5 super-compound
+
+Run s0bme0bf val=62.6120 / test=61.0997 — +2.83%/+3.20% regression vs SGDR-only baseline. Student's val trajectory shows the model still descending steeply at the 15-epoch budget cut: δ=0.5 needs more low-lr time than the wall-clock allows, and SGDR's restart-bump (82.42→91.17 at ep9) eats into that time. The mechanisms conflict rather than compound.
+
+### Closed: PR #3986 (alphonse) — surf_weight=20 + δ=0.5
+
+Run 6t0hbzj1 val=61.93 / test=60.48. Surf_weight axis non-compounding on δ=0.5 stack — both 15 and 20 attempts failed.
+
+### Closed: PR #3987 (askeladd) — lr=1e-3 + δ=0.5
+
+Run eux4gkst val=74.14 — major regression. lr=1e-3 destabilizes the loss landscape under EMA + grad-clip; wall-clock too short to recover.
+
+### Closed: PR #3907 (thorfinn) — surf_weight=15 + δ=0.5 (rebase test)
+
+Two arms: 67xq4kxb val=69.70, k8ik3vms val=62.96. Prior surf_weight=15 win was on the δ=1.0 baseline; mechanism does not compound with δ=0.5.
+
+### Closed: PR #4035 (nezuko) — asinh_p_scale=2.0 + SGDR
+
+Run gcthnyez val=73.02, well above the 62.5 close threshold in the brief. Confirms over-compression starves the model of gradient signal on large pressure errors.
+
+### Sent back for rebase: PR #3877 (tanjiro) — temperature_init=0.1 super-compound
+
+Run uit6vj6s val=59.9942 / test=59.4763. Sub-60 val break, but only ties test vs old SGDR baseline (+0.45%). All 4 val splits improved -1.86% to -3.20% vs alphonse #3901 baseline. Mechanism is real but the run pre-dated the slice=16 merge. Rebased to test temp_init=0.1 on the new baseline (no SGDR, slice=16, δ=0.5).
+
+### Strategic takeaways
+
+The slice_num axis (coarsening) and δ=0.5 axis compound cleanly. The SGDR axis does NOT compound with δ=0.5 (frieren confirmed). The surf_weight axis (15, 20) does NOT compound with δ=0.5 (thorfinn + alphonse confirmed). The p_weight axis does NOT generalize (edward confirmed). Each closed axis narrows the search.
+
+Next round: explore further slice_num reduction (8, 12), revisit mechanisms that haven't been tested on the new baseline, and consider architectural changes (n_hidden, mlp_ratio, n_layers) given the new convergence dynamics at slice=16.
+
 ## 2026-05-15 16:28 — W&B surfacing on 5 stale-WIP PRs (#3173 #3186 #3190 #3196 #3211)
 
 A scheduled wakeup at 16:21 UTC flagged 5 PRs as `stale_wip`. Their branch HEADs all still pointed at the original assignment commit from 12:52 UTC — no code commits and no `SENPAI-RESULT` markers — yet each student had **multiple completed W&B training runs** in their hypothesis's `wandb_group`. Surfacing W&B as the source of truth revealed substantial work hidden from the PR review queue:

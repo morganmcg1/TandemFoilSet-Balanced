@@ -1,97 +1,114 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 15:30 UTC
+- **Last updated:** 2026-05-16 17:45 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
-- **Most recent direction from human researcher team:** None (no open issues at 15:30 UTC)
+- **Most recent direction from human researcher team:** None (no open issues at 17:45 UTC)
 
-## Current best baseline (after frieren #3924 merge)
+## Current best baseline (after fern #3854 merge — MASSIVE WIN)
 
 | Metric | Value | Source |
 |---|---|---|
-| `val_avg/mae_surf_p` | **60.8893** | PR #3924 frieren (SGDR T_0=8 on δ=1.0 stack) |
-| `test_3split/mae_surf_p` | **59.2081** | PR #3924 frieren |
+| `val_avg/mae_surf_p` | **57.6953** | PR #3854 fern (slice=16 + δ=0.5, run `bg8etivu`) |
+| `test_3split/mae_surf_p` | **56.8613** | PR #3854 fern |
 
-**Stack caveat**: frieren's run used `--huber_delta 1.0` (assignment predated alphonse's δ=0.5 merge). Reproduce command uses `--sgdr_t0 8 --huber_delta 1.0`. The SGDR + δ=0.5 super-compound is untested but expected to be even better — PR #4013 (frieren) now verifying.
+Per-split val (PR #3854):
+
+| Split | mae_surf_p | Δ vs #3924 baseline |
+|---|---|---|
+| val_single_in_dist | 65.990 | −4.95% |
+| val_geom_camber_rc | 71.815 | −3.24% |
+| val_geom_camber_cruise | 38.006 | −6.17% |
+| val_re_rand | 54.970 | −7.45% |
 
 Reproduce:
 ```bash
 cd target/ && python train.py \
-  --grad_clip 5.0 --huber_delta 1.0 --ema_decay 0.99 --asinh_p_scale 1.0 \
+  --grad_clip 5.0 --huber_delta 0.5 --ema_decay 0.99 --asinh_p_scale 1.0 \
   --use_swiglu --mlp_ratio 1.333 --n_head 2 --asinh_vel_scale 0.5 \
-  --sgdr_t0 8 \
+  --slice_num 16 \
   --agent <student>
 ```
 
-## Active PRs (8 WIP, 0 idle)
+**NO SGDR** in current baseline. Frieren #4013 confirmed SGDR+δ=0.5 super-compound conflicts.
 
-| PR | Student | Hypothesis | Status | Config vs 60.89 baseline | Notes |
-|----|---------|-----------|--------|---------------------------|-------|
-| #3854 | fern | slice_num=32 + δ=0.5 | WIP — training | `--slice_num 32 --huber_delta 0.5` | No SGDR; result will need rebase test |
-| #3877 | tanjiro | temperature_init=0.1 + δ=0.5 | WIP — training | `--temperature_init 0.1 --huber_delta 0.5` | No SGDR; result will need rebase test |
-| #3902 | nezuko | wd=1e-3 + SGDR + δ=0.5 | WIP — sent back 15:25 | Super-compound | NEW super-compound brief |
-| #3907 | thorfinn | surf_weight=15 + δ=0.5 | WIP — training | `--surf_weight 15 --huber_delta 0.5` | No SGDR; rebase test |
-| #3967 | edward | per-step LR warmup (500) | WIP — training | `--warmup_steps 500 --huber_delta 1.0` | No SGDR; comparable to plain cosine |
-| #3986 | alphonse | surf_weight=20 + δ=0.5 | WIP — training | `--surf_weight 20 --huber_delta 0.5` | No SGDR; rebase test |
-| #3987 | askeladd | lr=1e-3 + δ=0.5 | WIP — training | `--lr 1e-3 --huber_delta 0.5` | No SGDR; rebase test |
-| **#4013** | **frieren** | **SGDR + δ=0.5 super-compound** | **WIP — just assigned** | `--sgdr_t0 8 --huber_delta 0.5` | Confirms compound; expected sub-60 val |
+## Active PRs (2 WIP, 6 idle students)
 
-## Round-10 results (15:24 UTC)
+| PR | Student | Hypothesis | Status | Notes |
+|----|---------|-----------|--------|-------|
+| #4062 | fern | slice_num=8 (axis extension) | WIP | Highest confidence; direct extension of winning axis |
+| #3877 | tanjiro | temperature_init=0.1 on slice=16 baseline | WIP — draft rebase | Mechanism real (-1.86% to -3.20% per-split val on old baseline); needs re-test on new baseline |
 
-| PR | Student | Hypothesis | val | test_3split | vs prior baseline | Action |
-|----|---------|-----------|-----|-------------|-------------------|--------|
-| **#3924** | **frieren** | **SGDR T_0=8** | **60.8893** | **59.2081** | −1.17% / −2.76% vs #3901 | ✓ MERGED 15:24 — NEW BASELINE |
-| #3902 | nezuko | wd=1e-3 + δ=0.5 (rebase) | 61.1469 | 59.9845 | beat #3901 but superseded by #3924 | → Send back: super-compound w/ SGDR |
+**Idle students** (6 — awaiting research-agent ideas due back ~17:50 UTC):
+willowpai2i48h2-alphonse, willowpai2i48h2-askeladd, willowpai2i48h2-edward, willowpai2i48h2-frieren, willowpai2i48h2-nezuko, willowpai2i48h2-thorfinn
+
+## Round-11 results (17:35 UTC)
+
+| PR | Student | Hypothesis | val | test_3split | Action |
+|----|---------|-----------|-----|-------------|--------|
+| **#3854** | **fern** | **slice=16+δ=0.5** | **57.6953** | **56.8613** | ✓ **MERGED — NEW BASELINE** |
+| #3877 | tanjiro | temp_init=0.1+δ=0.5+SGDR | 59.9942 | 59.4763 | → Send back: rebase to slice=16 baseline |
+| #4017 | edward | p_weight=3.0+SGDR (2 seeds) | 60.29 / 62.50 | 60.34 / 61.00 | ✗ Closed — student verdict |
+| #3986 | alphonse | surf_weight=20+δ=0.5 | 61.93 | 60.48 | ✗ Closed — regression |
+| #4013 | frieren | SGDR+δ=0.5 super-compound | 62.61 | 61.10 | ✗ Closed — needs more low-lr time than budget |
+| #3907 | thorfinn | surf_weight=15+δ=0.5 | 62.96 / 69.70 | 69.86 | ✗ Closed — mechanism non-compounding with δ=0.5 |
+| #4035 | nezuko | asinh_p_scale=2.0 | 73.02 | — | ✗ Closed — over-compression (hit close threshold) |
+| #3987 | askeladd | lr=1e-3+δ=0.5 | 74.14 | — | ✗ Closed — destabilizes loss landscape |
 
 ## Key findings (cumulative)
 
-### Merged stack progress
-136.89 → 90.61 → 66.61 → 64.34 → 63.74 → 61.61 → **60.89** (−55.5% total from seed; sub-61 achieved)
+### Merged stack progression
+136.89 → 90.61 → 66.61 → 64.34 → 63.74 → 61.61 → 60.89 → **57.70** (−57.85% total from seed; **sub-58 achieved**)
 
 ### What works on the full stack
 - EMA decay=0.99, grad_clip=5.0
 - asinh(pressure) scale=1.0
 - SwiGLU gated MLP in TransolverBlocks only
-- n_head=2 wider per-head dim
+- n_head=2 wider per-head dim (dim_head=64)
 - vel-asinh scale=0.5 on Ux+Uy
-- **SGDR T_0=8 warm restarts: val=60.89, test=59.21 (NEW)** — reaches low-lr fine-tuning within budget
-- Huber δ=0.5 (independently won in #3901; untested w/ SGDR)
+- Huber δ=0.5 (tighter quadratic transition; merged via PR #3901 alphonse)
+- **slice_num=16 (coarser slicing): val=57.70, test=56.86 (NEW)** — ~50 nodes per slice; biggest single win since SwiGLU
 
-### Confirmed mechanisms, pending compound tests
-- **temperature_init=0.1** (tanjiro #3877): test=59.62 on δ=1.0 baseline; rebased to δ=0.5 — strong OOD signal, may need SGDR re-test
-- **surf_weight=15** (thorfinn #3907): −4.48% val on old baseline; rebased to δ=0.5 — may need SGDR re-test
-- **wd=1e-3** (nezuko #3902): val=61.15 on δ=0.5; sent back for super-compound w/ SGDR
-- **slice_num=32** (fern #3854): val=62.40 on δ=0.5 needed; rebased — may need SGDR re-test
+### Confirmed mechanisms with broad-split improvement (pending re-test on new baseline)
+- **temperature_init=0.1** (tanjiro #3877): −2.62% val vs alphonse baseline; rebased to slice=16 (in-flight)
 
 ### What does NOT work
-- n_layers=6, mlp_ratio>2, slice_num=128, n_head=8, DropPath, SwiGLU-in-all-MLPs, Mixup, vel-asinh scale<0.5, per-channel vel-asinh (test regression), LR warmup with per-epoch step (plumbing bug), SGDR T_0=5 (too short cycles)
+- SGDR (any T_0) with δ=0.5 (insufficient low-lr time at 15-epoch budget)
+- p_weight=3.0 per-channel pressure upweight (overfits val_cruise; regresses test)
+- surf_weight=15, 20 with δ=0.5 (axis non-compounding)
+- lr=1e-3 with δ=0.5 (destabilizes)
+- wd=1e-3 super-compound (over-regularizes)
+- asinh_p_scale=2.0 (over-compresses)
+- n_layers=6, mlp_ratio>2, slice_num=128, n_head=8, DropPath, Mixup, LR warmup, vel-asinh scale<0.5
 
 ## Strategic outlook
 
-**Target**: val < 60. Current: 60.89. Need −1.5% more for sub-60.
+**Target**: val < 56 (we just broke sub-58 with fern's slice=16). Current: 57.70. Need −2.9% more.
 
-High-confidence path:
-1. **frieren #4013 SGDR + δ=0.5 super-compound**: a clean compound test of the two latest mechanisms. δ=1.0→δ=0.5 swap on the prior baseline delivered −3.3% val. If preserved with SGDR: val ∈ [58.8, 60.3] → **strong sub-60 candidate**.
-2. **nezuko #3902 rebase to wd + SGDR + δ=0.5**: triple-compound. Orthogonal mechanisms (wd is regularization, SGDR is schedule, δ is loss shape). Each won independently — compound expected to break val<60.
-3. **tanjiro temperature_init=0.1 + SGDR + δ=0.5** (after current rebase completes): test=59.62 already on δ=1.0; with SGDR + δ=0.5 should compound.
+### High-confidence direct extension paths
+1. **slice_num=8** (assigned to fern #4062): direct extension of the winning axis; 64→32 gave −3.02%, 32→16 gave −5.16% (accelerating). Expected val ∈ [54.5, 58.0].
+2. **temperature_init=0.1 on slice=16** (in-flight tanjiro #3877): val=59.99 on old baseline; expect val=[55.5, 57.5] on new baseline.
 
-Speculative but promising:
-4. **Re-test surf_weight=15 on new baseline** (thorfinn): once SGDR + δ=0.5 confirmed
-5. **lr=1e-3 + SGDR** interaction (askeladd): may need different SGDR T_0 with higher base lr
-6. **edward per-step warmup on SGDR**: warmup before first SGDR cycle should be cleaner
-7. **slice_num=16** if 32 confirms on new baseline (fern)
+### Open mechanisms not yet tested on new baseline
+- **SGDR T_0=15 single-cycle + δ=0.5**: frieren's own suggestion; removes the destructive restart-bump that killed PR #4013. Single cycle covers whole budget.
+- **AdamW betas tuning (β1=0.95)**: different momentum may help slice=16 dynamics.
+- **EMA decay=0.995**: slower decay for sharper-minimum new baseline.
+- **Best-checkpoint averaging (SWA across last 3 epochs)**: untested averaging technique.
+- **Surface-only p_weight (edward's follow-up)**: decoupled from volume.
+- **MLP ratio ↑ at slice=16**: coarser slicing may have unlocked MLP capacity.
+- **n_hidden=192 at slice=16**: more channels per node.
 
-## Queued hypotheses (from researcher-agent 13:30 UTC)
+### Speculative directions
+- Mixed-δ schedule (δ=1.0 early, δ=0.5 late) — frieren's suggestion
+- Data augmentation (mesh rotation, Re jitter)
+- RMSNorm vs LayerNorm
+- Lookahead optimizer
 
-To assign once compound tests complete:
-- **H1 p_weight=3.0**: 3-line code change. Pressure-component loss weighting axis untested. Top pick.
-- **H2 asinh_p_scale=2.0**: zero code change; pressure compression sweep
-- **H3 Re_x boundary-layer feature**: feature engineering with physics-informed Re scaling
-- **H4 EMA decay ramp-up cosine schedule**: dynamic EMA decay
-- **H5 LLRD decay=0.7**: layer-wise learning rate decay
+## Queued hypotheses
+- **Research-agent ideas** (due ~17:50 UTC) — pending background completion
 
 ## Operational notes
 
-- **GitHub REST rate limit**: still constrained (shared user ID 20516801 exhausted multiple times in last 2h); use GraphQL for queries when possible
-- **data/scoring.py NaN bug**: cruise=NaN fleet-wide (affects test_avg; use test_3split everywhere)
-- **Per-run budget**: 30 min wall clock, ~15 epochs with n_head=2 at 124s/epoch — SGDR T_0=8 fits 1 full + 1 partial cycle exactly
-- **SGDR plumbing now in train.py**: `--sgdr_t0 N` enables CosineAnnealingWarmRestarts; if set, plain cosine schedule is replaced
+- **GitHub REST rate limit**: still constrained (shared user ID 20516801 — students periodically hit 403); use GraphQL when possible
+- **data/scoring.py NaN bug**: cruise=NaN fleet-wide; use test_3split everywhere
+- **Per-run budget**: 30 min wall clock, ~15-17 epochs at slice=16 (~107s/epoch — slightly faster than slice=64)
+- **slice=16 dynamics**: epoch_time ~107s vs slice=64's ~124s → 14% faster per epoch (more capacity for SGDR or longer scheduling)
