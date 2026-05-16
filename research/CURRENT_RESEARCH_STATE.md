@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 18:45 UTC
+- **Last updated:** 2026-05-16 19:30 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
 - **Most recent direction from human researcher team:** None (no open issues at 18:45 UTC)
 
@@ -40,14 +40,14 @@ cd target/ && python train.py \
 
 | PR | Student | Hypothesis | Submitted Against | Brief / Mechanism |
 |----|---------|-----------|-------------------|-------------------|
-| #4080 | fern | **slice_num=4** (saturation test) | NEW slice=8 baseline | Extends winning axis; brackets the slice optimum with thorfinn's #4066 |
-| #4086 | frieren | **huber_delta=0.25** (axis extension) | NEW slice=8 baseline | Extends winning δ axis (1.0→0.5 paid); compounds with slice=8 |
-| #4066 | thorfinn | slice_num=12 | slice=16 baseline | Conservative midpoint; with new #4080 brackets slice axis at {4,8,12,16} |
-| #4067 | alphonse | AdamW β2=0.95 | slice=16 baseline | Faster 2nd-moment EMA adaptation (RoBERTa intuition) |
-| #4074 | askeladd | n_hidden=192 (1.5× width) | slice=16 baseline | More channels per slice token to compensate for spatial coarsening |
-| #4075 | edward | RMSNorm vs LayerNorm | slice=16 baseline | Preserve surface/volume scale contrast (Llama-2 intuition) |
-| #4076 | nezuko | SWA tail averaging (last 5 EMA) | slice=16 baseline | Flatter-minimum generalization via cross-epoch checkpoint averaging |
-| #3877 | tanjiro | temperature_init=0.1 | slice=16 baseline | Mechanism real (-1.86% to -3.20%); needs re-test on slice=8 if wins |
+| #4100 | fern | **n_head=4** (dim_head=32) | NEW slice=8 baseline | Architecture: head-count gap between n_head=2 and n_head=8 |
+| #4101 | edward | **asinh_vel_scale=1.0** | NEW slice=8 baseline | Data: velocity-scale axis extension; symmetric with asinh_p_scale |
+| #4102 | tanjiro | **temperature_init=0.7** (diffuse) | NEW slice=8 baseline | Architecture: dead-slice hypothesis; sign-flip from closed #3877 |
+| #4086 | frieren | **huber_delta=0.25** | NEW slice=8 baseline | Loss: extends winning δ axis (1.0→0.5 paid); compounds with slice=8 |
+| #4066 | thorfinn | slice_num=12 | slice=16 baseline | Conservative slice axis bracket point |
+| #4067 | alphonse | AdamW β2=0.95 | slice=16 baseline | Optimizer: faster 2nd-moment EMA adaptation |
+| #4074 | askeladd | n_hidden=192 (1.5× width) | slice=16 baseline | Capacity: more channels per slice token |
+| #4076 | nezuko | SWA tail averaging (last 5 EMA) | slice=16 baseline | Ensemble: flatter-minimum via cross-epoch checkpoint averaging |
 
 ## Round-12 results (18:30 UTC)
 
@@ -97,6 +97,9 @@ Slice axis decelerating but alive: 64→32 (−3.02%), 32→16 (−5.16%), 16→
 ### What does NOT work
 - SGDR (any T_0 ≤ 15) in our 15-epoch budget — mathematically equivalent to baseline cosine (frieren #4065)
 - SGDR T_0=8 with δ=0.5 (frieren #4013 — restart bump destructive in 15-epoch budget)
+- slice_num=4 on slice=8 stack (fern #4080 — capacity cliff at 4 slice tokens)
+- RMSNorm replacing LayerNorm (edward #4075 — partial mechanism; in-dist val regresses)
+- temperature_init=0.1 at low slice_num (tanjiro #3877 — coupled with slice_num on softmax-sharpness axis; helpful only at slice_num ≥ 32)
 - p_weight=3.0 per-channel pressure upweight (overfits val_cruise; regresses test)
 - surf_weight=15, 20 with δ=0.5 (axis non-compounding)
 - lr=1e-3 with δ=0.5 (destabilizes)

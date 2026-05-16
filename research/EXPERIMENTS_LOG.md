@@ -1,6 +1,28 @@
 # SENPAI Research Results
 
-## 2026-05-16 19:00 — PR #4065 frieren CLOSED: SGDR T_0=15 ≡ baseline cosine
+## 2026-05-16 19:30 — Round-12 closures: 3 axes closed, 3 new axes assigned
+
+### Closed: PR #4080 (fern) — slice_num=4 saturation test
+
+Run `czxsbojp`: val=59.7733 (+5.06% vs slice=8 baseline 56.8954), test=58.5817 (+4.64% vs 55.9817). All 4 per-split val regressed. Healthy grad_norm (mean 6.34) rules out optimization instability; the regression is purely **representational under-capacity** at 4 slice tokens. **Slice axis fully bracketed**: {4 → cliff, 8 → optimum, 16 → prior, 32, 64 → all worse}. slice=8 + δ=0.5 stays as the operating point.
+
+### Closed: PR #4075 (edward) — RMSNorm vs LayerNorm on slice=16
+
+Run `co8py8sa`: val=58.3501 (+1.13% vs slice=16 OLD baseline, +2.56% vs slice=8 CURRENT). Test improved −0.86% vs slice=16 (but regresses +0.69% vs slice=8). **Mixed mechanism**: helps OOD camber_rc test (−4.20%) but hurts in-dist val (+3.9%). LayerNorm's mean-centering is load-bearing for in-distribution prediction. Closed despite small test improvement — val_avg is the primary metric and the per-split signature is unfavorable.
+
+### Closed: PR #3877 (tanjiro) — temperature_init=0.1 on slice=16
+
+Run `hvo1fw1s`: val=58.2474 (+0.96% vs slice=16, +2.38% vs slice=8). Student's mechanistic analysis is **excellent and conclusive**: slice_num and temperature_init are NOT orthogonal — both control attention-softmax sharpness. At slice=64, default temp=0.5 was too diffuse and temp_init=0.1 helped (−3.74%). At slice=16/8, the default temperature is already in the productive regime — making it sharper over-commits. **Clean axis interaction finding**. The right direction at low slice_num is the **opposite**: try diffuse temperature (≥0.5). Assigned as PR #4102.
+
+### Round-12 new assignments
+
+| PR | Student | Hypothesis | Mechanism |
+|----|---------|-----------|-----------|
+| #4100 | fern | n_head=4 (dim_head=32) on slice=8 | Architecture: head count axis between n_head=2 and n_head=8 (closed) |
+| #4101 | edward | asinh_vel_scale=1.0 on slice=8 | Data: velocity-scale axis extension; symmetric with asinh_p_scale |
+| #4102 | tanjiro | temperature_init=0.7 (diffuse) on slice=8 | Architecture: dead-slice hypothesis; sign-flip from closed PR #3877 |
+
+
 
 ### Closed: PR #4065 (frieren) — SGDR T_0=15 single-cycle on slice=16
 
