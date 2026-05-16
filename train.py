@@ -138,17 +138,24 @@ class PhysicsAttention(nn.Module):
 
 
 class FiLM(nn.Module):
-    """Feature-wise Linear Modulation conditioned on a scalar.
+    """Feature-wise Linear Modulation conditioned on a normalized cond vector.
 
     h <- (1 + delta_gamma) * h + beta, with the final MLP layer zero-initialized
     so the transform starts at identity. adaLN-Zero style — see Peebles & Xie
     (2022) and Zhu et al. (ICLR 2025).
+
+    ``cond_dim`` controls the dimensionality of the conditioning input:
+      1   = log(Re) only (baseline).
+      11  = all 11 global params (x[:, 0, 13:24]).
+      4   = key subset (log_Re, AoA_f1, NACA_camber_f1, AoA_f2).
+    Multi-parameter conditioning follows PDE-Transformer (ICML 2025).
     """
 
-    def __init__(self, n_hidden: int, hidden_mlp: int = 64):
+    def __init__(self, n_hidden: int, cond_dim: int = 1, hidden_mlp: int = 64):
         super().__init__()
+        self.cond_dim = cond_dim
         self.mlp = nn.Sequential(
-            nn.Linear(1, hidden_mlp),
+            nn.Linear(cond_dim, hidden_mlp),
             nn.SiLU(),
             nn.Linear(hidden_mlp, 2 * n_hidden),
         )
@@ -156,7 +163,7 @@ class FiLM(nn.Module):
         nn.init.zeros_(self.mlp[-1].bias)
 
     def forward(self, c):
-        """c: ``[B]`` or ``[B, 1]`` standardized scalar.
+        """c: ``[B]`` or ``[B, cond_dim]`` standardized condition vector.
 
         Returns (gamma, beta), each ``[B, 1, n_hidden]`` so they broadcast
         across the node dimension.
@@ -215,6 +222,7 @@ class Transolver(nn.Module):
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
                  use_film: bool = False, film_mode: str = "output_only",
+                 film_cond_dim: int = 1,
                  log_re_mean: float = 14.58, log_re_std: float = 0.76):
         super().__init__()
         self.ref = ref
@@ -223,6 +231,7 @@ class Transolver(nn.Module):
         self.output_dims = output_dims or []
         self.use_film = use_film
         self.film_mode = film_mode
+        self.film_cond_dim = film_cond_dim
         self.log_re_mean = log_re_mean
         self.log_re_std = log_re_std
 
@@ -247,7 +256,7 @@ class Transolver(nn.Module):
         self.apply(self._init_weights)
 
         if self.use_film:
-            self.film = FiLM(n_hidden)
+            self.film = FiLM(n_hidden, cond_dim=film_cond_dim)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -263,7 +272,12 @@ class Transolver(nn.Module):
         fx = self.preprocess(x) + self.placeholder[None, None, :]
 
         film_params = None
-        if self.use_film and "log_re_raw" in data:
+        if self.use_film and "film_cond" in data:
+            # Caller passes the already-normalized condition vector
+            # (slice of x_norm), so no internal normalization is needed.
+            film_params = self.film(data["film_cond"])
+        elif self.use_film and "log_re_raw" in data:
+            # Backward compat: caller passed raw log_re scalar.
             log_re = data["log_re_raw"]
             log_re_n = (log_re - self.log_re_mean) / self.log_re_std
             film_params = self.film(log_re_n)
@@ -278,6 +292,35 @@ class Transolver(nn.Module):
             else:
                 fx = block(fx)
         return {"preds": fx}
+
+
+# ---------------------------------------------------------------------------
+# FiLM condition extraction
+# ---------------------------------------------------------------------------
+
+# Per-sample global condition indices (in original 24-dim x feature space).
+# dim 13: log(Re); 14: AoA foil1; 15-17: NACA foil1 (M, P, T);
+# 18: AoA foil2; 19-21: NACA foil2; 22: gap; 23: stagger.
+_FILM_COND_INDICES = {
+    1:  [13],
+    4:  [13, 14, 15, 18],   # log_Re, AoA_f1, NACA_camber_f1, AoA_f2
+    11: list(range(13, 24)),
+}
+
+
+def extract_film_cond(x_norm, cond_dim: int):
+    """Slice the per-sample normalized condition vector from ``x_norm``.
+
+    Uses ``x_norm[:, 0, idx]`` since global params are constant across nodes
+    within a sample. ``x_norm`` is already standardized (zero-mean, unit-var
+    per feature dim) so no further normalization is needed.
+    """
+    idx = _FILM_COND_INDICES.get(cond_dim)
+    if idx is None:
+        raise ValueError(
+            f"Unsupported film_cond_dim={cond_dim}; expected one of {sorted(_FILM_COND_INDICES)}"
+        )
+    return x_norm[:, 0, idx]  # [B, cond_dim]
 
 
 # ---------------------------------------------------------------------------
@@ -342,10 +385,10 @@ def evaluate_split(model, loader, stats, surf_weight, device,
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            film_cond = extract_film_cond(x_norm, cfg.film_cond_dim)
             x_norm = _apply_fourier(x_norm, model)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            log_re_raw = x[:, 0, 13]  # raw log(Re) per sample, [B]
-            pred = model({"x": x_norm, "log_re_raw": log_re_raw})["preds"]
+            pred = model({"x": x_norm, "film_cond": film_cond})["preds"]
 
             # Diagnostic: model produced non-finite values in normalized space?
             nf_pred = (~torch.isfinite(pred)) & mask.unsqueeze(-1)
@@ -615,6 +658,9 @@ class Config:
     lion_beta2: float = 0.99
     use_film: bool = False   # enable FiLM conditioning on log(Re)
     film_mode: str = "output_only"  # "output_only" or "all_blocks"
+    film_cond_dim: int = 1   # 1 = log(Re) only (baseline); 4 = key subset
+                              # (log_Re, AoA_f1, NACA_camber_f1, AoA_f2);
+                              # 11 = all global params (x[:, 0, 13:24]).
     ema_decay: float = 0.0   # 0 disables EMA; e.g. 0.999 enables EMA-of-weights
     grad_clip: float = 0.0   # 0 disables; e.g. 1.0 clips global grad norm
     spec_norm_target: str = "none"  # "none" | "output" | "output+film"
@@ -744,6 +790,7 @@ model_config = dict(
     output_dims=[1, 1, 1],
     use_film=cfg.use_film,
     film_mode=cfg.film_mode,
+    film_cond_dim=cfg.film_cond_dim,
     log_re_mean=float(stats["x_mean"][13].item()),
     log_re_std=float(stats["x_std"][13].item()),
 )
@@ -841,10 +888,10 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
+        film_cond = extract_film_cond(x_norm, cfg.film_cond_dim)
         x_norm = _apply_fourier(x_norm, model)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        log_re_raw = x[:, 0, 13]  # raw log(Re) per sample, [B]
-        pred = model({"x": x_norm, "log_re_raw": log_re_raw})["preds"]
+        pred = model({"x": x_norm, "film_cond": film_cond})["preds"]
         # Two-pronged guard (advisor update on PR #3296):
         #   1. Replace inf/nan predictions with 0 (prevents inf gradients).
         #   2. Drop samples whose GT y is non-finite (one known bad sample
@@ -919,14 +966,20 @@ for epoch in range(MAX_EPOCHS):
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
 
-    # FiLM γ/β diagnostics across the val_re_rand split's Re range
+    # FiLM γ/β diagnostics across the val_re_rand split's Re range. For
+    # multi-param FiLM (film_cond_dim > 1), the probe varies log_re while
+    # holding the remaining condition dims at 0 (their normalized mean), so
+    # the diagnostic still measures log_re sensitivity.
     if cfg.use_film:
         diag_model = ema_model.module if ema_model is not None else model
         with torch.no_grad():
             re_lo, re_hi = 11.5, 15.4
             log_re_probe = torch.linspace(re_lo, re_hi, 32, device=device)
             log_re_n = (log_re_probe - diag_model.log_re_mean) / diag_model.log_re_std
-            gamma, beta = diag_model.film(log_re_n)  # [32, 1, n_hidden]
+            cond_dim = diag_model.film_cond_dim
+            cond_probe = torch.zeros(32, cond_dim, device=device)
+            cond_probe[:, 0] = log_re_n  # log_re is the first dim for all cond_dims
+            gamma, beta = diag_model.film(cond_probe)  # [32, 1, n_hidden]
             log_metrics["film/gamma_max_abs_delta"] = (gamma - 1.0).abs().max().item()
             log_metrics["film/gamma_std"] = gamma.std().item()
             log_metrics["film/beta_abs_max"] = beta.abs().max().item()
