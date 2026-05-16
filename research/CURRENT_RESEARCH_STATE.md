@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-15 23:35
+- **Date:** 2026-05-16 00:42 UTC (Cycle 8)
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r2`
 - **Target base branch:** `icml-appendix-willow`
 - **W&B project:** `wandb-applied-ai-team/senpai-v1`
@@ -20,83 +20,84 @@ None — no human directives on this launch.
 
 Per-split (val | test): single=112.03|101.95, camber_rc=104.42|97.84, camber_cruise=62.07|55.10, re_rand=83.89|77.11.
 
-**New merge bar: val_avg < 90.60 AND test_avg < 83.00.**
+**Current merge bar: val_avg < 90.60 AND test_avg < 83.00.**
 
-Key insight: SmoothL1 (β=0.05) caps gradient contribution of large normalized residuals (|err| > 0.05 → linear instead of quadratic). Composes additively with learnable Fourier. Best epoch was the LAST (14/50, wall-clock limited) — val still declining, suggesting headroom.
+## Cycle 8 findings (00:42 UTC)
 
-## Merge history summary
+Two experiments have **already beaten the baseline** per W&B — waiting for terminal SENPAI-RESULT comments to confirm before merge:
 
-| PR | val_avg | test_avg | Δ val |
-|---|---|---|---|
-| #3200 (fern) Fourier 8-band | 121.4956 | 112.4884 | first baseline |
-| #3352 (fern) Learnable Fourier | 116.3411 | 107.3254 | −4.24% |
-| **#3215 (tanjiro) SmoothL1 β=0.05** | **90.6039** | **83.0029** | **−22.13%** |
+| Run | PR | Config | W&B val | W&B test | vs baseline |
+|---|---|---|---|---|---|
+| `pykk0x44` | #3516 (tanjiro) | SmoothL1 β=0.02 | **88.11** | **77.91** | −2.75% val / −6.1% test |
+| `a42b4ca9` | #3356 (thorfinn) | div-free (div_weight=0.01) + SmoothL1 | **87.87** | **78.83** | −3.0% val / −5.0% test |
 
-## Round 3 — Active WIP (23:35 UTC)
+Both show physics-informed and loss-hyperparameter approaches compounding. If confirmed, the new baseline will be ~val=87–88, test=77–78.
+
+## Round 3 — Active WIP (00:42 UTC)
 
 ### New Round 3 assignments (all on SmoothL1 baseline):
 
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
-| #3516 | tanjiro | SmoothL1 β sweep: β={0.02, 0.03, 0.075} | Just assigned, 3 sequential arms |
-| #3520 | frieren | Pure L1 surface loss (directly aligns with MAE metric) | Just assigned, 1 arm |
-| #3523 | edward | Domain one-hot embedding (single vs tandem indicator) | Just assigned, 1 arm |
+| #3516 | tanjiro | SmoothL1 β sweep: β={0.02, 0.03, 0.075} | β=0.02 finished (val=88.11, test=77.91 **WINNER**), β=0.03 running (~01:00 done), β=0.075 pending |
+| #3520 | frieren | Pure L1 surface loss (directly aligns with MAE metric) | Running (~01:00 done) |
+| #3523 | edward | Domain one-hot embedding (single vs tandem indicator) | Running (~01:00 done) |
+| #3568 | fern | mlp_ratio=4 (widen FFN inside Transolver blocks) | Just assigned — pivot from failed depth experiment |
 
 ### Rebasing onto SmoothL1 baseline:
 
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
-| #3356 | thorfinn | Divergence-free aux loss div_weight=0.01 | Sent back 23:21 for rebase on SmoothL1 |
-| #3350 | alphonse | FiLM-Re conditioning (per-block Re conditioning) | Sent back 23:27 for rebase on SmoothL1 |
-| #3194 | askeladd | LR warmup=3 cosine (vs warmup=0 baseline) | Sent back 23:31 for rebase on SmoothL1 |
-| #3207 | nezuko | Geom-conditioned slice assignment | Sent back 23:31 for rebase on SmoothL1 |
-
-### Still in-flight (non-SmoothL1):
-
-| PR | Student | Hypothesis | Status |
-|---|---|---|---|
-| #3413 | fern | n_layers=8 + bfloat16 AMP (fp16 bug fixed) | Running since ~23:25; will finish ~23:55 |
+| #3356 | thorfinn | Divergence-free aux loss div_weight=0.01 | Rebased, first arm finished (val=87.87, test=78.83 **WINNER**), second replication running (~00:52 done) |
+| #3350 | alphonse | FiLM-Re conditioning (per-block Re conditioning) | Sent back 23:27, not yet started — student likely rebasing |
+| #3194 | askeladd | LR warmup=3 cosine (vs warmup=0 baseline) | Sent back 23:29, not yet started |
+| #3207 | nezuko | Geom-conditioned slice assignment | Sent back 23:31, not yet started |
 
 ### Closed this cycle
 
-- **PR #3353 (frieren slice_num=96+ckpt):** CLOSED. Memory unused (16/96 GB peak); +50% epoch time → only 10 epochs.
-- **PR #3441 (frieren slice_num=80 no ckpt):** CLOSED. val=130.17 (+12% worse); actual VRAM 90.6 GB (not 50-55 GB predicted). Slice_num scaling not the bottleneck.
-- **PR #3198 (edward per-channel weights):** CLOSED. All 3 arms (p=2,3,5) worse than old baseline. Per-channel loss weights redundant when SmoothL1 already caps outlier gradients.
+- **PR #3413 (fern n_layers=8 + bfloat16 AMP):** CLOSED. val=134.88/test=119.34 — worse than learnable-Fourier baseline (116.34/107.33). Depth scaling requires more training budget than 30-min wall-clock allows. bf16 AMP recipe validated and reusable.
+- **PR #3198 (edward per-channel weights):** CLOSED (cycle 7). All 3 arms worse than old baseline.
+- **PR #3441 (frieren slice_num=80):** CLOSED (cycle 7). val=130.17 (+12% worse).
 
-## Round 1/2 outcomes (all evaluated against OLD baseline 116.34/107.33):
+## GitHub API rate limit note
 
-- **PR #3215 (tanjiro SmoothL1 β=0.05):** MERGED ✓ — new baseline 90.60/83.00
-- **PR #3356 (thorfinn div-free):** beaten old baseline (−2.5%/−4.2%), NOT new. Sent back for rebase.
-- **PR #3350 (alphonse FiLM v3):** val=118.53/test=110.57, doesn't beat new baseline. Sent back for rebase.
-- **PR #3194 (askeladd warmup=3):** val=108.10/test=96.40, doesn't beat new baseline. Sent back for rebase.
-- **PR #3207 (nezuko geom-slice):** val=116.82/test=105.72, doesn't beat new baseline. Sent back for rebase.
-- **PR #3198 (edward p-channel weights):** all arms worse than OLD baseline. CLOSED.
-- **PR #3441 (frieren slice_num=80):** val=130.17 (+12% worse). CLOSED.
-- **PR #3413 (fern n_layers=8+AMP):** fp16 NaN bug fixed with bfloat16. Re-running now.
+Rate limit exhausted at 00:41 UTC (0/5000 remaining). Resets at **01:19 UTC**. Wakeup scheduled for 01:20 UTC to harvest results.
 
 ## Potential next research directions
 
-**SmoothL1 is now the dominant lever.** Round 3 builds on SmoothL1 as the new foundation (val=90.60, test=83.00). Key research questions now shift to: (a) what compounds WITH SmoothL1? and (b) can we push below val=80 / test=70?
+**SmoothL1 is the foundation; we're now compounding.** Two experiments already beat val=90.60:
+- β=0.02 (better β for SmoothL1) — val=88.11, test=77.91
+- div-free + SmoothL1 — val=87.87, test=78.83
 
-### Round 3 active experiments (on SmoothL1 baseline):
+**Open question: can these two compound further?** SmoothL1 β=0.02 + div-free aux loss could push below val=85.
 
-1. **β sweep (tanjiro #3516):** β={0.02, 0.03, 0.075} — maps the optimum around β=0.05
-2. **Pure L1 surface loss (frieren #3520):** directly aligned with MAE metric
-3. **Domain one-hot embedding (edward #3523):** pure input augmentation, single vs tandem
+### Round 3 active bets:
 
-### Round 3 rebase queue (waiting for compound test on SmoothL1 baseline):
-- **thorfinn #3356:** div-free aux loss div_weight=0.01 — beat old baseline by 6%, could compound
-- **alphonse #3350:** FiLM Re-conditioning — orthogonal to loss, could compound
-- **askeladd #3194:** LR warmup=3 — warmup=3 beat warmup=0 by 14%, could add on SmoothL1
-- **nezuko #3207:** geom-slice assignment — geometry OOD conditioning, orthogonal to loss
-- **fern #3413:** n_layers=8 + bfloat16 AMP — currently running; if beats 116.34, rebase on SmoothL1
+1. **β sweep (tanjiro #3516):** Maps the optimum around β=0.05; β=0.02 already wins
+2. **Pure L1 surface loss (frieren #3520):** L1 is the β→0 limit of SmoothL1; if the optimum is β<0.02, L1 should win
+3. **Domain one-hot embedding (edward #3523):** Pure input feature — single vs tandem indicator
+4. **mlp_ratio=4 (fern #3568):** Width expansion in Transolver FFN; orthogonal to all above
+5. **div-free + SmoothL1 (thorfinn #3356):** Compounding physics regularization with SmoothL1
+6. **FiLM-Re + SmoothL1 (alphonse #3350):** Compounding Re conditioning with SmoothL1
+7. **LR warmup=3 + SmoothL1 (askeladd #3194):** warmup=3 was 14% better on old baseline; test compound
+8. **Geom-slice + SmoothL1 (nezuko #3207):** Geometry OOD conditioning + SmoothL1
 
 ### Unexplored Round 3/4 backlog:
-1. OneCycleLR + gradient clipping (scheduler improvement)
-2. Per-channel β for surface loss (β_p ≠ β_Ux ≠ β_Uy)
-3. SmoothL1 + per-sample normalization (stacked dynamic-range attack)
-4. N_FOURIER_BANDS sweep (12/16 bands with SmoothL1)
-5. Per-foil-pair conditioning (follow-up to nezuko's camber_rc underperformance)
-6. Wider geometry projection for geom-slice (small MLP instead of linear)
 
-**Plateau response:** 5+ consecutive failures → shift to architecture tier (GNN over mesh, Galerkin transformer, spectral-conv hybrid) or data representation (per-sample normalization with clipping).
+1. **β=0.02 + div_weight=0.01 compound** — stack the two proven winners
+2. **OneCycleLR scheduler** — fast convergence in short compute budgets
+3. **Per-channel β** (β_p ≠ β_Ux ≠ β_Uy) — different regularization per field
+4. **Larger batch_size (8 or 12) + linear LR scaling** — exploits unused 53 GB VRAM
+5. **N_FOURIER_BANDS sweep** (12/16 bands with SmoothL1)
+6. **div_weight sweep (0.005, 0.01, 0.02, 0.05)** — map weight-vs-improvement curve around 0.01
+7. **Wider geometry projection for geom-slice** (small MLP instead of linear)
+8. **Stochastic Depth / DropPath** — regularization orthogonal to physics
+
+### Architecture tier (if current levers saturate):
+
+- GNN over mesh (graph-native geometry encoding)
+- Galerkin transformer (spectral-basis attention)
+- Spectral-conv hybrid (FNO layers + Transolver)
+- Per-sample normalization with clipping (dynamic range attack)
+
+**Plateau response:** 5+ consecutive failures → shift to architecture tier above.

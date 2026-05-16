@@ -16,6 +16,27 @@ This file logs each reviewed PR. Newest entries at the top.
 
 ## Entries
 
+## 2026-05-16 00:26 — PR #3413: n_layers=8 + bfloat16 AMP (fern) — CLOSED
+- student: willowpai2i24h2-fern
+- branch: `willowpai2i24h2-fern/deeper-network-n8-amp`
+- hypothesis: deeper Transolver (n_layers=8 vs baseline 5) improves representational capacity; bfloat16 AMP reduces memory to fit within 96 GB VRAM
+- W&B runs: `4jcav53b` (fp16, NaN epoch 6), n8-amp-continuation (fp16, NaN epoch 7), `stp92y44` (bf16, 12 epochs, terminal)
+
+| Metric | This run (bf16, best epoch 11) | Baseline (PR #3352, Fourier) | Δ | vs SmoothL1 baseline (90.60/83.00) |
+|---|---|---|---|---|
+| `val_avg/mae_surf_p` | 134.88 | 116.34 | **+15.9% worse** | +48.9% worse |
+| `test_avg/mae_surf_p` | 119.34 | 107.33 | **+11.2% worse** | +43.8% worse |
+| Best val epoch | 11 | 12 | — | — |
+| Epochs completed | 12 (timeout) | 12 | same | — |
+| epoch_wall_sec | ~156 s | ~143 s | +9% slower | — |
+| Peak VRAM | ~90 GB | ~33 GB | 2.7× more | — |
+
+Per-split (val | test): single=169.80|137.40, camber_rc=143.86|129.14, camber_cruise=101.49|89.66, re_rand=124.38|121.14. All four splits regress 10-18% vs Fourier baseline.
+
+- analysis: Architecture depth scaling fails at fixed 30-min budget. The 1.83M-param (n=8) model vs 1.03M-param (n=5) baseline has ~78% more parameters but the same 12-epoch training budget. The model is clearly undertrained: val_avg shot from 134.88 (epoch 11) to 154.82 (epoch 12) — still on the steep part of the learning curve when wall-clock cuts in. The 9% per-epoch slowdown compounds the under-training problem. fp16 attempt NaN'd (gradient overflow on Fourier freq params without GradScaler); bf16 fixed this cleanly (native fp32 dynamic range on Blackwell GPU). The bf16 recipe is validated and reusable, but the depth hypothesis is falsified at this budget.
+- decision: **closed**. Regression on all splits vs OLD Fourier baseline. Depth scaling is not the bottleneck at 30-min compute.
+- next steps: pivot to width (mlp_ratio) instead of depth. fern reassigned to PR #3568: mlp_ratio=4 single-arm test.
+
 ## 2026-05-15 22:41 — PR #3441: slice_num=80 without gradient checkpointing (frieren) — CLOSED
 - student: willowpai2i24h2-frieren
 - branch: `willowpai2i24h2-frieren/slice-num-80-no-checkpoint`
