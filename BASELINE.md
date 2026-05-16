@@ -1,6 +1,42 @@
 # Baseline — icml-appendix-willow-pai2i-48h-r3
 
-## Current best (as of 2026-05-16 05:57) — PR #3591: EMA decay=0.99
+## Current best (as of 2026-05-16 10:05) — PR #3316: Huber beta=0.5
+
+Seven winners merged: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + SOAP optimizer (PR #3283, −31.7%) + SOAP precond_freq=5 (PR #3495, −1.78%) + EMA model weights decay=0.999 (PR #3430, −18.8%) + EMA decay=0.99 (PR #3591, −3.85%) + **Huber beta=0.5** (PR #3316, fern, **−6.05% vs previous canonical**).
+
+**Primary ranking metric:**
+- `val_avg/mae_surf_p` = **54.494** (run `9acc7fff`, fern variant-delta0.5, best epoch 14)
+
+**Test (paper-facing):**
+- `test_avg/mae_surf_p_excl_cruise` (3-split mean) = **52.837** (−6.83% vs previous 56.713)
+  - `test_single_in_dist/mae_surf_p` = 60.705
+  - `test_geom_camber_rc/mae_surf_p` = 55.273
+  - `test_re_rand/mae_surf_p` = 42.534
+  - `test_geom_camber_cruise/mae_surf_p` = NaN (pre-existing bug)
+
+**Config (post-merge):**
+- Transolver: n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, dropout=0
+- **SOAP optimizer** (precondition_frequency=5) lr=1e-3, warmup_epochs=3 (LinearLR) → CosineAnnealingLR, weight_decay=1e-4, batch_size=4, surf_weight=10.0
+- 50 epochs, **Huber loss (SmoothL1 beta=0.5)** `vol_loss + 10*surf_loss`
+- **EMA of model weights** (ema_decay=0.99, updated each training step, used for all validation/test evaluation)
+- Wall-clock: ~32.3 min / arm (hit 30-min cap; best epoch 14)
+- `param count = 0.66M`
+
+**Reproduce:**
+```bash
+cd target/ && python train.py \
+  --optimizer soap \
+  --lr 1e-3 --warmup_epochs 3 \
+  --huber_beta 0.5 \
+  --surf_weight 10.0 --seed 42 \
+  --ema_decay 0.99 \
+  --wandb_group huber-delta-sweep-ema-soap \
+  --wandb_run_name variant-delta0.5
+```
+
+---
+
+## Previous best (as of 2026-05-16 05:57) — PR #3591: EMA decay=0.99
 
 Six winners merged: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + SOAP optimizer (PR #3283, −31.7%) + SOAP precond_freq=5 (PR #3495, −1.78%) + EMA model weights decay=0.999 (PR #3430, −18.8%) + **EMA decay=0.99** (PR #3591, nezuko, **−3.85% vs previous canonical**).
 
