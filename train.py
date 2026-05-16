@@ -208,7 +208,8 @@ class Transolver(nn.Module):
                  film_cond: bool = False, film_cond_dim: int = 11,
                  film_cond_slice: tuple[int, int] = (13, 24),
                  film_mlp_hidden: int = 128,
-                 two_shot_film: bool = False):
+                 two_shot_film: bool = False,
+                 three_shot_film: bool = False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -226,6 +227,7 @@ class Transolver(nn.Module):
         self.space_dim = space_dim
         self.n_layers = n_layers
         self.two_shot_film = two_shot_film
+        self.three_shot_film = three_shot_film
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
@@ -240,9 +242,10 @@ class Transolver(nn.Module):
         self.film_cond = film_cond
         self.film_cond_slice = film_cond_slice
         if film_cond:
+            film_out_layers = (n_layers + 1) if three_shot_film else n_layers
             self.film = FiLMConditioner(
                 cond_dim=film_cond_dim, hidden_dim=n_hidden,
-                n_layers=n_layers, mlp_hidden=film_mlp_hidden,
+                n_layers=film_out_layers, mlp_hidden=film_mlp_hidden,
             )
 
         self.apply(self._init_weights)
@@ -267,9 +270,17 @@ class Transolver(nn.Module):
             cond = x[:, 0, s0:s1]
             scales, shifts = self.film(cond)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
+        if self.film_cond and self.three_shot_film:
+            # Slot 0: preprocess output FiLM; slots 1..n_layers: per-block.
+            fx = fx * scales[:, 0].unsqueeze(1) + shifts[:, 0].unsqueeze(1)
+            block_scales = scales[:, 1:]
+            block_shifts = shifts[:, 1:]
+        elif self.film_cond:
+            block_scales = scales
+            block_shifts = shifts
         for i, block in enumerate(self.blocks):
             if self.film_cond:
-                fx = block(fx, scale=scales[:, i], shift=shifts[:, i])
+                fx = block(fx, scale=block_scales[:, i], shift=block_shifts[:, i])
             else:
                 fx = block(fx)
         return {"preds": fx}
@@ -486,6 +497,7 @@ class Config:
     film_cond: bool = False  # enable per-block FiLM conditioning on x[:,0,13:24]
     film_mlp_hidden: int = 128
     two_shot_film: bool = False  # apply FiLM modulation at both attn and mlp sites per block
+    three_shot_film: bool = False  # apply FiLM at preprocess output + attn + MLP per block
 
 
 cfg = sp.parse(Config)
@@ -530,6 +542,7 @@ model_config = dict(
     film_cond_slice=(13, 24),
     film_mlp_hidden=cfg.film_mlp_hidden,
     two_shot_film=cfg.two_shot_film,
+    three_shot_film=cfg.three_shot_film,
 )
 
 model = Transolver(**model_config).to(device)
