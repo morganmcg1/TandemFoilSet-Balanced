@@ -1,25 +1,26 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-16 15:30
+- **Date**: 2026-05-16 16:00
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
-- **Round**: 5 active — GEGLU architecture breakthrough; architectural lever exploration phase
+- **Round**: 5 active — GEGLU + n_layers=4 baseline (val=57.5750); slice/regularization phase
 - **Most recent human research directive**: None received
 
 ## Current Best
 
-**PR #3834 (H48: GEGLU gated FFN, askeladd) — val_avg/mae_surf_p = 58.6268** (MERGED)
+**PR #3968 (H60: GEGLU + n_layers=4, thorfinn) — val_avg/mae_surf_p = 57.5750** (MERGED 2026-05-16)
 
-Test 3-split avg (excl. cruise NaN bug): **56.6976** — largest OOD gains in the run.
+Test 3-split avg (excl. cruise NaN bug): **56.4610**
 
 | Reference | val_avg/mae_surf_p | Status |
 |-----------|--------------------|--------|
-| **H48 GEGLU (lr=1e-3 + n_head=2 + wd=5e-5 + clip=1.0 + ffn_act=geglu)** | **58.6268** | **CURRENT BEST (PR #3834)** |
-| H48 SwiGLU (same stack + swiglu) | 61.4410 | Merged |
-| H49 Lion Arm A (optimizer=lion + lr=1e-4 + wd=1e-3, H37b base) | 60.3008 | Closed PR #3859 |
+| **H60 Arm B (n_layers=4 at GEGLU base)** | **57.5750** | **CURRENT BEST (PR #3968)** |
+| H48 GEGLU (n_layers=5) | 58.6268 | Overridden by #3968 |
+| H48 SwiGLU (same stack + swiglu) | 61.4410 | Merged historical |
+| H49 Lion Arm A (H37b base) | 60.3008 | Closed PR #3859 |
 | H39 Arm C (n_head=2 + lr=2e-3 + wd=5e-5 + clip=1.0) | 63.4385 | Merged PR #3683 (documentation) |
 | H37b (n_head=2 + lr=1e-3 + clip=1.0, default wd) | 66.1060 | Overridden |
 
-**Δ H48 GEGLU vs H37b: −7.48 pts val, −7.75 pts test.** Largest single-PR gain since the T_max mismatch fix.
+**Δ H60 vs H48: −1.05 pts val, −0.24 pts test.** Wins on all 3 OOD splits (rc, cruise, re_rand). Cumulative R5 gain: −8.53 pts val vs H37b.
 
 ## Key Confirmed Insights
 
@@ -47,14 +48,16 @@ Test 3-split avg (excl. cruise NaN bug): **56.6976** — largest OOD gains in th
 |----|---------|------------|----------|---------|
 | **#3965** | edward | **H58: Lion + GEGLU** (mega-stack) | **CRITICAL** | ~52-55 |
 | **#3966** | fern | **H59: RMSNorm in GEGLU Transolver** | HIGH | ~57-58 |
-| **#3968** | thorfinn | **H60: GEGLU + n_layers (4 vs 6)** | HIGH | ~57-58 |
 | **#3988** | alphonse | H61: GEGLU + LR down (7e-4, 5e-4) | HIGH | ~57.5-58.5 |
 | **#3990** | askeladd | H62: GEGLU + mlp_ratio (3, 4) | HIGH | ~57-58 |
 | **#3991** | frieren | H63: DropPath (0.05, 0.10) | MEDIUM | ~57-58 |
 | **#3992** | nezuko | H64: Huber δ_p retune (0.1, 0.5) | MEDIUM | ~57.5-58.5 |
 | **#3997** | tanjiro | H65: EMA weight averaging (0.999, 0.9999) | MEDIUM | ~57.5-58.5 |
+| **#4011** | thorfinn | **H66: slice_num sweep (96, 128) at n_layers=4** | HIGH | ~56.5-57.5 |
 
 All 8 students active. Zero idle.
+
+**H60 (n_layers=4) merged as new baseline (57.5750).** All other in-flight experiments ran on n_layers=5 — their results are still interpretable but winning levers will need re-stacking on n_layers=4 in subsequent rounds.
 
 **H55 (Mixup) closed:** Both arms regressed +15.5 / +24.7 pts. PDE nonlinearity + mesh-identity feature corruption make raw-input Mixup the wrong inductive bias for CFD surrogates. Mixup lever exhausted for this dataset.
 
@@ -69,7 +72,8 @@ All 8 students active. Zero idle.
 | Schedule (cosine) | ✅ Exhausted | T_max=15 | H43/H41C/H47/H50 all failed |
 | n_head | ✅ Locked at 2 | H37b/H46 | U-shape confirmed |
 | n_hidden | ✅ Locked at 128 | H33 | Width fails |
-| n_layers | 🔬 H60 testing | 5 current | Pre-GEGLU n_layers=3 failed |
+| n_layers | ✅ Locked at 4 (H60) | 4 (new baseline) | GEGLU's per-block capacity favors shallower; H42 finding doesn't transfer |
+| slice_num | 🔬 H66 testing | 64 current | Wider slice tokens for finer spatial selectivity (paired with n_layers=4 budget) |
 | FFN activation | ✅ GEGLU wins | H48: 58.63 | GEGLU > SwiGLU > vanilla |
 | mlp_ratio | 🔬 H62 testing | 2 current | Never swept; Llama lit suggests bigger |
 | Huber δ_p | 🔬 H64 testing | 0.25 (H25) | Tuned at val=83.81; model much better now |
@@ -91,7 +95,8 @@ All 8 students active. Zero idle.
 6. **Does DropPath help OOD?** H63 frieren (#3991). Strong mechanistic motivation for generalization across geom/Re distributions.
 7. **Does Huber δ_p need re-tuning?** H64 nezuko (#3992). H25 optimized at val=83.81; error distribution is radically different at val=58.63.
 8. **Does EMA weight averaging help OOD?** H65 tanjiro (#3997). Polyak averaging finds flatter minima — should help most where the model is least confident (OOD splits).
-9. **What's next below 55?**:
+9. **Does wider slice token representation help at the n_layers=4 budget?** H66 thorfinn (#4011). H10's R1-era result is stale; retesting at GEGLU/n_layers=4 with current capacity.
+10. **What's next below 55?**:
    - GEGLU + Lion + optimal LR (if H58 + H61 both win)
    - GEGLU + RMSNorm + wider mlp (if H59 + H62 win)
    - GEGLU + deeper network + Lion (if H60 + H58 win)
@@ -108,9 +113,10 @@ All 8 students active. Zero idle.
 | 68.19 | 65.44 | H38: wd=5e-5 |
 | 66.11 | 64.45 | H37b: n_head=2 + lr=1e-3 |
 | 63.44 | 61.39 | H39 Arm C: + lr=2e-3 (merged #3683, documentation) |
-| **58.63** | **56.70** | **H48 GEGLU: + ffn_act=geglu** |
+| 58.63 | 56.70 | H48 GEGLU: + ffn_act=geglu |
+| **57.58** | **56.46** | **H60: + n_layers=4** |
 
-Total gain: **−56.0 pts val** (48.8% reduction from 114.63 to 58.63).
+Total gain: **−57.0 pts val** (49.8% reduction from 114.63 to 57.58).
 
 ## Known Issues
 

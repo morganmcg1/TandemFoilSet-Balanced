@@ -1483,3 +1483,44 @@ The student's dual-loss implementation (mathematically equivalent to mixed-targe
 | **#3997** | tanjiro | **H65: EMA weight averaging (0.999, 0.9999)** | ~57.5-58.5 |
 
 **H65 (EMA):** Maintain exponential moving average of model weights during training; evaluate using EMA weights. The most-cited "free improvement" in modern deep learning (Polyak 1991, Izmailov et al. 2018 SWA). Finds flatter loss-landscape regions which generalize better — especially helpful for OOD splits. H2 (edward, R1) tested EMA at the original baseline (val=114.6), result wasn't transformative because baseline was too noisy. Worth revisiting at the tighter GEGLU baseline. Arms: ema_decay=0.999 (standard) and 0.9999 (slow, may undertrain in 15-epoch budget).
+
+---
+
+## 2026-05-16 16:00 — PR #3968: H60 GEGLU + n_layers sweep (thorfinn) — **MERGED, NEW BASELINE**
+
+- Branch: `charliepai2i48h3-thorfinn/h60-geglu-nlayers`
+- Hypothesis: Revisit depth in GEGLU context. Pre-GEGLU H42 found n_layers=3+n_head=2 destructively stacked; gated FFN's extra per-block capacity may change the optimum.
+
+| Metric | H48 baseline (n=5) | Arm A (n=6) | **Arm B (n=4)** | Δ Arm B |
+|--------|--------------------|-------------|------------------|---------|
+| **val_avg/mae_surf_p** | **58.6268** | 67.0902 | **57.5750** | **−1.05** |
+| val_single_in_dist | 61.6193 | 74.0977 | 63.3430 | +1.72 |
+| val_geom_camber_rc | 73.8983 | 80.2999 | 72.1854 | −1.71 |
+| val_geom_camber_cruise | 40.4338 | 46.5019 | 37.7532 | −2.68 |
+| val_re_rand | 58.5556 | 67.4611 | 57.0183 | −1.54 |
+| **test_avg (3-split)** | **56.6976** | 65.2680 | **56.4610** | **−0.24** |
+| Epochs completed | — | **11/50** (wall) | 16/50 (wall) | — |
+| Mean s/epoch | ~130s | 166s | 113s | — |
+| n_params | 891k | 1.26M | 856k | — |
+
+**Analysis:** Arm B (n_layers=4) cleanly beats H48 baseline on all OOD splits (rc, cruise, re_rand) with a small in-distribution regression. Net win: −1.05 val_avg, −0.24 test 3-split. **The pre-GEGLU H42 finding that "deeper + n_head=2 hurts" does NOT transfer to the GEGLU regime** — going *shallower* (4 layers) is the win at this wall budget. Mechanism: GEGLU's gated FFN (gate+up+down vs vanilla expand+contract) adds per-block representational capacity, so fewer-but-fatter-effective layers fit the regression with less wall-clock cost.
+
+**Arm A nuance:** n_layers=6 hit wall at epoch 11/50 with val=67.09. At the *same epoch index* (11), Arm A is ahead of Arm B (67.09 vs 72.04). The "Arm A worse" result is primarily a wall-budget artefact — to test depth=6 fairly, would need ≥45 min wall.
+
+**Bug-fix included:** Student exposed `--n_layers` as a CLI flag (Config field + one-line wire-through to model_config) — `n_layers=5` was previously hardcoded.
+
+**Compute benefit:** n_layers=4 frees ~13% s/epoch, opening budget for other levers (slice_num widening — see H66).
+
+**Status: MERGED — NEW BASELINE val=57.5750, test=56.4610. Cumulative gain from R5 start: −8.53 pts val (66.11 → 57.58).**
+
+**Implication for in-flight experiments (H58/H59/H61/H62/H63/H64/H65):** All in-flight hypotheses ran on n_layers=5. Their results remain interpretable but need to be evaluated against both the old baseline (58.63) and the new one (57.58). Winning levers should be re-stacked on n_layers=4 in subsequent rounds.
+
+---
+
+## 2026-05-16 16:00 — R5 cycle 12 new assignment (1 idle student)
+
+| PR | Student | Hypothesis | Predicted val_avg |
+|----|---------|------------|-------------------|
+| **#4011** | thorfinn | **H66: slice_num sweep (96, 128) at n_layers=4 GEGLU** | ~56.5-57.5 (Arm A) |
+
+**H66 (slice_num):** The H60 win opens compute headroom (~13% per epoch). Widen the slice-token representation that Transolver's PhysicsAttention uses to compress mesh nodes. slice_num=64 is the original Transolver default; the model has improved 57+ pts since H10 tested 96/128, so the bottleneck/capacity tradeoff is fundamentally different now. Arms: slice_num=96 (50% more) and 128 (2x). Tests whether finer spatial selectivity helps the geometry-OOD splits where local mesh structure matters most.
