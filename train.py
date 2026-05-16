@@ -218,7 +218,7 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, surf_mse_weight, surf_l1_weight, device) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -226,6 +226,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     ``score.py`` (float64, non-finite samples skipped).
     """
     vol_loss_sum = surf_loss_sum = 0.0
+    surf_mse_sum = surf_l1_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
@@ -241,17 +242,26 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            sq_err = (pred - y_norm) ** 2
+            err = pred - y_norm
+            sq_err = err ** 2
+            abs_err = err.abs()
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
                 (sq_err * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
-            surf_loss_sum += (
+            surf_mse_batch = (
                 (sq_err * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
+            surf_l1_batch = (
+                (abs_err * surf_mask.unsqueeze(-1)).sum()
+                / surf_mask.sum().clamp(min=1)
+            ).item()
+            surf_mse_sum += surf_mse_batch
+            surf_l1_sum += surf_l1_batch
+            surf_loss_sum += surf_mse_weight * surf_mse_batch + surf_l1_weight * surf_l1_batch
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
@@ -261,7 +271,10 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
+    surf_loss_mse = surf_mse_sum / max(n_batches, 1)
+    surf_loss_l1 = surf_l1_sum / max(n_batches, 1)
     out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
+           "surf_loss_mse": surf_loss_mse, "surf_loss_l1": surf_loss_l1,
            "loss": vol_loss + surf_weight * surf_loss}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
     return out
@@ -312,6 +325,8 @@ def write_experiment_summary(
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
+        "surf_mse_weight": cfg.surf_mse_weight,
+        "surf_l1_weight": cfg.surf_l1_weight,
         "epochs_configured": cfg.epochs,
     }
 
@@ -353,6 +368,8 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 25.0
+    surf_mse_weight: float = 0.7  # MSE component of mixed surf_loss
+    surf_l1_weight: float = 0.3   # L1 component of mixed surf_loss
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
@@ -440,6 +457,7 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_surf_mse = epoch_surf_l1 = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -451,12 +469,16 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        err = pred - y_norm
+        sq_err = err ** 2
+        abs_err = err.abs()
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        surf_loss_mse = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        surf_loss_l1 = (abs_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        surf_loss = cfg.surf_mse_weight * surf_loss_mse + cfg.surf_l1_weight * surf_loss_l1
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -471,17 +493,22 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_surf_mse += surf_loss_mse.item()
+        epoch_surf_l1 += surf_loss_l1.item()
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_surf_mse /= max(n_batches, 1)
+    epoch_surf_l1 /= max(n_batches, 1)
 
     # --- Validate (using EMA model) ---
     model.eval()
     ema_model.eval()
     split_metrics = {
-        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight,
+                             cfg.surf_mse_weight, cfg.surf_l1_weight, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -507,6 +534,8 @@ for epoch in range(MAX_EPOCHS):
         "peak_memory_gb": peak_gb,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/surf_loss_mse": epoch_surf_mse,
+        "train/surf_loss_l1": epoch_surf_l1,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -539,7 +568,8 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(ema_model, loader, stats, cfg.surf_weight,
+                                 cfg.surf_mse_weight, cfg.surf_l1_weight, device)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
