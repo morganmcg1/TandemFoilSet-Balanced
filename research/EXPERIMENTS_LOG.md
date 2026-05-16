@@ -748,3 +748,30 @@ Val still descending at epoch 34 with lr=1.25e-5. LR trajectory confirms hypothe
 - **Critical scientific finding:** Pure T_max sweep at lr=1.7e-4 shows T_max recalibration alone drives the full −10% gain. Frieren's prior result (#3953, val=40.69, T_max=40+lr=2.5e-4) is WORSE than lr=1.7e-4 result. The lr increase was counterproductive. Optimal config: T_max=40, lr=1.7e-4 (in-tree default).
 
 - **Cumulative improvement:** 135.02 → 39.83 = **−70.5%**
+
+---
+
+## 2026-05-16 22:32 — PR #4167: Capacity n192 + calibrated T_max=22 on 12-mech stack
+
+- **Student:** charliepai2i48h2-alphonse
+- **Hypothesis:** n192 width (1.45M params) with T_max=22 calibrated to the ~22-epoch compute budget at 79 s/epoch, following confirmed per-epoch benefit from #4078.
+- **Results:**
+
+| Metric | This run (n192, T_max=22) | Baseline #4079 (n128, T_max=40) | Δ |
+|--------|-----------|----------|---|
+| **val_avg/mae_surf_p** | **50.3206** | **39.8345** | **+10.49 (+26.3%)** |
+| val_single_in_dist | 54.2321 | 43.6797 | +10.55 |
+| val_geom_camber_rc | 65.4722 | 53.1517 | +12.32 |
+| val_geom_camber_cruise | 30.6558 | 22.7101 | +7.95 |
+| val_re_rand | 50.9221 | 39.7965 | +11.13 |
+| **test_avg/mae_surf_p** | **42.5489** | **33.8873** | **+8.66** |
+| Best epoch | 23 (timeout-bound; val still descending) | 34 | — |
+| Per-epoch time | ~79.4 s | ~54.2 s | +46.7% |
+| Peak VRAM | 35.59 GB | 23.84 GB | +49% |
+
+Metrics artifact: `models/model-charliepai2i48h2-alphonse-capacity-n192-tmax22-20260516-214742/metrics.jsonl`
+
+- **Analysis:** T_max=22 calibration was mechanically correct — the cosine schedule completed within budget and val descended monotonically to the timeout. The issue is compute throughput: 79 s/epoch vs n128's 54 s costs 11 fewer epochs in the 30-min window. At epoch 23, n192 val (50.32) is ~+10 pts worse than n128's val at the same epoch index. The 1.45M params model simply needs more passes at meaningful LR than the throughput allows. Tightening T_max (from 30→22) did not help because the schedule completion is not the bottleneck — total epoch budget is.
+
+- **Decision:** CLOSED — no_improvement (+26.3% regression; clearly above 41.0 stop threshold). The capacity direction at n192 is throughput-limited inside the 30-min wall-clock budget. Follow-up: compile_mode sweep (reduce-overhead, max-autotune) at n128 to see if per-epoch time can be cut enough to reopen n192.
+

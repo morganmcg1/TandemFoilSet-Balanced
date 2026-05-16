@@ -46,7 +46,7 @@ cd target && python train.py --agent <student> \
 | PR | Student | Theme | Status | Baseline context |
 |----|---------|-------|--------|-----------------|
 | #4181 | edward | LR fine-sweep at T_max=40: lr=1.5e-4 (Arm A), 2.0e-4 (Arm B) | WIP — NEW | #4079 only has two LR data points (1.7e-4 vs 2.5e-4); bracket needed to confirm optimum |
-| #4167 | alphonse | Capacity n192 + T_max=22 (calibrated to n192 epoch budget) | WIP | #4078 confirmed per-epoch n192 benefit; T_max=30 miscalibrated for ~22 epoch n192 budget |
+| #4188 | alphonse | torch.compile mode sweep: reduce-overhead and max-autotune at n128 | WIP — NEW | #4167 closed: n192 throughput-limited; compile mode may cut epoch time and reopen capacity direction |
 | #4159 | frieren | T_max fine-sweep: T_max=35 and 50 at lr=1.7e-4 (updated from 2.5e-4) | WIP | Edward proved 1.7e-4 optimal; val still descending at ep34; T_max=50 is highest priority arm |
 | #4029 | askeladd | EMA decay fine sweep: 0.993 and 0.990 on compile stack | WIP | Notified of new baseline 39.83 |
 | #4030 | nezuko | Velocity surface down-weighting: surf_ux/uy=0.5,0.7 with pw=2.0 | WIP | Notified of new baseline 39.83 |
@@ -58,7 +58,7 @@ cd target && python train.py --agent <student> \
 
 1. **Is T_max=40 the optimum, or should it go higher?** (#4159 frieren) — val still descending at epoch 34 with lr=1.25e-5 (~7% of init); T_max=35/50 bracket at lr=1.7e-4. T_max=50 is the highest-priority arm.
 2. **Is lr=1.7e-4 the precise optimum at T_max=40?** (#4181 edward) — only two data points (1.7e-4 vs 2.5e-4); bracket with 1.5e-4 and 2.0e-4 to characterize the LR landscape under T_max=40.
-3. **Does capacity n192 with calibrated T_max=22 compete?** (#4167 alphonse) — per-epoch benefit confirmed in #4078; the fix is T_max calibration.
+3. **Can compile_mode=reduce-overhead or max-autotune cut per-epoch time?** (#4188 alphonse) — n192 is throughput-limited at 79s/epoch; if we can cut n128's 54s/epoch, we gain epochs at the proven optimum (val still descending at ep34) and may reopen the capacity direction.
 4. **Is EMA decay 0.993/0.990 better under T_max=40?** (#4029 askeladd) — EMA optimal decay may shift under gentler annealing.
 5. **Can velocity surface down-weighting free gradient budget?** (#4030 nezuko)
 6. **Do per-group clip (looser MLP budget) improve on the 12-mech stack?** (#4154 fern)
@@ -108,11 +108,12 @@ cd target && python train.py --agent <student> \
 | #3884 (alphonse batch-size-bf16) | no_improvement: batch=6 +24.4%; steps/epoch −33% |
 | #4016 (fern tighter MLP clip) | no_improvement: arms A/B regressed; tighter other_grad_norm discards MLP signal; → #4154 |
 | #4078 (alphonse capacity-compile) | no_improvement: n192/n256 throughput-limited; T_max=30 miscalibrated for n192's ~22-epoch budget → #4167 |
+| #4167 (alphonse capacity-n192-tmax22) | no_improvement: val=50.32 (+26.3%); T_max=22 calibration was correct but model still throughput-limited at 79s/epoch (23 epochs in budget vs n128's 34); capacity direction closed → #4188 compile-mode-sweep |
 
 ## Potential next research directions
 
 - **T_max fine-sweep** — IN PROGRESS as #4159 (frieren); T_max=35/50 at lr=1.7e-4. T_max=50 is highest priority.
-- **Capacity n192 + calibrated T_max** — IN PROGRESS as #4167 (alphonse); T_max=22 for n192's 22-epoch budget
+- **torch.compile mode sweep** — IN PROGRESS as #4188 (alphonse); reduce-overhead and max-autotune at n128 baseline
 - **LR fine-sweep at T_max=40** — IN PROGRESS as #4181 (edward); lr ∈ {1.5e-4, 2.0e-4} bracketing 1.7e-4
 - **EMA decay re-sweep on 12-mech stack** — IN PROGRESS as #4029 (askeladd); 0.993/0.990
 - **Velocity surface down-weighting** — IN PROGRESS as #4030 (nezuko)
