@@ -288,7 +288,7 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device, loss_fn="mse", eps=1e-3) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, loss_fn="mse", eps=1e-3, cauchy_gamma=1.0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -328,7 +328,7 @@ def evaluate_split(model, loader, stats, surf_weight, device, loss_fn="mse", eps
                 mask = mask[y_finite_per_sample]
 
             with amp_ctx():
-                err = _per_node_loss(pred, y_norm, loss_fn, eps)
+                err = _per_node_loss(pred, y_norm, loss_fn, eps, cauchy_gamma)
                 vol_mask = mask & ~is_surface
                 surf_mask = mask & is_surface
                 vol_loss_sum += (
@@ -475,8 +475,9 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
-    loss_fn: str = "charbonnier"   # "mse" or "charbonnier"
+    loss_fn: str = "charbonnier"   # "mse", "charbonnier", or "cauchy"
     charbonnier_eps: float = 1e-3  # ε for Charbonnier sqrt(r² + ε²)
+    cauchy_gamma: float = 1.0      # γ for Cauchy log(1 + (r/γ)²)
     grad_clip_max_norm: float = 0.5  # 0.0 = no clipping, >0 = clip global L2 norm
     pos_enc_mode: str = "raw"        # "raw" | "fourier_basic" | "fourier_rich"
     pos_enc_num_freqs: int = 8        # frequency bands when mode != raw
@@ -484,13 +485,15 @@ class Config:
     mlp_type: str = "vanilla"  # "vanilla" | "swiglu" | "geglu"
 
 
-def _per_node_loss(pred, y, fn, eps):
+def _per_node_loss(pred, y, fn, eps, cauchy_gamma=1.0):
     """Element-wise loss in normalized space, same shape as (pred - y)."""
     diff = pred - y
     if fn == "mse":
         return diff ** 2
     if fn == "charbonnier":
         return torch.sqrt(diff * diff + eps * eps)
+    if fn == "cauchy":
+        return torch.log1p((diff / cauchy_gamma) ** 2)
     raise ValueError(fn)
 
 
@@ -639,7 +642,7 @@ for epoch in range(MAX_EPOCHS):
             _logged_x_range = True
         with amp_ctx():
             pred = model({"x": x_norm})["preds"]
-            err = _per_node_loss(pred, y_norm, cfg.loss_fn, cfg.charbonnier_eps)
+            err = _per_node_loss(pred, y_norm, cfg.loss_fn, cfg.charbonnier_eps, cfg.cauchy_gamma)
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
@@ -678,7 +681,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.loss_fn, cfg.charbonnier_eps)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.loss_fn, cfg.charbonnier_eps, cfg.cauchy_gamma)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -746,7 +749,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.loss_fn, cfg.charbonnier_eps)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.loss_fn, cfg.charbonnier_eps, cfg.cauchy_gamma)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
