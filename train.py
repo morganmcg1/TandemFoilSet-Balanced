@@ -215,6 +215,7 @@ class Transolver(nn.Module):
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
                  use_film: bool = False, film_mode: str = "output_only",
+                 use_film_blocks: bool = False,
                  log_re_mean: float = 14.58, log_re_std: float = 0.76):
         super().__init__()
         self.ref = ref
@@ -223,6 +224,7 @@ class Transolver(nn.Module):
         self.output_dims = output_dims or []
         self.use_film = use_film
         self.film_mode = film_mode
+        self.use_film_blocks = use_film_blocks
         self.log_re_mean = log_re_mean
         self.log_re_std = log_re_std
 
@@ -248,6 +250,13 @@ class Transolver(nn.Module):
 
         if self.use_film:
             self.film = FiLM(n_hidden)
+        if self.use_film_blocks:
+            # One independent FiLM per intermediate Transolver block (blocks 0..N-2).
+            # The last block keeps the existing output-FiLM mechanism (modulates the
+            # penultimate hidden state inside mlp2) when --use_film is also on.
+            self.block_films = nn.ModuleList(
+                [FiLM(n_hidden) for _ in range(n_layers - 1)]
+            )
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -263,9 +272,11 @@ class Transolver(nn.Module):
         fx = self.preprocess(x) + self.placeholder[None, None, :]
 
         film_params = None
-        if self.use_film and "log_re_raw" in data:
+        log_re_n = None
+        if (self.use_film or self.use_film_blocks) and "log_re_raw" in data:
             log_re = data["log_re_raw"]
             log_re_n = (log_re - self.log_re_mean) / self.log_re_std
+        if self.use_film and log_re_n is not None:
             film_params = self.film(log_re_n)
 
         n_blocks = len(self.blocks)
@@ -277,6 +288,13 @@ class Transolver(nn.Module):
                 fx = block(fx, film=film_params, film_ffn=False)
             else:
                 fx = block(fx)
+            # Per-block FiLM (zero-init → identity at init) on intermediate
+            # block outputs in n_hidden space. The last block's output is in
+            # 3-dim target space, so we skip it (output-FiLM already conditions
+            # the last block via the mlp2 hidden state).
+            if self.use_film_blocks and log_re_n is not None and not is_last:
+                bg, bb = self.block_films[i](log_re_n)
+                fx = bg * fx + bb
         return {"preds": fx}
 
 
@@ -613,8 +631,9 @@ class Config:
     optimizer_name: str = "adamw"  # "adamw" or "lion"
     lion_beta1: float = 0.9
     lion_beta2: float = 0.99
-    use_film: bool = False   # enable FiLM conditioning on log(Re)
-    film_mode: str = "output_only"  # "output_only" or "all_blocks"
+    use_film: bool = False   # enable output-FiLM conditioning on log(Re)
+    film_mode: str = "output_only"  # "output_only" or "all_blocks" (shared FiLM)
+    use_film_blocks: bool = False  # enable per-block FiLM (independent FiLM per intermediate block)
     ema_decay: float = 0.0   # 0 disables EMA; e.g. 0.999 enables EMA-of-weights
     grad_clip: float = 0.0   # 0 disables; e.g. 1.0 clips global grad norm
 
@@ -668,6 +687,7 @@ model_config = dict(
     output_dims=[1, 1, 1],
     use_film=cfg.use_film,
     film_mode=cfg.film_mode,
+    use_film_blocks=cfg.use_film_blocks,
     log_re_mean=float(stats["x_mean"][13].item()),
     log_re_std=float(stats["x_std"][13].item()),
 )
@@ -830,17 +850,25 @@ for epoch in range(MAX_EPOCHS):
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
 
     # FiLM γ/β diagnostics across the val_re_rand split's Re range
-    if cfg.use_film:
+    if cfg.use_film or cfg.use_film_blocks:
         diag_model = ema_model.module if ema_model is not None else model
         with torch.no_grad():
             re_lo, re_hi = 11.5, 15.4
             log_re_probe = torch.linspace(re_lo, re_hi, 32, device=device)
             log_re_n = (log_re_probe - diag_model.log_re_mean) / diag_model.log_re_std
-            gamma, beta = diag_model.film(log_re_n)  # [32, 1, n_hidden]
-            log_metrics["film/gamma_max_abs_delta"] = (gamma - 1.0).abs().max().item()
-            log_metrics["film/gamma_std"] = gamma.std().item()
-            log_metrics["film/beta_abs_max"] = beta.abs().max().item()
-            log_metrics["film/beta_std"] = beta.std().item()
+            if cfg.use_film:
+                gamma, beta = diag_model.film(log_re_n)  # [32, 1, n_hidden]
+                log_metrics["film/gamma_max_abs_delta"] = (gamma - 1.0).abs().max().item()
+                log_metrics["film/gamma_std"] = gamma.std().item()
+                log_metrics["film/beta_abs_max"] = beta.abs().max().item()
+                log_metrics["film/beta_std"] = beta.std().item()
+            if cfg.use_film_blocks:
+                for bi, bfilm in enumerate(diag_model.block_films):
+                    bg, bb = bfilm(log_re_n)
+                    log_metrics[f"film_block_{bi}/gamma_max_abs_delta"] = (bg - 1.0).abs().max().item()
+                    log_metrics[f"film_block_{bi}/gamma_std"] = bg.std().item()
+                    log_metrics[f"film_block_{bi}/beta_abs_max"] = bb.abs().max().item()
+                    log_metrics[f"film_block_{bi}/beta_std"] = bb.std().item()
     wandb.log(log_metrics)
 
     tag = ""
