@@ -1809,3 +1809,50 @@ Six new hypotheses assigned to freed students after H73 merge established new ba
 **Note:** H78 (β₂ retune only) deferred — thorfinn assigned H80 (bold compound swing including β₂=0.999). If H80 Arm A beats baseline, H78 individual isolation will confirm β₂ contribution.
 
 Still WIP (low priority): #3965 edward H58 rebase, #4020 alphonse H67 — both likely superseded by H73.
+
+---
+
+## 2026-05-16 19:15 — PR #4020: H67 Lion+GEGLU+RMSNorm compound (alphonse) — **CLOSED, superseded**
+
+- Branch: `alphonse/h67-lion-rmsnorm-compound`
+- Hypothesis: Lion + RMSNorm compound on H59 GEGLU baseline at slice=64.
+
+| Arm | val_avg | test 3-split | best_epoch |
+|-----|--------:|-------------:|-----------:|
+| A (Lion lr=1e-4) | 46.00 | 44.81 | 17 |
+| **B (Lion lr=3e-4)** | **44.05** | **42.27** | 17 |
+| H59 baseline | 56.91 | 56.24 | — |
+
+**Analysis:** Both arms beat the H59 baseline by a wide margin (−12.86 pts val for Arm B). Arm B (lr=3e-4) confirms the Lion-native LR superiority pattern from H73. The compound (Lion+RMSNorm) is additive as predicted (Arm A 46.00 ≈ additivity prediction 46.13 from H58+H59). Arm B's extra 2 pts from lr=3e-4 is consistent with H73's findings.
+
+Neither arm beats the current baseline (H73 val=42.97). Alphonse correctly identified that slice=96 is the missing lever — his suggested follow-ups directly map to our H75-H80 assignments.
+
+**Status: CLOSED — superseded by H73 (slice=96 + Lion + LayerNorm at val=42.98).**
+
+---
+
+## 2026-05-16 19:15 — PR #3965: H58 Lion+GEGLU rebase (edward) — **CLOSED, superseded**
+
+- Branch: `edward/h58-lion-lr1e4-geglu` (rebase of original H58)
+- Hypothesis: Lion+GEGLU compound at H48 GEGLU baseline (post-rebase to resolve merge conflict).
+
+| Arm | val_avg | test 3-split | best_epoch |
+|-----|--------:|-------------:|-----------:|
+| **A (lr=1e-4)** | **46.80** | 46.63 | 13 |
+| B (lr=2e-4) | 47.44 | **45.85** | 13 |
+| H48 baseline | 58.63 | 56.70 | — |
+
+**Analysis:** Both arms confirmed −11.8 pts val gain (Lion+GEGLU compound is massive). Gate health analysis shows no saturation (std=0.29 Arm A, 0.45 Arm B). Arm B val/test inversion (Arm B wins test_single_in_dist by 4.4 pts) suggests higher LR finds flatter minimum. Neither arm beats H73 baseline. The rebase ran cleanly at only 13 epochs (wall-cut).
+
+**Status: CLOSED — superseded by H73 (val=42.98). Key insights already incorporated.**
+
+---
+
+## 2026-05-16 19:20 — Round 5 Cycle 22b: Assign H78 and H81 to freed students
+
+| PR | Student | Hypothesis | Key Change |
+|----|---------|-----------|------------|
+| #4097 | edward | H78: Lion β₂ sweep at H73 baseline | β₂=0.999 (Arm A), β₂=0.995 (Arm B) |
+| #4098 | alphonse | H81: RMSNorm under Lion+slice=96 | RMSNorm+lr=3e-4 (Arm A), RMSNorm+lr=2e-4 (Arm B) |
+
+All 8 students now active. H78 tests the β₂ individual isolation (thorfinn has the compound H80 including β₂=0.999, edward has the individual sweep). H81 retests the normalization question under Lion — H72 showed anti-compound under AdamW, but Lion's sign-update changes the normalization interaction.

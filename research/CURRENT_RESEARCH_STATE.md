@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-16 19:12
+- **Date**: 2026-05-16 19:22
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
 - **Round**: 5 mid-phase — Lion+slice=96 super-additive win (H73 merged); 6 new experiments launched to refine the Lion stack
 - **Most recent human research directive**: None received
@@ -66,8 +66,8 @@ The H67-H73 Lion compound batch revealed:
 | **#4091** | frieren | **H77: n_head=4 at slice=96** | HIGH | ~41-43 |
 | **#4092** | nezuko | **H79: wd retune (wd=1e-4, wd=5e-5)** | HIGH | ~41-44 |
 | **#4093** | thorfinn | **H80: Full Lion stack — warmup+wd+β₂+n_head compound** | HIGH (bold swing) | ~35-40 optimistic |
-| **#3965** | edward | **H58 REBASE: Lion + GEGLU verification on slice=64** | LOW (superseded by H73) | ~46-47 |
-| **#4020** | alphonse | **H67: Lion + GEGLU + RMSNorm at slice=64** | LOW (superseded) | ~45-48 |
+| **#4097** | edward | **H78: Lion β₂ sweep (β₂=0.999, β₂=0.995)** | HIGH | ~41-43 |
+| **#4098** | alphonse | **H81: RMSNorm under Lion+slice=96** | HIGH (closes normalization question) | ~41-44 |
 
 **Closed this round:** H61 (LR-down), H62 (mlp_ratio), H63 (DropPath), H64 (Huber δ_p), H65 (EMA), H72 (RMSNorm+slice96 anti-compound), H68/H69/H70/H71 (Lion variants at slice=64, all superseded by H73).
 
