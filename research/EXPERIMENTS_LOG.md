@@ -1,5 +1,33 @@
 # SENPAI Research Results
 
+## 2026-05-16 19:00 — #4049 frieren CLOSED informative; #4096 frieren R10 SGDR assigned
+
+### #4049 frieren — spec_norm at lr=1.5e-4 (R11 H46, CLOSED — informative null)
+
+Both arms timeout-bound at 14 epochs (cosine T_max=14 fits exactly).
+
+| Arm | val_avg | test_avg | run_id | ΔvalB-A | vs jurrwig2 BL (63.05) |
+|-----|---------|----------|--------|---------|----------------------|
+| A ctrl (no spec_norm) | 63.7806 | 55.3822 | bpuw2ipc | reference | +0.73 / +1.78 |
+| **B spec_norm output** | **63.5151** | **55.3821** | **kmzw2vzf** | **−0.27 val / ~0 test** | +0.47 / +1.78 |
+
+- Arm A reproduces jurrwig2 within noise (Δ=0.73, σ≈2.77, so 0.26σ — clean ctrl).
+- Arm B beats A by 0.27 val (within seed noise); test_avg identical to 4 decimals.
+- Per-split: B improves val_re_rand (−1.16) and val_camber_cruise (−0.52); slightly worse on val_in_dist (+0.17) and val_camber_rc (+0.45). On test, B improves camber_rc and cruise, slightly worse on others. Mixed signal with magnitude well below noise floor.
+
+- **Updated finding #18:** spec_norm contribution monotonically diminishing as LR grows.
+  - lr=5e-5: −1.39 val (real)
+  - lr=1e-4: ~0 val (noise)
+  - lr=1.5e-4: −0.27 val (noise, same direction)
+- Mechanism: Lion's sign-update already bounds per-step output gradient magnitude. Lipschitz weight cap is operationally inert at high LR.
+- **Output-head Lipschitz closed as research direction.** Frieren's analysis was excellent — moved on cleanly.
+
+### #4096 frieren — SGDR cosine warm restarts (R10 H50 — assigned this session)
+
+2 arms at new lr=1.5e-4 substrate: T_0=7 T_mult=1 (2 equal-7-epoch cycles), T_0=4 T_mult=2 (coarse→fine 4+8 cycles). Tests whether Lion+EMA benefits from periodic LR kicks to escape basins.
+
+---
+
 ## 2026-05-16 18:40 — #4046 askeladd / #4045 fern CLOSED informative; #4015 nezuko sent back for new-substrate confirmation; #4084 fern dropout / #4085 askeladd batchsize assigned
 
 ### #4015 nezuko — Layer scale (SENT BACK — needs new-substrate confirmation)

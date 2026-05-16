@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (~18:40 UTC) — #4046 askeladd / #4045 fern CLOSED informative; #4015 nezuko sent back for new-substrate confirmation arms (layer scale=1e-4 winner on OLD substrate); #4084 fern dropout / #4085 askeladd batchsize assigned; 8/8 staffed.
+- **Date:** 2026-05-16 (~19:00 UTC) — #4049 frieren spec_norm at lr=1.5e-4 CLOSED informative (finding #18 extends); #4096 frieren R10 SGDR (cosine warm restarts) assigned; 8/8 staffed.
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
@@ -44,17 +44,18 @@ Per-split test: in_dist 55.69, camber_rc 70.55, camber_cruise 35.48, re_rand 52.
 |----|---------|------------|--------|
 | **#4084** | **fern** | **R10 H48: Dropout sweep {0.05, 0.10} on Transolver blocks at lr=1.5e-4** | **Just assigned** |
 | **#4085** | **askeladd** | **R10 H49: Batch size sweep {8, 16} with Lion at lr=1.5e-4** | **Just assigned** |
+| **#4096** | **frieren** | **R10 H50: SGDR (cosine warm restarts) at lr=1.5e-4 — 2 cycle configs** | **Just assigned** |
 | #4015 | nezuko | R10 H39: Layer scale init {1e-4, 1e-5} — sent back for Arm D+E on new substrate | Sent back |
 | #4063 | tanjiro | R10 H47: T_max sweep {14 ctrl, 18, 20} at lr=1.5e-4 substrate | WIP |
 | #4057 | edward | R10 H45: Surface-biased slice routing in PhysicsAttention | WIP |
 | #4056 | thorfinn | R10 H42: Gradient clip sweep {0.5, 1.0, 2.0} at lr=1.5e-4 | WIP |
-| #4049 | frieren | R11 H46: spec_norm at lr=1.5e-4 (2-arm) | WIP |
 | #4044 | alphonse | R10 H40: Multi-param FiLM — ctrl-only so far, treatment not launched | Nudged |
 
 ## Recent closures (informative nulls — recent sessions)
 
 | PR | Student | Result | Note |
 |----|---------|--------|------|
+| #4049 | frieren | spec_norm at lr=1.5e-4: Arm B −0.27 val vs ctrl (within noise) | CLOSED |
 | #4046 | askeladd | p_weight upweighting monotone hurts (1→2→3 worsens) | CLOSED |
 | #4045 | fern | Capacity bottleneck = wall clock (n=128 ctrl best within budget) | CLOSED |
 | #3957 | tanjiro | T_max=20 best within-substrate (val 67.48 lr=5e-5) — above new BL | CLOSED |
@@ -72,12 +73,12 @@ Per-split test: in_dist 55.69, camber_rc 70.55, camber_cruise 35.48, re_rand 52.
 | Architecture capacity | n_hidden 192/256 vs 128 | #4045 fern | −1 to −4 val |
 | Metric alignment | p_weight {2x, 3x} Huber loss | #4046 askeladd | −1 to −3 val |
 | Architecture stability | Layer scale init {1e-4, 1e-5} | #4015 nezuko | −1 to −3 val |
-| Spec_norm at new LR | spec_norm at lr=1.5e-4 | #4049 frieren | −0 to −2 val; tests finding #18 |
 | Optimizer stability | Grad clip {0.5, 1.0, 2.0} at lr=1.5e-4 | #4056 thorfinn | −0 to −2 val mean; variance reduction |
 | Architecture routing | Surface-biased PhysicsAttention routing | #4057 edward | −1 to −3 val; camber_rc target |
 | Schedule depth | T_max sweep {14, 18, 20} at lr=1.5e-4 | #4063 tanjiro | ≤−1 to +1 val; tests within-substrate T_max=20 transfer |
 | Block regularization | Dropout sweep {0.05, 0.10} in PhysicsAttention + FFN | #4084 fern | −0 to −2 val; targets camber_rc generalization |
 | Gradient signal cleanliness | Batch size {8, 16} with Lion at lr=1.5e-4 | #4085 askeladd | −0 to −1.5 val; risk: wall-clock budget |
+| LR schedule reformulation | SGDR cosine warm restarts {T_0=7×2, T_0=4 T_mult=2} | #4096 frieren | −0 to −2 val; tests Lion+EMA × restarts compositional |
 
 ## Key findings (cumulative, 19)
 
@@ -98,7 +99,7 @@ Per-split test: in_dist 55.69, camber_rc 70.55, camber_cruise 35.48, re_rand 52.
 15. **Train-time z-aug fails** — AoA asymmetry.
 16. **surf_weight optimum substrate-dependent**.
 17. **Lion β1=0.9 optimal** in {0.8, 0.9, 0.95}.
-18. **spec_norm Lipschitz contribution diminishes as lr grows**: ~−1.39 val at lr=5e-5, ~0 at lr=1e-4. frieren R11 will test at lr=1.5e-4.
+18. **spec_norm Lipschitz contribution diminishes as lr grows**: −1.39 val at lr=5e-5 → ~0 at lr=1e-4 → −0.27 val (noise) at lr=1.5e-4. Output-head Lipschitz closed; Lion's sign-update already bounds per-step gradient magnitude.
 19. **Input MixUp catastrophic** on CFD pressure fields: non-physical blended targets (+23-28 val). FiLM's log(Re) conditioning also gets mixed — further invalidating the augmentation.
 
 ## Next priorities
