@@ -5,6 +5,70 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-16 10:45 — PR #3192 (charliepai2i48h5-edward): EMA decay sweep on LayerScale+n14 stack — MERGED (NEW BEST)
+
+- branch: `charliepai2i48h5-edward/ema-on-layerscale`
+- hypothesis: EMA checkpoint averaging (torch.optim.swa_utils.AveragedModel) on the LayerScale + n_freqs=14 stack
+- results:
+
+  | arm | EMA decay | n_freqs | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch |
+  |---|---|---|---|---|---|
+  | arm-1: EMA on n_freqs=10 | 0.998 | 10 | 73.60 | 66.87 | 13 |
+  | arm-2: EMA on n_freqs=10 (ema=0.999) | 0.999 | 10 | — | — | — |
+  | arm-3: EMA 0.998 + LayerScale + n_freqs=10 | 0.998 | 10 | ~72 | — | — |
+  | **arm-4 (winner): EMA 0.998 + LayerScale + n_freqs=14** | **0.998** | **14** | **71.20** | **62.71** | **12** |
+  | arm-5: EMA 0.998 + LayerScale + n_freqs=10 (no n14) | 0.998 | 10 | 72.80 | 65.38 | 13 |
+
+- artifacts: `models/model-layerscale-001-ema-0998-n14-fullstack-20260516-073558/metrics.jsonl`
+- per-split test surf_p (arm-4 winner):
+
+  | split | test surf_p | Δ vs prior best (72.77/65.12) |
+  |---|---|---|
+  | single_in_dist | 71.22 | -9.65% ✓ |
+  | geom_camber_rc | 72.24 | -4.72% ✓ |
+  | geom_camber_cruise | 45.19 | +3.04% |
+  | re_rand | 62.19 | +0.36% |
+
+- commentary: **NEW BEST** — val=71.20 / test=62.71, -2.16% val / -3.71% test vs prior best (72.77/65.12). Triple compound (LayerScale + n_freqs=14 + EMA 0.998) works because EMA checkpoint averaging compensates for the under-convergence of the n14+LayerScale compound in the ~12-epoch budget. The compound without EMA (alphonse #3730) regressed +4-5%; EMA adds enough smoothing to bridge the gap. OOD single and rc splits show biggest gains (-9.65%, -4.72%); cruise slightly regresses. LayerScale γ dynamics remain healthy with EMA. Peak memory 48.1 GB, ~152 s/epoch. Cumulative improvement now -44.7% from round-5 start.
+
+---
+
+## 2026-05-16 10:50 — PR #3730 (charliepai2i48h5-alphonse): LayerScale + n_freqs=14 compound — CLOSED
+
+- branch: `charliepai2i48h5-alphonse/layerscale-n14-compound`
+- hypothesis: LayerScale γ=0.01 + n_freqs=14 without EMA — compound two merged wins
+- results:
+
+  | arm | val_avg/mae_surf_p | test_avg/mae_surf_p | vs baseline (72.77) |
+  |---|---|---|---|
+  | arm-1 γ=0.01 (seed 1) | 76.32 | 69.55 | +4.9% worse |
+  | arm-1 γ=0.01 (seed 2) | 75.76 | 67.94 | +4.1% worse |
+  | arm-2 γ=0.003 | 76.49 | 67.56 | +5.1% worse |
+
+- artifacts: committed to student branch; best arm-1 JSONL verified
+- per-split test surf_p (arm-1 primary): single=81.39, rc=83.43, cruise=47.92, re_rand=65.46 — all worse than baseline
+- commentary: CLOSED — sub-additive compound under 30-min timeout. LayerScale's channel gating needs more steps to align with the wider Fourier input space (space_dim=58). γ dynamics identical to n=10 (γ_attn stays near 0.01, γ_mlp grows 3-4×) suggesting convergence is the bottleneck, not the mechanism. Formally superseded by edward #3192 which adds EMA 0.998 to resolve the under-convergence issue (val=71.20). BF16 (#3527) remains the path to revisit this compound with a fair budget.
+
+---
+
+## 2026-05-16 10:52 — PR #3782 (charliepai2i48h5-fern): AdamW eps sweep {1e-6, 1e-7} — CLOSED
+
+- branch: `charliepai2i48h5-fern/adam-eps-on-layerscale`
+- hypothesis: Raising AdamW eps stabilizes small-v_t parameters (LayerScale γ channels near zero)
+- results:
+
+  | arm | adam_eps | val_avg/mae_surf_p | test_avg/mae_surf_p | vs baseline (72.77) |
+  |---|---|---|---|---|
+  | arm-1 | 1e-6 | 83.39 | 75.05 | +14.6% worse |
+  | arm-2 | 1e-7 | 77.17 | 68.97 | +6.0% worse |
+  | baseline | 1e-8 | 72.77 | 65.12 | — |
+
+- artifacts: `models/model-layerscale-adam-eps-*/metrics.jsonl`
+- per-split test surf_p (arm-2 best): single=78.86, rc=78.01, cruise=49.99, re_rand=69.01 — all worse
+- commentary: CLOSED — hypothesis cleanly falsified. Monotone degradation: larger eps is strictly worse. Default eps=1e-8 confirmed optimal. The rationale (spiky v_t destabilizing small-γ channels) is invalidated by grad_clip=0.25 already bounding per-step magnitudes. Together with PR #3708 (β2 sweep falsified), the AdamW denominator knobs are confirmed non-viable. Student conclusion correct: schedule tuning (T_max) is the more promising next lever, now assigned as PR #3883.
+
+---
+
 ## 2026-05-15 15:35 — PR #3199 (charliepai2i48h5-fern): Decoupled surface/volume decoder heads — REQUEST CHANGES
 
 - branch: `charliepai2i48h5-fern/dualhead-surface-volume`
