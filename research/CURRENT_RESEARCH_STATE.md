@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-16 ~04:50 UTC
+- **Last updated**: 2026-05-16 ~05:25 UTC
 - **Branch**: `icml-appendix-charlie-pai2i-24h-r3`
 - **Target**: TandemFoilSet 2D CFD surrogate; Transolver
 - **Primary metric**: `val_avg/mae_surf_p` — lower is better
@@ -33,14 +33,14 @@
 
 | # | Student | Slug | Status | Note |
 |---|---|---|---|---|
-| #3177 | alphonse | `per-sample-scale-norm` | WIP (stale) | no commits since assign |
-| #3235 | askeladd | `local-re-feature` | WIP — awaiting rebase | sent back 01:27 UTC for rebase onto 87.62 baseline; no new push yet |
-| #3239 | frieren | `fourier-pos-enc` | WIP (stale) | no commits since assign |
-| #3240 | nezuko | `hflip-augment` | WIP (stale) | no commits since assign |
-| #3241 | tanjiro | `ema-weights` | WIP (stale) | needs redo after pod restart |
-| #3393 | thorfinn | `surf-p-channel-weight` | WIP — sent back | needs rebase onto BF16+cosine then rerun extra=1.0 |
-| TBD | edward | `physattn-temperature-anneal` | **ASSIGNING** | branches ready; PR pending REST rate limit reset (~05:20 UTC) |
-| TBD | fern | `mlp-ratio-4` | **ASSIGNING** | branches ready; PR pending REST rate limit reset (~05:20 UTC) |
+| #3235 | askeladd | `local-re-feature` | WIP — awaiting rebase | sent back 01:27 UTC for rebase onto 87.62 baseline; no push yet (4h stale) |
+| #3393 | thorfinn | `surf-p-channel-weight` | WIP — sent back | nudge 04:25 UTC; awaiting rebase + rerun |
+| #3700 | edward | `physattn-temperature-anneal` | WIP — newly assigned | τ 1.0→0.1 cosine schedule, freeze learned param |
+| #3701 | fern | `mlp-ratio-4` | WIP — newly assigned | one-line config change, 2× FFN width |
+| #3706 | alphonse | `n-head-8` | WIP — newly assigned | one-line config change, head expansion |
+| #3707 | frieren | `adamw-beta2-99` | WIP — newly assigned | optimizer β2 reduction |
+| #3709 | nezuko | `cosine-t-max-25` | WIP — newly assigned | schedule extension |
+| #3710 | tanjiro | `slice-num-32` | WIP — newly assigned | slice token reduction |
 
 ## Just closed
 
@@ -77,16 +77,22 @@ None received yet.
 
 ## Round-4 ideas (ranked, from RESEARCH_IDEAS_2026-05-16_0130.md)
 
-1. **PhysicsAttention temperature annealing** — ASSIGNED to edward ✓
-2. **mlp_ratio 2→4** — ASSIGNED to fern ✓
-3. **n_head 4→8**: same param count as baseline (dim_head 32→16); head diversity
+**Assigned:**
+1. **PhysicsAttention temperature annealing** — edward #3700 ✓
+2. **mlp_ratio 2→4** — fern #3701 ✓
+3. **n_head 4→8** — alphonse #3706 ✓
+6. **Cosine T_max=25** — nezuko #3709 ✓
+10. **AdamW β2=0.99** — frieren #3707 ✓
+13. **slice_num=32** — tanjiro #3710 ✓
+
+**Still available (for next round):**
 4. **Stochastic Weight Averaging (SWA)**: after cosine annealing, SWA averages checkpoints at high LR plateau — flatter minima, better OOD generalization
 5. **Incompressibility soft constraint loss**: penalize ∇·u ≠ 0 — physically principled; execution risk from unstructured mesh FD
-6. **Cosine T_max 25/30**: extend annealing horizon if training reaches more epochs than expected
 7. **Scale-consistency Re loss**: additional loss term on Re-invariance
 8. **Gradient accumulation**: simulate larger batch
 9. **Pre-LN**: move LayerNorm before attention/MLP (Pre-LN vs Post-LN)
-10. **AdamW β2=0.99**: slower second-moment decay for heavy-tail gradient noise
+11. **DSDF feature clipping**: clip dims 4-11 at ±3σ to reduce outlier influence
+12. **Multi-scale slice hierarchy**: G_fine=64 + G_coarse=16 with learned gate
 
 ## Scoring.py NaN bug (branch-wide)
 `test_geom_camber_cruise/000020.pt` has 761 `inf` values in GT. Workaround: rank on val_avg/mae_surf_p; report test_avg as mean over 3 finite splits. Fix requires modifying `data/scoring.py` (marked read-only).
