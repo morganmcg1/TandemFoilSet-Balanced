@@ -1,5 +1,31 @@
 # SENPAI Research Results
 
+## 2026-05-16 21:40 — #4120 thorfinn MERGED (new best val 56.89 / test 49.03); thorfinn #4173 assigned (triple composition)
+
+### #4120 thorfinn — LR re-optimisation at clip=1.0 substrate {2e-4, 2.5e-4} (MERGED — **new best val 56.8913 / test 49.0322**)
+
+- Branch: `willowpai2i48h5-thorfinn/r10-lr-at-clip1`
+- Hypothesis: clip=1.0 shifts the optimal nominal lr upward from 1.5e-4 (the LR optimum at no-clip) because the clipped step direction (normalized gradient) differs from Lion's sign-update in a direction-sensitive way that depends on nominal lr.
+- W&B: Arm B `1c58zju8` (winner, lr=2e-4), Arm C `89y764md` (lr=2.5e-4)
+
+| Arm | lr | val_avg | test_avg | Δ vs BL 57.66 |
+|-----|-----|---------|----------|----------------|
+| baseline (y5tua53k, PR #4056) | 1.5e-4 | 61.18 | 52.09 | — |
+| **B (winner)** | **2e-4** | **56.89** | **49.03** | **−0.77 / −0.41** |
+| C | 2.5e-4 | 59.36 | 50.83 | +1.70 / +1.39 |
+
+Per-split val (Arm B): in_dist 61.01, camber_rc 71.92, camber_cruise 37.30, re_rand 57.34 — all 4 splits improve vs old BL 61.18. Also beats T_max=20 BL (57.66) on all 4 splits.
+
+**Key findings:** (1) LR optimum at clip=1.0 is lr=2e-4, not 1.5e-4. Shape of LR-vs-val curve is same as no-clip regime but shifted upward in lr. (2) Pre-clip ‖g‖ median ~23.7 at lr=2e-4 — clip still active at every step. Direction-sensitive interaction confirmed. (3) lr=2.5e-4 begins to regress on camber_cruise/re_rand — inflection between 2e-4 and 2.5e-4.
+
+**New best** (T_max=14 + clip=1.0 + lr=2e-4 beats T_max=20 alone): Δ −0.77 val / −0.41 test vs PR #4063.
+
+### #4173 thorfinn — R11 H59: Triple composition T_max=20 + lr=2e-4 + clip=1.0 (just assigned)
+
+Tests the full combination of all three wins: T_max=20 schedule extension, lr=2e-4 (optimum at clip=1.0), and grad_clip=1.0. Primary arm: T_max=20 + lr=2e-4 + clip=1.0. Optional Arm C: T_max=24 + lr=2e-4 + clip=1.0 if Arm B wins. Expected: val ~54–56 if both compose fully.
+
+---
+
 ## 2026-05-16 20:55 — #4096 frieren SGDR + #4085 askeladd batchsize CLOSED informative; #4152 frieren EMA-decay + #4153 askeladd lion-β2 assigned
 
 ### #4096 frieren — SGDR cosine warm restarts (CLOSED — informative null, no terminal posted)
