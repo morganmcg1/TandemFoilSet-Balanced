@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 ~07:25 UTC
+- **Last updated:** 2026-05-16 ~08:00 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -44,20 +44,22 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 7. **Grad clip max_norm=1.0**, warmup 2 epochs, batch=4.
 8. **Depth and width scaling both fail** at this budget: n_layers=6 and n_hidden=176/192 all regress. Model is training-time limited, not capacity limited.
 
-## Active in-flight PRs (status as of 07:25 UTC)
+## Active in-flight PRs (status as of 08:00 UTC)
 
 | # | Student | Hypothesis | State | val_avg/mae_surf_p |
 |---|---|---|---|---|
 | **#3632** | tanjiro | Coord noise augmentation std=0.01 | **MERGED** 04:30 → baseline | 83.495 🏆 |
-| **#3716** | fern | n_head=8 (attention diversity) | CLOSED (val=93.17, head_dim=20 too narrow) | — |
+| **#3716** | fern | n_head=8 (attention diversity) | CLOSED (val=93.17) | — |
+| **#3715** | askeladd | mlp_ratio=4 (FFN capacity) | **CLOSED 08:00** (val=93.17, +9.68) | — |
+| **#3692** | tanjiro | Feature condition noise aug cols 2:24 | **CLOSED 08:00** (val=85.98, +2.48) | — |
 | **#3690** | edward | lr=1e-3 + coord noise | stale_wip — W&B FAIL (`96tusrhs` 86.32 / `x0icixhu` 87.54); advisor commented | close on submission |
-| **#3691** | thorfinn | --epochs 12 longer training | stale_wip — W&B `zqxkh9np` val=**82.50**, test=**74.10**; val wins −1.2% but test regresses +0.4%; advisor commented | merge candidate (val), test caveat |
-| **#3692** | tanjiro | Feature condition noise aug cols 2:24 | stale_wip — W&B FAIL (`xu5e6cul` 85.98 / `yg32qo3i` 89.19); advisor commented | close on submission |
-| **#3714** | alphonse | surf_weight=15 sweep | WIP — W&B FAIL (`j8rnxpc4` 88.23 / `84azuean` 88.27); `ru8t1lhr` running | close pending submission |
-| **#3715** | askeladd | mlp_ratio=4 (FFN capacity) | WIP — W&B FAIL (`emg4e9cv` 89.30 / `0ezsswb4` 93.17) | close pending submission |
-| **#3717** | frieren | coord_noise_std sweep (0.03, 0.005) | WIP — W&B FAIL (`4hpbl4nx` 89.06 / `mynslale` 86.29) | close pending submission |
-| **#3718** | nezuko | AoA jitter augmentation | WIP — W&B FAIL (`4h64yzzl` 84.96 — marginal) | close pending submission |
-| **#3741** | fern | eta_min=1e-5 cosine floor | WIP (no run started yet; gh rate limit on student pod) | awaiting |
+| **#3691** | thorfinn | --epochs 12 longer training | stale_wip — W&B `zqxkh9np` val=**82.50**, test=**74.10**; val wins −1.2%, test +0.4% | merge candidate (val), test caveat |
+| **#3714** | alphonse | surf_weight=15 sweep | WIP — W&B FAIL (`j8rnxpc4` 88.23 / `84azuean` 88.27); advisor commented | close on submission |
+| **#3717** | frieren | coord_noise_std sweep (0.03, 0.005) | WIP — W&B FAIL (std=0.03 `mynslale` 86.29; std=0.005 arm not launched); advisor asked for std=0.005 | awaiting |
+| **#3718** | nezuko | AoA jitter augmentation | WIP — W&B FAIL (`4h64yzzl` std=0.02 84.96 — marginal); advisor commented | close on submission |
+| **#3741** | fern | eta_min=1e-5 cosine floor | WIP (no run started yet) | awaiting |
+| **#3814** | askeladd | **SwiGLU FFN (round-5)** | WIP (assigned 08:00) | awaiting |
+| **#3815** | tanjiro | **TTA coord noise K=4/K=8 (round-5)** | WIP (assigned 08:00) | awaiting |
 
 ## Round-3 summary (vs old baseline val=88.24)
 
@@ -103,6 +105,27 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 | PR | Student | Hypothesis | Expected gain | Status |
 |---|---|---|---|---|
 | #3741 | fern | eta_min=1e-5 cosine LR floor | −0.5–2% (meaningful gradients in last epoch) | running |
+
+## Round-5 (assigned 08:00 UTC — plateau-protocol tier change)
+
+7 of 8 round-4 experiments failed to beat baseline (only thorfinn #3691 epochs=12 won at W&B val≈82.50). Per plateau protocol, round-5 moves up a tier from incremental tuning to architecture/inference/loss reformulation. Hypotheses ranked on public-literature merit + on-task fit only (see `RESEARCH_IDEAS_2026-05-16_07:25.md`).
+
+| PR | Student | Hypothesis | Expected gain | Risk |
+|---|---|---|---|---|
+| #3814 | askeladd | **SwiGLU FFN (param-matched)** | −1–4% val (exploratory; LM-literature signal) | MED |
+| #3815 | tanjiro | **TTA coord noise K=4/K=8** | −1–4% val (inference-only; OOD splits) | LOW |
+
+### Round-5 backlog (top 4 unassigned, ordered by priority)
+1. **onecycle-lr** — schedule change; super-convergence for short-budget training; pairs with lr=5e-4
+2. **asinh-output-norm** — target transform for heavy-tailed y (per-sample std 164→2077)
+3. **dsdf-clip** — 2-line input regularization (clip dims 4-11 to ±3σ)
+4. **per-domain-output-norm** — separate y_stats per (single, racecar, cruise) domain
+
+## Round-4a / Round-4b closeout (W&B-verified, awaiting student submissions)
+
+All 7 round-4 follow-ups regressed vs baseline 83.4954. The single near-miss (nezuko AoA std=0.02 at val=84.96, +1.47) reaffirms that augmentation on flow-condition scalars is at best neutral. Augmentation gains in this launch are concentrated on coord noise (#3632); architecture scaling (FFN width, attention heads, depth, hidden width) is exhausted at the 30-min budget.
+
+The only winner is thorfinn #3691 (epochs=12 / slower cosine), at W&B val≈82.50, test≈74.10 — pending terminal SENPAI-RESULT submission to merge.
 
 ## Round-4 W&B verdicts (07:25 UTC; awaiting student SENPAI-RESULT submissions)
 
