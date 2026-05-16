@@ -792,3 +792,98 @@ Student's research hygiene (exposing 3 uncommitted seed runs and explicitly call
 
 - **#3525 fern**: Lion optimizer (Chen et al. 2023) — sign-momentum, half the optimizer state of AdamW, replaces per-param LR adaptation with uniform sign updates. Tests whether the camber_rc grad-norm asymmetry that grad-clip exposed is mediated by AdamW's `v` term. lr=1.5e-4, wd=1e-3 (Lion-scaled from AdamW 5e-4/1e-4).
 - **#3526 frieren**: torch.compile(dynamic=True) — operator fusion attacking the per-kernel dispatch overhead. Different mechanism from slice_num=32 (smaller tensors) and bf16 (smaller dtype). Predicted 10-20% per-epoch speedup → 12-13 realized epochs vs 9 baseline. Inductor cache fresh on first run.
+
+## 2026-05-15 23:30 — PR #3500: slice_num 64→32 — CLOSED
+
+- **Student branch**: `charliepai2i24h1-alphonse/slice-num-32`
+- **Hypothesis**: Halve PhysicsAttention slice tokens (64→32) as a direct memory-bandwidth attack. Predicted 15-25% per-epoch speedup → 15-18 realized epochs vs 8-9 baseline.
+
+### Results
+
+| Metric | Value | Baseline (#3136) | Δ |
+|---|---|---|---|
+| **val_avg/mae_surf_p (best @ ep11/12)** | **136.5227** | 126.3241 | **+8.1% (WORSE)** |
+| test_avg/mae_surf_p (NaN-safe 4-split) | 123.1666 | — | — |
+| Per-epoch wall time | 174.3 s (mean of 11) | ~205 s | **-15.4% (throughput win)** ✓ |
+| epochs realized | **11** of 12 | 8-9 | +22-37% (throughput win) ✓ |
+| n_params | 1,442,241 | 1,447,521 | -6,720 (PR overestimated at -30,720) |
+| peak_memory_gb | 55.53 | — | higher than predicted ~42 GB |
+
+| Split | val mae_surf_p | Baseline | Δ |
+|---|---|---|---|
+| val_single_in_dist | 173.09 | 158.79 | +9.0% |
+| **val_geom_camber_rc** | **151.29** | **127.26** | **+18.9%** (absorbs ~all regression) |
+| val_geom_camber_cruise | 103.09 | 102.20 | +0.9% (≈ neutral) |
+| val_re_rand | 118.61 | 117.04 | +1.3% (≈ neutral) |
+
+- **Metric artifacts**: `models/model-slice-num-32-20260515-232341/metrics.jsonl`
+
+### Verdict: CLOSED — throughput win real but capacity asymmetric
+
+**The hypothesis split into two outcomes**:
+1. ✅ **Throughput**: confirmed at +15.4% per-epoch, 11 realized epochs vs 8-9 baseline (low end of predicted 15-25%).
+2. ❌ **Quality**: +8.1% regression dominated by val_geom_camber_rc (+18.9% vs ≤+1.3% on other splits).
+
+**Key diagnostic findings**:
+- **Slice mechanism is capacity-bottlenecked, not memory-bottlenecked**: peak_memory came in at 55.5 GB, substantially higher than the PR-body's ~42 GB anchor. The per-node-to-slice projection (`B × N≈240K × slice_num × heads × 4 bytes`) dominates VRAM, not the slice-attention matrix. The wider trunk's residual stream + intermediate activations are the real memory consumers.
+- **camber_rc requires slice-token resolution**: +18.9% regression on rc while cruise and re_rand are within ±1.3% of baseline. The held-out tandem-camber split needs more mesh-structure resolution than slice_num=32 provides. Other splits are slice_num-insensitive at this scale.
+- **Param-count delta was overestimated**: actual -6,720 (not -30,720). Slice projection is `dim_head × slice_num` per head, not `n_hidden × slice_num` per layer.
+
+**Permanent finding**: slice axis is mapped — 64 baseline, 32 too narrow for rc. Future PRs should expect tandem-geometry-sensitive operators to be parametrically expensive on the wider trunk. **camber_rc is the most slice-sensitive split** — a useful invariant for future capacity-vs-throughput tradeoffs.
+
+## 2026-05-15 23:32 — PR #3437: Domain curriculum (racecar_single first → uniform) — CLOSED
+
+- **Student branch**: `charliepai2i24h1-thorfinn/domain-curriculum`
+- **Hypothesis**: WeightedRandomSampler with easy_boost=3.0 starting from racecar_single-only, transitioning to uniform by epoch 6 (transition_frac=0.5). Predicted easy-domain foundation → better OOD generalization on geom and re_rand splits.
+
+### Results
+
+| Metric | Value | Baseline (#3136) | Δ |
+|---|---|---|---|
+| **val_avg/mae_surf_p (best @ ep11/12)** | **146.4934** | 126.3241 | **+15.96% (WORSE)** |
+| test_avg/mae_surf_p (NaN-safe 4-split) | 134.5920 | — | — |
+| Per-epoch wall time | 181 s (mean) | ~120 s | **+50% overhead** (DataLoader rebuild) |
+| epochs realized | 11 of 12 (just over 30-min cap) | 14 | — |
+
+| Split | val mae_surf_p | Baseline | Δ |
+|---|---|---|---|
+| val_single_in_dist | 161.54 | 158.79 | +1.7% (≈ neutral) |
+| val_geom_camber_rc | 159.80 | 127.26 | **+25.6%** (predicted to win, regressed worst) |
+| val_geom_camber_cruise | 128.18 | 102.20 | +25.4% |
+| val_re_rand | 136.45 | 117.04 | **+16.6%** (predicted to win, regressed) |
+
+### Curriculum diagnostic — domain mix fired exactly as designed
+
+| Epoch | rc_single | rc_tandem | cruise | val_avg/mae_surf_p |
+|---|---|---|---|---|
+| 1 | 0.94 | 0.03 | 0.03 | 330.69 |
+| 4 | 0.65 | 0.18 | 0.18 | 231.14 |
+| 7 (uniform) | 0.33 | 0.33 | 0.33 | 182.29 |
+| 11 (terminal) | 0.33 | 0.33 | 0.33 | 146.49 |
+
+Mix reaches uniform at epoch 7 as designed. val_avg/mae_surf_p still descending steeply at epoch 11 (~4% per-epoch), confirming under-training.
+
+- **Metric artifacts**: `models/model-domain-curriculum-20260515-232319/metrics.jsonl`
+
+### Verdict: CLOSED — three independent failure modes
+
+1. **Hypothesis predictions inverted**: PR predicted val_geom_camber_rc and val_re_rand wins (OOD splits should benefit from broader foundation). Data shows rc regressed +25.6% (worst) and re_rand +16.6% — both predicted-to-win splits regressed.
+
+2. **Structural wall-time overhead +50%**: DataLoader rebuilt each epoch + WeightedRandomSampler weights rebuilt each epoch + worker cold-start. Mean 181 s vs ~120 s baseline. Cut realized epochs from 14 → 11.
+
+3. **Curriculum is budget-elastic**: needs slack at both ends (easy phase + uniform-recovery phase). The 30-min cap doesn't have either headroom — 6 of 11 epochs were "starving" hard domains.
+
+**Student's suggested follow-ups** all retain the DataLoader-rebuild overhead. Even milder curriculum (easy_boost=1.5) couldn't recover the 50% wall-time penalty. Closed cleanly; if curriculum is revisited, **infrastructure (in-place WeightedRandomSampler weight mutation)** must come first.
+
+**Permanent finding for the log**: per-batch loss `surf_loss` can still produce NaN even after #3378 NaN-safe accumulator fix (cruise test sample's Inf GT propagates pre-accumulator). One-line fix candidate for future PR; not in current scope.
+
+## 2026-05-15 23:35 — PR #3478 edward narrow+bf16: NUDGE (6+ hours stale, only assignment commit)
+
+- **Student branch**: `charliepai2i24h1-edward/narrow-bf16-confirm`
+- **Status**: dispatched at 17:05 UTC; only 1 commit (the assignment commit `35e4bac...`). Pod heartbeating, Claude not running training.
+- **Action**: explicit advisor reminder posted with recap of single-attributable change (n_hidden 192→128, n_head 6→4, EMA+surf_weight=25+bf16, epochs=18 T_max=18) and the three decisive outcomes that gate the stop/pivot decision. Three round-3 architectural PRs (#3496, #3498, #3500) stacking on the wider trunk depend on this answer.
+
+## 2026-05-15 23:38 — PRs #3555, #3556: New round-4 dispatches
+
+- **#3555 alphonse**: coordinate jitter augmentation (σ=0.01 Gaussian noise on input (x,z) coords during training, identity at eval). Data-axis regularizer attacking camber_rc overfitting from input side. Untouched mechanism class on this track.
+- **#3556 thorfinn**: mixed MSE+L1 surface loss (0.7*MSE + 0.3*L1). Loss-formulation axis, distinct mechanism from askeladd's in-flight SmoothL1 (smooth blend vs linear combination). Attacks heavy-tailed pressure residual distribution + the camber_rc gradient-norm asymmetry fern uncovered.
