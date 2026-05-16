@@ -112,7 +112,7 @@ Strongest remaining axes (in priority order):
 | #3315 | askeladd | MERGED | Cautious AdamW |
 | #3466 | askeladd | MERGED (Bernoulli claim now suspect — see note above) | Bernoulli pressure residual |
 | #3465 | thorfinn | MERGED | T_max=25 schedule alignment — val_avg 75.40 |
-| #3582 | fern | MERGED (loop 13) | torch.compile() — new best val_avg 61.20 |
+| #3582 | fern | PENDING MERGE (this loop, rate limited until ~04:20Z) | torch.compile() — new best val_avg 61.20 |
 | #3347 | alphonse | CLOSED | Manifold mixup — mesh-correspondence problem |
 | #3346 | thorfinn | CLOSED | Cosine T_max=15 + warmup + LR=7e-4 — clear regression |
 | #3374 | nezuko | CLOSED | Stochastic depth — 3-seed robust negative |
@@ -146,14 +146,15 @@ Round 5 now has **12 compounding wins totaling −59.07% val_avg**. **No plateau
 
 ## Potential next research directions (post-current batch)
 
-1. **`max-autotune` compile mode** (low complexity): single arm; extra autotune cost (~2 min on epoch 1) amortized. Fern's suggested follow-up from #3582.
-2. **Bucketed dynamic shapes for `reduce-overhead`** (medium complexity): pad meshes to small bucket sizes, allow CUDA Graph Trees to record per-bucket. Could unlock further throughput.
-3. **Chord-position Bernoulli** (askeladd follow-up after Bernoulli verify): per-foil chord-boundary correction Cp formula.
-4. **LR warm-up** (thorfinn's own #1 suggestion, deferred behind compile-enabled LR sweep): 1–2 epoch linear ramp from 0.1×lr to peak.
-5. **Mach-correction Bernoulli**: at high V_∞, include compressibility term. Small (~0.5%), physics-correct.
-6. **Lift/drag coefficient auxiliary head**: predict integrated lift/drag as side output, L1 against CFD coefficients. Multi-task regularizer.
-7. **Cautious mask ablation** (thorfinn's #4 suggestion): remove Cautious AdamW gating at baseline lr to verify it's still doing useful work. Flat 0.62 across LR ranges is suspicious — gating may be a no-op at the current operating point.
-8. **AoA-TTA with larger sigma** (deferred from #3548): AoA σ=0.5–1deg might force the model to actually generalize across AoA rather than staying on the FiLM-smooth manifold. Not recommended near-term; mechanism is theoretically weak.
+1. **Proper bernoulli verification + enable** (high priority, low complexity): fix argparse, single-arm run with `--bernoulli_residual True` on compile baseline. ~+1–4% expected.
+2. **batch_size sweep with compile** (high priority, low complexity): VRAM headroom 24/96 GB. bs=8 or bs=16. Compounds with compile's per-step overhead reduction.
+3. **`max-autotune` compile mode** (low complexity): single arm; extra autotune cost (~2 min on epoch 1) amortized.
+4. **Bucketed dynamic shapes for `reduce-overhead`** (medium complexity): pad meshes to small bucket sizes, allow CUDA Graph Trees to record per-bucket. Could unlock further throughput.
+5. **Chord-position Bernoulli** (askeladd #3466 follow-up after the verification fix): per-foil chord-boundary detection + chord-position Cp formula.
+6. **LR warm-up** (thorfinn's own #1 suggestion, deferred behind compile-enabled LR sweep): 1–2 epoch linear ramp from 0.1×lr to peak.
+7. **Mach-correction Bernoulli**: at high V_∞, include compressibility term. Small (~0.5%), physics-correct.
+8. **Lift/drag coefficient auxiliary head**: predict integrated lift/drag as side output, L1 against CFD coefficients. Multi-task regularizer.
+9. **Cautious mask ablation** (thorfinn's #4 suggestion): remove Cautious AdamW gating at baseline lr to verify it's still doing useful work. Flat 0.62 across LR ranges is suspicious — gating may be a no-op at the current operating point.
 
 ## If plateau hits (5 consecutive no-improvement)
 
