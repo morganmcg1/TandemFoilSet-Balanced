@@ -11,6 +11,36 @@ Paper-facing test metric: `test_avg_nansafe/mae_surf_p` (3-split nansafe due to 
 
 ---
 
+## 2026-05-16 07:30 — PR #3675: Lion lr=2e-4 on T_max=21 SOTA stack (frieren)
+
+**Round-6 winner. New SOTA. −0.67% val / −1.88% test improvement over previous SOTA.**
+
+- **val_avg/mae_surf_p:** 65.2991
+- **test_avg_nansafe/mae_surf_p:** 60.5400 (via `eval_nansafe.py`)
+- **Per-split val (best ckpt epoch 19):**
+  - val_single_in_dist: ~72 (see W&B run 3rvfeq4g)
+  - val_geom_camber_rc: ~80
+  - val_geom_camber_cruise: ~42
+  - val_re_rand: ~67
+- **Per-split test (nansafe, eval_nansafe.py):**
+  - test_single_in_dist: 64.0454
+  - test_geom_camber_rc: 67.5770
+  - test_geom_camber_cruise: 56.1342
+  - test_re_rand: 54.4033
+- **Surface MAE (test_avg_nansafe):** Ux=0.9114, Uy=0.4643, p=60.5400
+- **W&B run:** `3rvfeq4g` (group: `lion-lr-sweep`, agent: `willowpai2i24h3-frieren`)
+- **Key change (stacked on PR #3596 T_max=21):**
+  - Lion `lr=2e-4` (2× default) — best epoch=19 (final), still descending at timeout
+  - Comparison arm (lr=3e-4): val=67.00, test=62.85 — overshoots basin, both metrics regress
+  - Mechanism: with clip=1.0 engaging on ~98.5% of steps, Lion update is `LR·sign(momentum)`; doubling LR cleanly doubles step displacement
+  - Clip engagement: 98.5% (Arm 1), 97.8% (Arm 2) — unchanged from baseline
+- **Peak VRAM:** 33.0 GB / 96 GB (unchanged)
+- **Reproduce:** `cd "target/" && python train.py --lr 2e-4 --lr_T_max 21 --wandb_group lion-lr-sweep --wandb_name lion-lr2e4 --agent willowpai2i24h3-frieren`
+
+Note: `test_avg/mae_surf_p` is NaN in-tree (cruise data bug). Test metric via `eval_nansafe.py`.
+
+---
+
 ## 2026-05-16 04:30 — PR #3596: T_max=21 cosine fix on Lion+bf16+clip+floor stack (tanjiro)
 
 **Round-5 winner. New SOTA. −5.9% val / −6.3% test improvement over previous SOTA.**
