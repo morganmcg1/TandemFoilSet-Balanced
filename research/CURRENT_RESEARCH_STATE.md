@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 07:45
+- **Updated:** 2026-05-16 08:30
 - **Track:** `willow-pai2i-24h-r5` (advisor branch `icml-appendix-willow-pai2i-24h-r5`, base `icml-appendix-willow`)
 - **Per-run budget:** 30 min wall clock, ≤50 epochs, 1 GPU @ 96 GB VRAM
 
@@ -10,24 +10,25 @@ No directives received in current heartbeat cycle. GH issue #3292 open for `test
 
 ## Current baseline
 
-**`val_avg/mae_surf_p = 81.66`** (3-arm mean) — L1 surface loss + OneCycleLR right-sized to actual budget + grad_clip max_norm=1.0, PR #3307, **merged** (2026-05-16 01:35)
+**`val_avg/mae_surf_p = 77.06`** (4-arm mean) — batch_size=2 + L1 surface loss + OneCycleLR right-sized to actual budget + grad_clip max_norm=1.0, PR #3616, **merged** (2026-05-16 08:30)
 
-| Split | val mae_surf_p (best arm `iomzoqit`) | 3-arm mean |
+| Split | val mae_surf_p (best arm `1xg2jnmd`) | 4-arm mean |
 |---|---|---|
-| val_single_in_dist | 92.04 | 93.33 |
-| val_geom_camber_rc | 92.30 | 92.67 |
-| val_geom_camber_cruise | 60.31 | 61.87 |
-| val_re_rand | 76.60 | 78.79 |
-| **val_avg** | **80.31** | **81.66** |
+| val_single_in_dist | 80.27 | 83.49 |
+| val_geom_camber_rc | 86.61 | 86.63 |
+| val_geom_camber_cruise | 58.56 | 61.23 |
+| val_re_rand | 75.16 | 76.89 |
+| **val_avg** | **75.15** | **77.06** |
 
-test 3-split (excl. cruise) = **77.97** (best arm) / **79.28** (mean) | W&B best run: `iomzoqit`
+test 3-split (excl. cruise) = **72.44** (best arm) / **73.34** (mean) | W&B best run: `1xg2jnmd`
 
-Head config: `OneCycleLR(max_lr=1e-3, total_steps=len(train_loader)*14, pct_start=0.1, div_factor=25, final_div_factor=1e4)` + per-batch step + `if global_step < scheduler.total_steps` guard + L1 surf loss + grad_clip max_norm=1.0
+Head config: `batch_size=2` + `OneCycleLR(max_lr=1e-3, total_steps=len(train_loader)*14, pct_start=0.1, div_factor=25, final_div_factor=1e4)` + per-batch step + `if global_step < scheduler.total_steps` guard + L1 surf loss + grad_clip max_norm=1.0 + AdamW
 
 ## All merged results (best-first)
 
 | PR | Change | val_avg | Δ vs prior baseline |
 |---|---|---|---|
+| #3616 fern | batch_size=2 (2× gradient updates/epoch) | **77.06** (mean) / 75.15 (best) | −5.63% ✓ **MERGED** |
 | #3307 askeladd | OneCycleLR right-sized + L1 surf (compound) | **81.66** (mean) / 80.31 (best) | −9.30% ✓ **MERGED** |
 | #3434 edward | L1 surface loss (vol MSE + surf L1) | **90.04** | −8.94% ✓ **MERGED** |
 | #3320 nezuko | CosineAnnealingWarmRestarts T_0=5 T_mult=2 | **98.88** | −15.6% ✓ **MERGED** |
@@ -37,14 +38,14 @@ Head config: `OneCycleLR(max_lr=1e-3, total_steps=len(train_loader)*14, pct_star
 
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
-| #3614 | thorfinn | OneCycleLR **max_lr=1.5e-3** (midpoint retest after 2e-3 regressed) | Running — completes LR sweep |
-| #3720 | nezuko | **Lion optimizer (sign-based momentum)** — 3-arm max_lr sweep | **Potential paradigm-shift winner** — 2 arms show ~68-70 (−15.3%); waiting for arm3 + terminal post |
-| #3616 | fern | `batch_size=2` (2× gradient updates/epoch) | **Potential winner** — 4 arms mean ~77.06 (−5.6%); waiting for terminal post |
-| #3617 | edward | log-space L1 surface pressure loss | Running — 5-arm mean 80.22 (−1.8%); best arm 78.13 is seed-lucky |
-| #3699 | tanjiro | Lookahead(AdamW, k=5, α=0.5) optimizer wrapper | Running — optimizer-axis variance reduction |
-| #3787 | alphonse | **Lion LR sweep completion** at max_lr={1e-3 replica, 5e-4, 2e-3} | **New (round 4.1)** — replicates nezuko + fills gaps |
-| #3791 | frieren | **bf16 mixed precision** (3-arm: 14, 21, 28 effective epochs) | **New (round 4.1)** — throughput + extra-epoch test |
-| #3797 | askeladd | **FiLM conditioning** on (Re, AoA, NACA) physical priors | **New (round 4.1)** — architectural axis begins |
+| #3720 | nezuko | **Lion optimizer** — 3-arm max_lr sweep | **Potential paradigm-shift winner** — 2 arms ~68-70 (−10.5% vs new baseline 77.06); waiting for terminal post |
+| #3812 | fern | **batch_size=1** (extends bs trend) | New — tests diminishing returns; reports actual steps completed |
+| #3617 | edward | log-space L1 surf loss | **Sent back** — retest on new bs=2 baseline; add surf_weight=30 arms |
+| #3699 | tanjiro | Lookahead(AdamW, k=5, α=0.5) | Running — stale_wip; no results yet; nudged |
+| #3614 | thorfinn | OneCycleLR max_lr=1.5e-3 | Running — stale_wip; original 2e-3 results posted, retest at 1.5e-3 ongoing; nudged re new baseline |
+| #3787 | alphonse | Lion LR sweep at {1e-3, 5e-4, 2e-3} | Running — independent Lion LR replication |
+| #3791 | frieren | bf16 mixed precision (14/21/28 epochs) | Running — throughput + quality |
+| #3797 | askeladd | FiLM conditioning on (Re, AoA, NACA) | Running — architectural axis |
 
 ## Round 4 closed/sent-back so far
 

@@ -1,5 +1,41 @@
 # SENPAI Research Results
 
+## 2026-05-16 08:30 — PR #3616 fern bs=2 MERGED + PR #3617 edward log-space sent back + #3812 new fern assignment
+
+### #3616 fern batch_size=2 — MERGED ✓ (new baseline 77.06)
+
+- Branch: `willowpai2i24h5-fern/bs2-onecycle`
+- Hypothesis: halving batch_size → 2× gradient updates per 30-min budget → better convergence
+- W&B 4-arm result:
+
+| Arm | W&B ID | val_avg | val_id | val_rc | val_cruise | val_re | test_3split |
+|---|---|---|---|---|---|---|---|
+| best | `1xg2jnmd` | **75.15** | 80.27 | 86.61 | 58.56 | 75.16 | **72.44** |
+| arm | `eesuqkiy` | 77.98 | 85.01 | 85.69 | 64.33 | 76.89 | 74.03 |
+| arm | `stuakeo3` | 77.74 | 84.56 | 86.14 | 60.94 | 79.31 | 73.56 |
+| arm | `cbr2vdd2` | 77.37 | 84.12 | 88.09 | 61.10 | 76.19 | 73.31 |
+| **4-arm mean** | | **77.06** | 83.49 | 86.63 | 61.23 | 76.89 | **73.34** |
+
+- **Δ vs prior baseline (81.66):** −4.60 pp mean / −5.16 pp best (−5.63% / −6.38%)
+- **Decision:** MERGED — clear winner, all 4 arms beat baseline, spread 2.83 pp. Mechanism confirmed: 2× gradient updates per 30-min budget (10500 vs 5250 steps) gives longer fine-tuning in anneal phase. Per-step is slower at bs=2 but 14 epochs still fit in 30 min. Peak VRAM drops 94→79 GB (15 GB headroom freed).
+- **New baseline: val_avg/mae_surf_p = 77.06 (mean) / 75.15 (best arm 1xg2jnmd)**
+- **Key insight:** val_geom_camber_cruise barely moved (61.87→61.23, −0.64 pp) while all other splits improved 2-10 pp. Cruise is bottlenecked by something orthogonal to optimization throughput (likely related to the mask inf×0 issue from #3292).
+
+### #3617 edward log-space L1 — SENT BACK for bs=2 retest
+
+- Original result vs 81.66: best-3 mean 79.03 (−2.63 pp), best arm 78.13 (jppqy6xx)
+- Against new baseline (77.06): 79.03 > 77.06 → slight regression (+2.6%)
+- Per-split OOD signal is real: cruise −4.38 pp, re_rand −3.85 pp vs old baseline
+- **Decision:** Sent back to retest log-space on bs=2 baseline. Instructions: rebase, run 3 arms at bs=2 surf_weight=10, run 1-2 arms at bs=2 surf_weight=30 (log loss ~3× smaller, effective weight shifted)
+- **Hypothesis for retest:** log-space is orthogonal to bs=2 (different mechanism) and should stack if surf_weight is properly re-tuned
+
+### #3812 fern — New assignment: batch_size=1 (continuation test)
+
+- bs=4→bs=2: −5.63%. Testing if bs=2→bs=1 continues the trend.
+- Key diagnostic: actual steps completed (wall-clock overhead at bs=1 may limit total updates)
+
+---
+
 ## 2026-05-16 07:45 — Round 4 mid-round closures (3) + Round 4.1 assignments (3)
 
 Three regressing round-4 PRs closed based on W&B data (stale_wip students had not posted terminal SENPAI-RESULT markers; closures backed by clean monotonic W&B trajectories). Three new round-4.1 assignments issued to newly-idle students.
