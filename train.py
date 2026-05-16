@@ -217,17 +217,21 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, channel_weights, device) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
-    ``score.py`` (float64, non-finite samples skipped).
+    ``score.py`` (float64, non-finite samples skipped). ``channel_weights`` is
+    a [3] tensor applied to per-channel Huber loss to match training; the
+    division by ``channel_weights.sum()`` keeps the loss scale comparable to
+    an unweighted baseline.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+    cw_sum = channel_weights.sum().clamp(min=1e-6)
 
     with torch.no_grad():
         for x, y, is_surface, mask in loader:
@@ -251,15 +255,16 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             pred = model({"x": x_norm})["preds"]
 
             sq_err = F.smooth_l1_loss(pred, y_norm, reduction='none', beta=1.0)
+            sq_err_w = sq_err * channel_weights  # broadcast over [B, N, 3]
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
-                (sq_err * vol_mask.unsqueeze(-1)).sum()
-                / vol_mask.sum().clamp(min=1)
+                (sq_err_w * vol_mask.unsqueeze(-1)).sum()
+                / (vol_mask.sum().clamp(min=1) * cw_sum)
             ).item()
             surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
-                / surf_mask.sum().clamp(min=1)
+                (sq_err_w * surf_mask.unsqueeze(-1)).sum()
+                / (surf_mask.sum().clamp(min=1) * cw_sum)
             ).item()
             n_batches += 1
 
@@ -306,6 +311,7 @@ def write_experiment_summary(
     test_avg: dict | None,
     n_params: int,
     model_config: dict,
+    channel_weights: list[float] | None = None,
 ) -> None:
     """Write a local summary next to the best checkpoint."""
     summary: dict = {
@@ -314,6 +320,7 @@ def write_experiment_summary(
         "git_commit": _git_commit_short(),
         "n_params": n_params,
         "model_config": model_config,
+        "channel_weights": channel_weights,
         "checkpoint": str(model_path),
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
@@ -409,6 +416,13 @@ model_config = dict(
     output_dims=[1, 1, 1],
 )
 
+# Per-channel loss weights for [Ux, Uy, p]. Upweight pressure (the primary
+# ranking metric, val_avg/mae_surf_p) so gradient mass shifts toward what we
+# evaluate on. Divided by channel_weights.sum() in the loss so total scale
+# stays close to an unweighted baseline (no LR retune needed).
+channel_weights = torch.tensor([1.0, 1.0, 2.0], device=device)
+channel_weights_list = channel_weights.tolist()
+
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
@@ -452,6 +466,7 @@ with open(model_dir / "config.yaml", "w") as f:
     yaml.safe_dump({
         **asdict(cfg),
         "model_config": model_config,
+        "channel_weights": channel_weights_list,
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
@@ -481,11 +496,13 @@ for epoch in range(MAX_EPOCHS):
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         sq_err = F.smooth_l1_loss(pred, y_norm, reduction='none', beta=1.0)
+        sq_err_w = sq_err * channel_weights  # broadcast [3] over [B, N, 3]
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        cw_sum = channel_weights.sum()
+        vol_loss = (sq_err_w * vol_mask.unsqueeze(-1)).sum() / (vol_mask.sum().clamp(min=1) * cw_sum)
+        surf_loss = (sq_err_w * surf_mask.unsqueeze(-1)).sum() / (surf_mask.sum().clamp(min=1) * cw_sum)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -504,7 +521,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, channel_weights, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -528,6 +545,7 @@ for epoch in range(MAX_EPOCHS):
         "epoch": epoch + 1,
         "seconds": dt,
         "peak_memory_gb": peak_gb,
+        "channel_weights": channel_weights_list,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
@@ -562,7 +580,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, channel_weights, device)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
@@ -586,6 +604,7 @@ if best_metrics:
         test_avg=test_avg,
         n_params=n_params,
         model_config=model_config,
+        channel_weights=channel_weights_list,
     )
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping test evaluation.")
