@@ -380,6 +380,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    final_div_factor: float = 1e4
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -438,7 +439,7 @@ scheduler = torch.optim.lr_scheduler.OneCycleLR(
     total_steps=len(train_loader) * 14,
     pct_start=0.1,
     div_factor=25,
-    final_div_factor=1e4,
+    final_div_factor=cfg.final_div_factor,
 )
 
 run = wandb.init(
