@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 05:25 UTC (Cycle 15 — PLATEAU)
+- **Date:** 2026-05-16 05:40 UTC (Cycle 16 — PLATEAU continues; awaiting compound terminal results)
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r2`
 - **Target base branch:** `icml-appendix-willow`
 - **W&B project:** `wandb-applied-ai-team/senpai-v1`
@@ -19,89 +19,88 @@ None — no human directives on this launch.
 - W&B run: `99jk5guj`
 - Per-split (val | test): single=93.78|83.21, camber_rc=96.06|81.19, camber_cruise=54.93|46.55, re_rand=74.83|66.36
 
-**Key finding:** FiLM-style per-channel gamma/beta conditioning on log-Re. Zero-init after `self.apply`, first-row `re_cond = x[:, 0, 13:14]` to avoid padding confounding. −11.8% val / −16.5% test vs prior baseline. Strongest single-experiment gain to date.
+## PLATEAU STATUS — Cycle 16 W&B snapshot
 
-## PLATEAU STATUS — 10 compound experiments, ZERO beat baseline
+The FiLM-Re baseline (val=79.90, test=69.33) remains the attractor. All 8 active PRs are running compound experiments on top of it; **none beat both val AND test baselines**. Best val-only "wins" are within seed-variance noise and regress on test.
 
-The FiLM-Re baseline (val=79.90, test=69.33) has proven to be a strong attractor. None of the 10 finished compound experiments has beaten it. The closest miss is thorfinn FiLM-Re+div-free at val=80.86 (1.2% off), but it does not pass the threshold.
+### Cycle 16 W&B finished runs (all on FiLM-Re baseline)
 
-**Cycle 11-12 compound experiment results (all on FiLM-Re baseline):**
+| Run | Student | Config | val_avg | test_avg | Δ val | Δ test |
+|---|---|---|---|---|---|---|
+| `f2uh3ojn` | tanjiro | FiLM-Re + β=0.02 (best seed) | **79.14** | 72.60 | **−0.95%** | +4.7% |
+| `9tgh279d` | thorfinn | FiLM-Re + div_weight=0.01 (best seed) | **79.82** | 71.28 | **−0.10%** | +2.8% |
+| `dqe95m2e` | edward | SWA on FiLM-Re | 80.62 | 71.96 | +0.9% | +3.8% |
+| `p2sxwokx` | frieren | Fourier bands=16 + FiLM-Re | 81.29 | 72.73 | +1.7% | +4.9% |
+| `dgb6fp7k` | alphonse | Multi-signal cond_dim=5 (best) | 82.38 | 73.95 | +3.1% | +6.7% |
+| `vwusk9ub` | askeladd | FiLM-Re + surf_weight=15 | 82.56 | 76.05 | +3.3% | +9.7% |
+| `m3u0225j` | tanjiro | FiLM-Re + β=0.02 (seed 2) | 83.99 | 78.71 | +5.1% | +13.5% |
+| `hw2aksew` | nezuko | FiLM-Re + geom-slice (seed 1) | 84.41 | 77.99 | +5.6% | +12.5% |
+| `m586ncuo` | nezuko (old) | geom-slice on PRE-FiLM baseline | 128.34 | 115.71 | — | — |
+| `4bw2hrdu` | tanjiro | FiLM-Re + β=0.02 (seed 3) | 86.16 | 74.56 | +7.8% | +7.5% |
+| `t60xj83c` | askeladd | FiLM-Re + surf_weight=5 | 86.78 | 77.00 | +8.6% | +11.1% |
+| `4p8o19be` | fern | OneCycleLR lr=5e-4 | 88.76 | 82.61 | +11.1% | +19.2% |
+| `myipsm56` | fern | OneCycleLR lr=5e-4 (seed 2) | 94.32 | 86.68 | +18.0% | +25.0% |
+| `pftv6no3` | thorfinn | FiLM-Re + div_weight=0.01 (worst seed) | 95.46 | 76.40 | +19.5% | +10.2% |
+| `e55dm25a` | frieren | Fourier bands=16 (worst seed) | 96.09 | 78.46 | +20.3% | +13.2% |
+| `hpw0veo8` | edward | SWA (worst seed) | 102.24 | 79.75 | +27.9% | +15.0% |
 
-| Run | Student | Config | val_avg | test_avg | Δ val |
-|---|---|---|---|---|---|
-| `hukaxiix` | thorfinn | div_w=0.01 (1 of 2 arms) | **80.86** | 71.58 | +1.2% |
-| `snjlp7xq` | alphonse | multi-signal cond_dim=5 | 82.46 | 72.73 | +3.2% |
-| `m3u0225j` | tanjiro | β=0.02 | 83.99 | 78.71 | +5.1% |
-| `hw2aksew` | nezuko | geom-slice seed 1 | 84.41 | 77.99 | +5.6% |
-| `4bw2hrdu` | tanjiro | β=0.01 | 86.16 | 74.56 | +7.8% |
-| `t60xj83c` | askeladd | surf_weight=5 | 86.78 | 77.00 | +8.6% |
-| `4p8o19be` | fern | OneCycleLR lr=5e-4 | 88.76 | 82.61 | +11.1% |
-| `pftv6no3` | thorfinn | div-free arm 2 | 95.46 | 76.40 | +19.5% |
-| `e55dm25a` | frieren | Fourier bands=16 | 96.09 | 78.46 | +20.3% |
-| `hpw0veo8` | edward | SWA (50% start) | 102.24 | 79.75 | +27.9% |
+### Still running (cycle 16)
 
-**Mechanistic conclusions:**
-- **β decrease alone DOES NOT compound with FiLM-Re**: standalone β=0.02 gave val=88.11; β=0.02 on FiLM-Re gave val=83.99 — improvement is smaller and FiLM-Re's role dominates.
-- **div-free physics loss is FRAGILE on FiLM-Re**: one seed val=80.86 (close), other val=95.46. High variance suggests interaction with FiLM-Re training dynamics.
-- **geom-slice DOES NOT compound additively with FiLM-Re**: standalone val=85.60, with FiLM-Re val=84.41. Marginal improvement, much less than the orthogonal OOD analysis suggested.
-- **Multi-signal FiLM is promising as REPLACEMENT, not addition**: cond_dim=5 at val=82.46 — second-best, may indicate the FiLM mechanism itself can be improved further.
-- **SWA, OneCycleLR, more Fourier bands ALL HURT** at the 30-min wall-clock budget. These techniques need longer training to pay off.
+| Run | Student | Config | early val |
+|---|---|---|---|
+| `x4n1pwm9` | tanjiro | β=0.01 or β=0.02 seed 4 | 170 |
+| `x0yn85w0` | thorfinn | div_weight=0.005 or seed 4 | 175 |
+| `h40iutne` | nezuko | geom-slice v2 (seed 2) | — |
+| `v1bn948u` | fern | OneCycleLR lr=8e-4 or seed 3 | 205 |
+| `vwl10vqs` | frieren | bands=12 or seed | 208 |
+| `dae3ipda` | alphonse | multi-signal cond_dim=9 | 152 |
+| `4jyj4mwj` | edward | SWA seed 3 | — |
+| `5jbmpaw2` | askeladd | surf_weight=20 | 188 |
 
-## Plateau Protocol — Researcher Agent Dispatched (2026-05-16 05:25)
+## Cycle 16 mechanistic observations
 
-Per CLAUDE.md plateau protocol (10 failed experiments triggers escalation), the researcher-agent has been dispatched to explore:
-1. Architecture-tier replacements (GNN, FNO, Galerkin, U-Net)
-2. Loss formulation paradigms (percentile-weighted, focal, residual learning)
-3. Data representation (per-domain normalization, log-space targets)
-4. Self-supervised pretrain (masked reconstruction)
-5. Inference-time techniques (TTA, ensemble)
-6. Hyperparameter regimes not yet explored
+- **High seed variance everywhere**: tanjiro's β=0.02 ranges 79.14 → 86.16 (3 seeds, mean 83.10); thorfinn's div=0.01 ranges 79.82 → 95.46 (mean 85.38). FiLM-Re β=0.05 baseline showed 79.90 → 87.51 (mean 84.65).
+- **Best-seed val "wins" are within noise**: tanjiro 79.14 and thorfinn 79.82 are statistically indistinguishable from baseline 79.90.
+- **Test consistently regresses even on val-winning seeds**: tanjiro 72.60 (+4.7%), thorfinn 71.28 (+2.8%). This signal — val improves while test regresses — suggests checkpoint selection is finding outlier-favorable points rather than truly better models.
+- **Conclusion**: the plateau is real. Mean-of-seeds shows NO improvement on FiLM-Re baseline. Cycle 15 researcher-agent dispatch was the right call.
 
-Output expected at `/workspace/senpai/target/research/RESEARCH_IDEAS_2026-05-16_05:25.md`.
+## Cycle 16 advisor actions
+
+- **NUDGED** #3516 (tanjiro): asked for terminal SENPAI-RESULT with per-split breakdown + variance interpretation
+- **NUDGED** #3356 (thorfinn): asked for terminal SENPAI-RESULT with per-split breakdown + variance interpretation
+- **WAITING** on 6 PRs (#3207, #3652, #3653, #3657, #3669, #3670) where runs are still in progress
 
 ## Active WIP — Compounding Experiments
 
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
-| #3657 | alphonse | Multi-signal FiLM: cond_dim 1→5/9 (Re + geometry scalars) | Just assigned |
-| #3516 | tanjiro | FiLM-Re + β=0.02 / β=0.01 | Sent back 03:30; rebasing |
-| #3356 | thorfinn | FiLM-Re + div_weight=0.01/0.005 | Sent back 03:30; rebasing |
-| #3207 | nezuko | FiLM-Re + geom-slice (2 seeds) | Sent back 03:45; rebasing |
-| #3652 | fern | OneCycleLR + FiLM-Re (lr=5e-4, 8e-4) | Just assigned |
-| #3653 | frieren | Fourier bands 12/16 + FiLM-Re | Just assigned |
-| #3669 | edward | SWA on FiLM-Re (stochastic weight averaging) | Just assigned |
-| #3670 | askeladd | surf_weight sweep {5,15,20} on FiLM-Re | Just assigned |
+| #3657 | alphonse | Multi-signal FiLM: cond_dim 1→5/9 | 2 seeds finished (best val=82.38); seed 3 running |
+| #3516 | tanjiro | FiLM-Re + β=0.02/0.01 | 3 seeds finished; nudge sent for SENPAI-RESULT |
+| #3356 | thorfinn | FiLM-Re + div_weight=0.01/0.005 | 3 seeds finished; nudge sent for SENPAI-RESULT |
+| #3207 | nezuko | FiLM-Re + geom-slice (2 seeds) | 2 seeds finished (both fail); seed 3 running |
+| #3652 | fern | OneCycleLR + FiLM-Re | 2 seeds finished (both fail); seed 3 running |
+| #3653 | frieren | Fourier bands 12/16 + FiLM-Re | 2 seeds finished (best fails by 1.7%); seed 3 running |
+| #3669 | edward | SWA on FiLM-Re | 2 seeds finished (close miss val=80.62); seed 3 running |
+| #3670 | askeladd | surf_weight sweep {5,15,20} on FiLM-Re | 2 seeds finished (both fail); seed 3 running |
 
-## Closed this cycle
+## Plateau-break ideas (from researcher-agent, file `RESEARCH_IDEAS_2026-05-16_05:25.md`)
 
-- **PR #3597 (edward bs=8 + lr=1e-3):** CLOSED. val=94.08 (+3.8% vs old baseline). Batch/LR scaling fails at 30-min budget.
-- **PR #3194 (askeladd warmup+cosine):** CLOSED. Best arm val=91.90 (fails old baseline by 1.4%). Warmup eats wall-clock budget without benefit.
-- **PR #3568 (fern mlp_ratio=4):** CLOSED. val=95.47 (+5.4% worse). Depth/width scaling fails at 30-min budget.
-- **PR #3520 (frieren pure L1):** CLOSED. val~93.98 (worse than old baseline). L1→0 territory covered by tanjiro's sweep.
+When students free up after this round of closures, assign from this priority list:
 
-## Compound research questions (priority order)
-
-1. **FiLM-Re + geom-slice** (nezuko #3207): orthogonal OOD axes — highest compound potential
-2. **FiLM-Re + β=0.02/0.01** (tanjiro #3516): tighter loss curvature; monotone β trend suggests β<0.05 is better
-3. **FiLM-Re + div-free** (thorfinn #3356): physics regularization; reduces training variance?
-4. **OneCycleLR + FiLM-Re** (fern #3652): attacks wall-clock bottleneck (baseline hits ep14/50)
-5. **Fourier bands 16 + FiLM-Re** (frieren #3653): more positional capacity
-
-## Potential next research directions (post-compounding)
-
-- **Stack winners**: FiLM-Re + β=0.02 + geom-slice + div-free (compound everything that individually compounds)
-- **Per-channel β** (β_p, β_Ux, β_Uy independent) — tune curvature per output channel
-- **div_weight sweep** (0.005, 0.02, 0.05) — map full curve around 0.01 on FiLM-Re baseline
-- **slice_num=96 or 128** — more slice tokens in PhysicsAttention
-- **FiLM depth ablation** — is 5-block FiLM needed, or 2-3 blocks sufficient?
-- **SWA (stochastic weight averaging)** — average last N epoch weights
-- **TTA / inference-time augmentation** — post-hoc test improvement
+1. **Per-Sample Re-Scaled Normalization** (low risk, sweep) — frieren candidate
+2. **Residual Learning over Analytic Baseline** — nezuko candidate
+3. **Surface-Dedicated Refinement Sub-Network** (+65K params) — fern candidate
+4. **Hypernetwork Re Conditioning** (low-rank) — askeladd candidate
+5. **Multiscale Mesh Pooling** (high risk, staged)
+6. **Stochastic Depth / LayerDrop** sweep — edward candidate (post-SWA)
+7. **Checkpoint Weight Averaging Post-Hoc** (distinct from failed SWA, zero overhead)
+8. **Bernoulli Consistency Auxiliary Loss**
 
 ## Goal
 
-Push val < 75, test < 65 via compounding. FiLM-Re + geom-slice compound is the most likely path given the orthogonal OOD coverage observed.
+Push val < 75, test < 65 via plateau-break. Compounding on FiLM-Re has saturated within the seed-noise floor; need genuinely novel mechanisms.
 
-## Architecture tier (if compounding saturates)
+## Architecture tier (next if plateau-break also fails)
 
 - GNN over mesh
 - Galerkin transformer
