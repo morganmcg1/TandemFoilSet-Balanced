@@ -61,18 +61,18 @@ Three orthogonal levers still in play:
 2. **More informative gradient per step** — Schedule-Free AdamW (fern, pending), cosine T_max=epochs (queued for thorfinn)
 3. **More expressive per-step update** — SwiGLU (next probe), GEGLU + mlp_ratio=2 (next probe), FiLM-two-stage (alphonse, pending bf16+GEGLU retest), per-node geometric conditioning (next-axis idea)
 
-## Currently in flight (4 WIP + 2 idle students after R15 closes)
+## Currently in flight (8 WIP — all students active, zero idle GPUs)
 
-| PR | Student | Hypothesis | Status |
-|----|---------|------------|--------|
-| #4041 v2 | alphonse  | FiLM two-stage (base+geom, is_tandem gate) on bf16+GEGLU | WIP — sent back for bf16+GEGLU rebase |
-| #4068 | edward    | n_layers 5→4 on bf16+GEGLU | WIP — sent back for bf16+GEGLU rebase |
-| #4069 | nezuko    | torch.compile(dynamic=True) on bf16+GEGLU | WIP — sent back for bf16+GEGLU rebase |
-| #4071 | fern      | Schedule-Free AdamW on bf16+GEGLU | WIP — sent back for bf16+GEGLU rebase |
-| #4107 | tanjiro   | slice_num 12→8 on bf16 (pre-GEGLU) | WIP — will need bf16+GEGLU rebase if wins old |
-| — | askeladd | (idle, after #4104 close) | needs new hypothesis |
-| — | thorfinn | (idle, after #4109 close) | needs new hypothesis |
-| — | frieren   | (just won GEGLU #4105) | needs new hypothesis |
+| PR | Student | Hypothesis | Theme | Status |
+|----|---------|------------|-------|--------|
+| #4041 v2 | alphonse  | FiLM two-stage (base+geom, is_tandem gate) on bf16+GEGLU | FiLM architecture | WIP (sent back for bf16+GEGLU rebase) |
+| #4068 | edward    | n_layers 5→4 on bf16+GEGLU | compute | WIP (sent back for bf16+GEGLU rebase) |
+| #4069 | nezuko    | torch.compile(dynamic=True) on bf16+GEGLU | compute | WIP (sent back for bf16+GEGLU rebase) |
+| #4071 | fern      | Schedule-Free AdamW on bf16+GEGLU | optim | WIP (sent back for bf16+GEGLU rebase) |
+| #4107 | tanjiro   | slice_num 12→8 on bf16 (pre-GEGLU) | compute | WIP — needs bf16+GEGLU rebase if wins old baseline |
+| #4134 | thorfinn  | Cosine T_max 50→25 (align to actual epochs) | LR schedule | WIP — newly assigned R16 |
+| #4136 | askeladd  | batch=8 + lr=1e-3 (linear scaling) on GEGLU | data parallelism | WIP — newly assigned R16 |
+| #4137 | frieren   | GEGLU + mlp_ratio 1→2 (double FFN intermediate dim) | FFN capacity | WIP — newly assigned R16 |
 
 **Note on the 4 sent-back PRs:** All four (#4041 v2, #4068, #4069, #4071) had architectural/optimization wins against the OLD baseline (68.80 fp32) but couldn't merge once the new bf16 baseline (59.08), then bf16+GEGLU baseline (50.57), landed underneath them. Each is fully orthogonal to the merged wins, so a compound win is expected on rebase.
 
@@ -104,8 +104,10 @@ Three orthogonal levers still in play:
 8. **pad_collate ceiling investigation:** sec/epoch wall-clock floor identified as `pad_collate(max_n)` + Python/dataloader, not compute. Profiling could surface 10-20% throughput gains.
 9. **Multi-seed confirmation of bf16+GEGLU baseline:** Before ICML deadline, 3 seeds of the current config to tighten the variance estimate (currently ±5-10 pts).
 
-## Idle students to assign (3 after this review)
+## Round 16 dispatched (R16, 3 new assignments)
 
-- **askeladd** (just closed batch=8 regression)
-- **thorfinn** (just closed lr=7.5e-4 tie)
-- **frieren** (just won GEGLU — ready for next)
+| PR | Student | Hypothesis | Rationale |
+|----|---------|------------|-----------|
+| #4134 | thorfinn  | Cosine T_max 50→25 | Surface the under-annealed cosine tail; #4109 confirmed peak-LR saturated, schedule shape is the lever |
+| #4136 | askeladd  | batch=8 + lr=1e-3 (linear scaling) | Tests Goyal et al. 2017 linear-scaling on GEGLU regime; corrects #4104's under-training |
+| #4137 | frieren   | GEGLU + mlp_ratio 1→2 | Capacity bump on the new FFN axis frieren just opened; mlp_ratio=1 closure was for vanilla GELU only |
