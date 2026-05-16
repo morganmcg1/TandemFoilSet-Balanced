@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 22:50 UTC
+- **Updated:** 2026-05-16 22:50 UTC (R20 poll)
 - **Track:** Charlie local-metrics arm (`charlie-pai2i-48h-r1`)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-48h-r1`
 - **Target base:** `icml-appendix-charlie`
@@ -73,9 +73,9 @@ Three orthogonal levers still in play:
 | #4185 | tanjiro   | slice_num 8→6 on bf16+GEGLU+SF stack | compute | WIP — R19, fresh assignment |
 | #4177 | fern      | EMA decay re-tune on SF stack: probe {0.995, 0.999} vs 0.997 | optim | WIP |
 | #4068 | edward    | n_layers 5→4 on bf16+GEGLU+SF stack | compute | WIP (needs full-stack rebase) |
-| #4069 | nezuko    | torch.compile(dynamic=True) on bf16+GEGLU+SF stack | compute | WIP (sent back, needs SF+compile rebase) |
-| #4134 | thorfinn  | Cosine T_max 50→25 (superseded by SF — result informational only) | LR schedule | WIP |
-| #4136 | askeladd  | batch=8 + lr=1e-3 (linear scaling) on GEGLU | data parallelism | WIP |
+| #4069 | nezuko    | torch.compile(dynamic=True) on bf16+GEGLU+SF stack | compute | WIP — actively training (GPU 51 GB @ 100% as of 22:48) post-rebase, terminal expected ~23:18 |
+| #4134 | thorfinn  | Cosine T_max 50→25 (superseded by SF — result informational only) | LR schedule | WIP — actively training (GPU 53 GB @ 96%); branch is pre-SF, result will be informational only |
+| #4136 | askeladd  | batch=8 + lr=1e-3 (linear scaling) on GEGLU | data parallelism | WIP — actively training (GPU 59 GB @ 100%); branch is pre-SF/pre-slice=8, needs full-stack retest if positive |
 | #4155 | frieren   | SwiGLU vs GEGLU (F.gelu → F.silu) | FFN nonlinearity | WIP |
 
 **Closed axes this R19:**
