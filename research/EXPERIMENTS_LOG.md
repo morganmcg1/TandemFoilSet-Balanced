@@ -1,5 +1,75 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-16 23:55 — PR #4187 CLOSED + #4227 assigned — frieren pmag-weight closes; pivot to AdaBelief optimizer
+
+### #4187 frieren Pressure-magnitude weighted L1 — **CLOSED** (val=53.17 +4.5%, all OOD splits regress)
+
+- **Student:** willowpai2i48h4-frieren (branch: `willowpai2i48h4-frieren/pressure-magnitude-weight`)
+- **Hypothesis:** Reweight L1 loss to put 1.82× weight on top-decile |p_true| nodes (per-batch quantile q=0.90, alpha=1.0), mean-normalized so total gradient mass is preserved. Tests whether the model under-fits high-|p| surface points.
+
+#### Results
+
+| Metric | Baseline (#4082) | This arm (pmag q90 α1) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | **50.9008** | **53.1674** | **+2.27 (+4.5%)** |
+| test_avg/mae_surf_p | **43.8989** | **45.2689** | **+1.37 (+3.1%)** |
+| best_epoch | 18/18 | 18/18 | — |
+| total_train_minutes | ~39.0 | 39.4 | +0.4 |
+
+| Split | Baseline | pmag q90 α1 | Δ |
+|---|---:|---:|---:|
+| single_in_dist | 48.97 | 48.72 | **−0.25** |
+| geom_camber_rc | 55.45 | 56.73 | +1.27 |
+| geom_camber_cruise | 28.27 | 30.90 | **+2.63** |
+| re_rand | 42.91 | 44.73 | +1.82 |
+
+- **W&B run:** `w42jjrgd` (group `willow-r8-pmag-weight`)
+- **Weighting diagnostics verified active:** `pmag_hi_frac=0.1000` (exactly 10% by design), `pmag_weight_ratio=1.818` (theoretical max for q=0.90/α=1.0 = 2/1.1 = 1.818). Loss was applied as designed.
+- **Val trajectory:** ep01=223.3, ep18=53.17, monotonically descending, Δ ep17→ep18=−0.94 (similar to baseline's curve still descending).
+
+#### Decision per criteria
+- **Merge** if val < 50.9008 AND test < 43.8989 → ❌ both miss
+- **Send back** if val < 52.5 (mild signal worth pmag_weight_alpha=0.5 retest) → ❌ val=53.17 ≥ 52.5
+- **Close** if val ≥ 52.5 → ✅ pmag-weight closes for this baseline
+
+#### Mechanistic interpretation (student's analysis, with advisor confirmation)
+
+1. **Mean-normalization down-weights 90% of surface nodes.** With α=1.0/q=0.90, bottom-90% gets effective weight 1/1.1 ≈ 0.91 (9% gradient cut), top-10% gets 2/1.1 ≈ 1.82 (82% boost). The vast majority of points lose gradient — but they were already information-bearing. Model loses broad surface fitting capacity in exchange for emphasis it didn't need.
+
+2. **The "underfit-the-tail" premise doesn't hold at this baseline.** Earlier curvature-weight close (#4042/#4110) was attributed to a *proxy* issue, but this test goes after the *target* directly — and still loses. Combined with prior negative results, the operative conclusion is **the baseline's residual error is not concentrated at the high-|p| tail — it's distributed across surface nodes**.
+
+3. **OOD splits suffer most.** `geom_camber_cruise` (smallest |p| range across splits) regresses MOST (+2.63). Reweighting toward per-batch top-decile in training distribution does not transfer to OOD geometry/Re regimes — the "important" nodes in train batches aren't aligned with what matters in held-out splits. **Deeper insight: the loss-shape axis assumes a static notion of 'important node' that doesn't generalize across geometric distribution shift.**
+
+#### Closed axes (do not retry on this stack)
+- Surface loss reweighting by **target magnitude** (this PR)
+- Surface loss reweighting by **DSDF-derived proxy** (#4110)
+- Together: **both surface-loss-reweighting axes (target-based + proxy-based) are now closed for this baseline.**
+
+#### Suggested follow-ups for round-9 (deferred)
+- Gradient-magnitude weighted L1 — focus on prediction-error magnitude not target magnitude (orthogonal mechanism)
+- Channel reweighting (Ux/Uy vs p surface loss balance) — current surf_weight=10 was tuned pre-bf16+nh176
+- Per-node uncertainty-weighted L1 with learned per-vertex weights (high complexity, in principle better-aligned)
+
+### #4227 frieren AdaBelief optimizer — **ASSIGNED** (replace AdamW with AdaBelief)
+
+- **Student:** willowpai2i48h4-frieren (branch: `willowpai2i48h4-frieren/adabelief-optimizer`)
+- **Hypothesis:** Swap AdamW → AdaBelief (Zhuang et al., NeurIPS 2020). AdaBelief replaces AdamW's second-moment EMA of `g²` with EMA of `(g - m)²` — variance of gradient *relative to its EMA mean*. Large steps when gradient consistent (g ≈ m, high "belief"), small steps when gradients erratic.
+- **Why this could help:**
+  1. AdaBelief's published wins are strongest on regression/small-batch supervised tasks — fits batch=4 pressure surface MAE regression.
+  2. Orthogonal to in-flight regularization (edward RMSNorm, nezuko WD+eta_min, askeladd AdamW beta2, thorfinn EMA). Structurally different optimizer, not hyperparameter variant. Should compound with any regularization win.
+  3. Surface-loss closures (#4042+#4110+#4187) point to *distributed* residual error — AdaBelief's per-param adaptive step based on gradient *consistency* is structurally better-fit than AdamW's magnitude-based scaling.
+- **Run:**
+  ```bash
+  cd "target/" && python train.py \
+    --n_hidden 176 --use_bf16 --epochs 18 \
+    --optimizer adabelief \
+    --wandb_group willow-r8-adabelief \
+    --wandb_name frieren-adabelief-nh176-bf16-ep18
+  ```
+- **Decision criteria:** Merge if val < 50.9008 AND test < 43.8989; send back if 50.9 ≤ val < 51.5 (lr retune); close if val ≥ 53.
+
+---
+
 ## 2026-05-16 23:15 — PR #4039 CLOSED + #4205 assigned — edward multi-scale PE doesn't stack with width; pivot to RMSNorm
 
 ### #4039 edward Multi-scale Fourier PE stacked retest — **CLOSED** (val=63.29 +24.3%, every split regress; width absorbs PE benefit)

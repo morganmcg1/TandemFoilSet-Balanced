@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 ~23:15 UTC
+- **Last updated:** 2026-05-16 ~23:55 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -86,7 +86,8 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 | **#4129** | askeladd | AdamW beta2 sweep (0.95, 0.98) on n_hidden=176+bf16+ep18 | WIP — started training 22:30 |
 | **#4165** | alphonse | slice_num=48 retest (other side of curve) | WIP |
 | **#4178** | thorfinn | EMA of weights (decay=0.999) for val/test eval | WIP |
-| **#4187** | frieren | Pressure-magnitude weighted L1 loss (top-decile \|p_true\|, alpha=1.0) | WIP (assigned 22:45) |
+| **#4187** | frieren | Pressure-magnitude weighted L1 loss (top-decile \|p_true\|, alpha=1.0) → **CLOSED 23:45** (val=53.17 +4.5%, all OOD splits regress) |
+| **#4227** | frieren | AdaBelief optimizer swap for AdamW on n_hidden=176+bf16+ep18 baseline | WIP (assigned 23:55) |
 | **#4190** | tanjiro | Capacity-vs-epochs at 30-min budget: n_hidden=144 + bf16 + ep18 | WIP (assigned 22:45) |
 
 ### Round-7 still in-flight (assigned earlier, results pending)
@@ -113,6 +114,7 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 | **#4150** | tanjiro | lr=7e-4 + warmup=1 + ep14 (30-min budget pivot) | CLOSED ~22:40 (val=64.87 +27%, test=56.37 +28%; ep1 val=199.6 confirms early-training instability from aggressive lr+no-warmup; #4190 nh144+ep18 assigned) |
 | **#4110** | frieren | Curvature loss retest sharpened (squared-DSDF) | CLOSED ~22:40 (ARM A val=57.13 +12.2% regress; ARM B control val=50.54 within noise; **diagnostic insight: DSDF-norm is distance-from-boundary proxy not curvature** → mesh-density bias; #4187 pressure-mag weight assigned) |
 | **#4039(v2)** | edward | Multi-scale PE stacked retest (nf=8 wide on n_hidden=176+bf16+ep18) | CLOSED ~23:10 (val=63.29 +24.3%, every split regress; **mechanistic insight: width absorbs PE benefit — spectral resolution and hidden capacity substitute, not complement**; nf=8-wide-range win at n_hidden=160 (val=51.47) recorded for appendix table; #4205 RMSNorm assigned) |
+| **#4187** | frieren | Pressure-magnitude weighted L1 (top-decile \|p_true\|, alpha=1.0, q=0.90) | CLOSED ~23:45 (val=53.17 +4.5%, test=45.27 +3.1%; only single_in_dist marginally benefits, all 3 OOD splits regress; **diagnostic: the high-\|p\| tail is not where residual error concentrates AND per-batch reweighting doesn't transfer to OOD splits**; combined with #4042/#4110 closes both surface-loss-reweighting axes (target-based + proxy-based) on this baseline; #4227 AdaBelief assigned) |
 
 ### Prior baseline progression
 | # | Student | Hypothesis | Outcome |
@@ -156,6 +158,7 @@ Normalized DSDF (dims 4-11) across 100 train files / 108M values:
 | **#4187** | frieren | Pressure-magnitude weighted L1 (top-decile \|p_true\|) | `--use_pmag_weight --pmag_weight_alpha 1.0 --pmag_weight_quantile 0.90 --n_hidden 176 --use_bf16 --epochs 18`, T=45 | WIP (new) |
 | **#4190** | tanjiro | n_hidden=144 + bf16 + ep18 (capacity-vs-epochs at 30-min budget) | `--n_hidden 144 --use_bf16 --epochs 18` (no T override) | WIP (new) |
 | **#4205** | edward | RMSNorm swap for LayerNorm on n_hidden=176+bf16+ep18 baseline | `--use_rmsnorm --n_hidden 176 --use_bf16 --epochs 18` (no T override) | WIP (new) |
+| **#4227** | frieren | AdaBelief optimizer swap for AdamW on n_hidden=176+bf16+ep18 baseline | `--optimizer adabelief --n_hidden 176 --use_bf16 --epochs 18` (no T override) | WIP (new) |
 
 **Note on env timeout (important):** Pod env caps vary. Alphonse and tanjiro pods enforce 30-min hard wall (per #4108, #4111 student flags). Fern and thorfinn pods run 39+ min fine. Future assignments to alphonse/tanjiro must be designed for ≤30-min wall. Instructions to these students should NOT include `SENPAI_TIMEOUT_MINUTES` override since isolation rules prohibit it. Nezuko, askeladd, frieren, edward: budget unknown — assume 30 min unless evidence otherwise.
 
@@ -175,6 +178,10 @@ Deferred to round-9 (backlog):
 - pmag_weight quantile=0.80 / alpha=0.5 sweep (frieren #4187 follow-up if winner)
 - **Multi-scale PE confirmed-multi-seed ablation at n_hidden=160** for appendix table (edward #4039 followup: nf=8 freq_min_exp=-2..5 produced val=51.47/-4.34% vs n_hidden=160 baseline; record cleanly as part of paper but absorbed by width)
 - **RMSNorm stacking with width=192** if #4205 wins on baseline (compounding norm-mechanic with width)
+- **Gradient-magnitude weighted L1** (focus on prediction-error nodes, not target-magnitude nodes) — orthogonal to closed pmag/curvature axes
+- **Channel reweighting (Ux/Uy vs p surface loss balance)** — current surf_weight=10 was tuned pre-bf16+nh176; retune
+- **Per-node uncertainty-weighted L1** with learned per-vertex weights (high complexity; in principle better-aligned with where error concentrates)
+- **AdaBelief LR sweep** (lr=3e-4, 1e-3) — if #4227 borderline-misses, lr retune is the natural followup
 
 ## Potential next research directions (post-round-8)
 
@@ -186,7 +193,9 @@ Deferred to round-9 (backlog):
 5. **Compute-axis pushes** — if ep22 wins (deferred), try ep26 or ep30 on the now-confirmed bf16 stack (requires 45+ min budget student)
 6. **Push Fourier PE low end** (per edward's #4039 suggestions): freq_min_exp=-3 (sub-pixel detail), num_freq=10 (denser wide grid) — pending stack-with-width confirmation
 
-### Confirmed exhausted (do not retry on this stack)
+### Confirmed exhausted (do not retry on this stack — closed axes)
+- **Surface loss reweighting by target magnitude** (frieren #4187 pmag-weight, val +4.5%)
+- **Surface loss reweighting by DSDF-derived proxy** (frieren #4110 curvature, val +12.2%)
 - n_hidden=176/192 (pre-SwiGLU only — deferred for mlp_ratio=2 stack)
 - slice_num=96/128, mlp_ratio=4 (vanilla pre-SwiGLU), n_head=8
 - **SwiGLU output head gate (mlp2)** — closed #3916, consistent 2-3% regress
