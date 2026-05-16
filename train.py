@@ -487,6 +487,7 @@ class Config:
     film_cond: bool = False  # enable per-block FiLM conditioning on x[:,0,13:24]
     film_mlp_hidden: int = 128
     two_shot_film: bool = False  # apply FiLM modulation at both attn and mlp sites per block
+    n_layers: int = 5  # number of TransolverBlocks
     grad_clip_norm: float | None = None  # if set, clip gradient L2 norm before optimizer.step()
 
 
@@ -521,7 +522,7 @@ model_config = dict(
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=128,
-    n_layers=5,
+    n_layers=cfg.n_layers,
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
