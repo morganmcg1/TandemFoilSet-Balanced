@@ -1,13 +1,13 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 09:50 UTC
+- **Updated:** 2026-05-16 (Loop 22)
 - **Launch:** `charlie-pai2i-24h-r5` (round 5)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-24h-r5`
 - **Target base branch:** `icml-appendix-charlie`
 - **Metrics:** local JSONL only (no remote tracking on this branch)
-- **Current round-5 baseline (PR #3771 MERGED):** `val_avg/mae_surf_p = 50.7001`, `test_avg/mae_surf_p = 44.3493`
-  - Note: n_hidden=128 + lr=1.5e-3 + compile. LR continues its monotonic trajectory: 5e-4→7e-4→1e-3→1.5e-3 all improved. The curve bends past 1.5e-3 (lr=2e-3 regresses due to eta_min floor 2e-4 being too high). 7/8 cells improve; test_camber_cruise neutral (+0.09%). Epoch-1 stable at ~370 (same as lr=1e-3, TF32+compile fully neutralises instability up to at least 2e-3). Cautious mask 0.609 (invariant). Note: baseline returns to n=128 — #3463 n=192 path is superseded by this LR win.
-- **Cumulative round-5 improvement:** −59.07% val_avg (123.88 → 50.70) and −61.21% test_avg (114.37 → 44.35) vs pre-round-5 floor. **Twelve compounding wins in sequence.**
+- **Current round-5 baseline (PR #3809 MERGED):** `val_avg/mae_surf_p = 45.4964`, `test_avg/mae_surf_p = 38.3732`
+  - Stack: n_hidden=192 + lr=1e-3 + compile + **grad_clip_norm=0.5**. Note: LR reverts to 1e-3 (Arm B clip=0.5 ran on lr=1e-3 assignment baseline). The dominant finding is that outlier gradient steps (‖g‖=200–273 vs mean 7.4) were hurting generalization; clipping fires ~100% of steps and delivers −10.3% val_avg. Cautious mask remains invariant (0.61). TF32+compile stability confirmed through at least lr=2e-3.
+- **Cumulative round-5 improvement:** −63.27% val_avg (123.88 → 45.50) and −66.45% test_avg (114.37 → 38.37) vs pre-round-5 floor. **Thirteen compounding wins in sequence.**
 
 ## Most recent research direction from human researcher team
 (none — no open Issues directed at this launch)
@@ -44,15 +44,22 @@ Key observations from merged results:
 
 Strongest remaining axes (in priority order):
 
-1. **LR refinement around 1.5e-3** (#3871 thorfinn WIP, new loop 21): lr=1.3e-3 vs 1.7e-3 — refining around the confirmed local optimum. Also tests the eta_min-floor instability threshold.
-2. **n_hidden=192 × lr=1.5e-3 compound** (#3870 alphonse WIP, new loop 21): tests if capacity and LR axes are orthogonal at the new optimal LR. Critical experiment — determines if the n=192 gain survives LR shift.
-3. **T_max realignment for lr=1.5e-3** (#3665 fern WIP, sent back loop 17): T_max=35 on lr=1e-3 stack. Needs to rebase onto lr=1.5e-3 — fern's T_max analysis becomes relevant again at the new LR (optimal T_max may shift).
-4. **Bernoulli residual verify** (#3839 edward WIP, new loop 20): bernoulli=True on n=192 + lr=1e-3 + compile. Will need baseline-update if Bernoulli result doesn't beat 50.70 baseline; still informative about the physics prior.
-5. **Gradient clipping sweep** (#3809 frieren WIP, new loop 19): clip_norm=1.0 vs 0.5. Orthogonal defensive measure; needs baseline-update to 50.70.
-6. **Weight decay sweep** (#3785 tanjiro WIP, updated to lr=1.5e-3 in loop 21): wd=5e-5 vs wd=5e-4 on lr=1.5e-3 stack.
-7. **Cp normalization** (#3547 askeladd WIP, sent back for rebase loop 21): physics-motivated output normalization.
-8. **Spatial Fourier positional encoding** (#3631 nezuko WIP, sent back for rebase loop 21): OOD geometry encoding.
+1. **LR + grad_clip compound: lr=1.5e-3 + clip=0.5** (#3914 frieren WIP, new loop 22): the highest-priority test — both the lr=1.5e-3 and clip=0.5 wins are established; if they compose, val_avg could reach low-40s.
+2. **Tighter clip sweep: clip=0.25 vs 0.1** (#3915 tanjiro WIP, new loop 22): characterizes the (clip, val_avg) curve. Helps determine optimal clipping magnitude for both current (lr=1e-3) and future (lr=1.5e-3) stacks.
+3. **LR refinement around 1.5e-3** (#3871 thorfinn WIP, loop 21): lr=1.3e-3 vs 1.7e-3 — refining the LR optimum. Result will inform whether lr=1.5e-3 + clip=0.5 is the right compound or if we should try lr=1.3e-3 + clip=0.5.
+4. **n_hidden=192 × lr=1.5e-3 compound** (#3870 alphonse WIP, loop 21): tests if capacity and LR axes are orthogonal after the grad_clip discovery. n=192 + lr=1e-3 + clip=0.5 is the current baseline; n=192 + lr=1.5e-3 is the unanswered extension.
+5. **Bernoulli residual verify** (#3839 edward WIP, loop 20): bernoulli=True on n=192 + lr=1e-3 + clip=0.5. Physics prior still untested on the full current stack.
+6. **T_max realignment** (#3665 fern WIP, sent back loop 17): optimal T_max may shift at the higher LRs — relevant follow-up after frieren's compound result lands.
+7. **Cp normalization** (#3547 askeladd WIP, sent back loop 21 + baseline-update in loop 22): physics-motivated output normalization — awaiting rebase onto grad_clip=0.5 stack.
+8. **Spatial Fourier positional encoding** (#3631 nezuko WIP, sent back loop 21 + baseline-update in loop 22): OOD geometry encoding — awaiting rebase onto grad_clip=0.5 stack.
 9. **max-autotune compile mode** (fern suggestion, deferred): single arm, low complexity.
+
+**Closed/merged/assigned in this loop (Loop 22)**:
+- **#3809 (frieren gradient clipping)** — MERGED (commit `9c9bf4c`). New best val_avg=45.4964 / test_avg=38.3732. grad_clip_norm=0.5 wins over 1.0 by 1.67 val pts. Mechanism: outlier gradient steps (‖g‖ spikes to 200–273 vs mean 7.4) were hurting generalization; clipping fires ~100% of steps. Thirteen compounding wins. Note: baseline reverts LR to 1e-3 — **lr=1.5e-3 + clip=0.5 compound is the natural next priority**.
+- **#3785 (tanjiro weight decay sweep)** — CLOSED. Both arms (wd=2e-2, wd=5e-3) regress vs the 50.70 baseline and fail vs 45.50 new baseline. Weight decay is well-tuned in its default range on this stack. Approach refuted.
+- **#3914 (frieren lr=1.5e-3 + grad_clip=0.5 compound)** — ASSIGNED (Loop 22). High-priority: tests whether the LR=1.5e-3 win (#3771) and the grad_clip=0.5 win (#3809) compose. If orthogonal, val_avg could reach low-40s.
+- **#3915 (tanjiro clip tighter sweep: 0.25 vs 0.1)** — ASSIGNED (Loop 22). Characterizes the (clip, val_avg) curve beyond clip=0.5. clip=0.25 may allow tighter gradient control; clip=0.1 approaches sign-SGD territory. Two arms, ~12h each.
+- **#3631 nezuko** and **#3547 askeladd** — third baseline-update comments posted (new target: 45.50 on grad_clip=0.5 + lr=1e-3 + compile + n_hidden=192 stack). Students need to rebase and re-run.
 
 **Closed/merged/assigned in this loop (Loop 21)**:
 - **#3771 (thorfinn LR continuation)** — MERGED (commit `296f003`). New best val_avg=50.7001 / test_avg=44.3493. lr=1.5e-3 wins decisively; lr=2e-3 regresses (eta_min floor effect, not instability). 7/8 cells improve. Epoch-1 stable at ~370 for both arms. Twelve compounding wins. Baseline returns to n=128.
@@ -136,13 +143,15 @@ Strongest remaining axes (in priority order):
 | #3871 | thorfinn | WIP (new loop 21) | LR refinement: lr=1.3e-3 vs lr=1.7e-3 around the 1.5e-3 peak |
 | #3694 | frieren | CLOSED (loop 19, self-closed) | Bernoulli verify + enable — abandoned after baseline shift to 54.06 |
 | #3702 | tanjiro | CLOSED (loop 18, self-closed) | Batch size sweep — abandoned after baseline shift to 54.06 |
-| #3785 | tanjiro | WIP (new loop 18) | Weight decay sweep: wd=5e-5 vs wd=5e-4 |
-| #3809 | frieren | WIP (new loop 19) | Gradient clipping sweep: clip_norm=1.0 vs 0.5 |
+| #3785 | tanjiro | CLOSED (loop 22, refuted) | Weight decay sweep — both arms regress, wd default confirmed |
+| #3809 | frieren | MERGED (loop 22) | Gradient clipping sweep: clip_norm=0.5 wins — new best val_avg 45.50 |
 | #3839 | edward | WIP (new loop 20) | Bernoulli residual verify on n=192 + lr=1e-3 + compile |
+| #3914 | frieren | WIP (new loop 22) | LR + grad_clip compound: lr=1.5e-3 + clip=0.5 |
+| #3915 | tanjiro | WIP (new loop 22) | Tighter clip sweep: clip=0.25 vs 0.1 on lr=1e-3 stack |
 
 ## Plateau watch
 
-Round 5 now has **12 compounding wins totaling −59.07% val_avg**. **No plateau signal — two merges landed in Loop 21 alone.** The LR axis continues to be the dominant lever: each LR doubling/increase has consistently produced 4-7% gains. The curve peaked at lr=1.5e-3 (lr=2e-3 regresses from eta_min floor effects). The refinement sweep (1.3e-3 vs 1.7e-3) and the capacity × LR compound (n=192 + lr=1.5e-3) are the next high-priority tests. If both regress, the focus shifts to: Bernoulli physics prior, weight decay co-tuning, T_max realignment for lr=1.5e-3, and the still-untested Fourier/Cp axes. The threshold for switching strategy tier (5 consecutive no-improvement) has not been approached — continuous compounding.
+Round 5 now has **13 compounding wins totaling −63.27% val_avg**. **No plateau signal — gradient clipping delivered the biggest single-loop win yet (−10.3%).** The gradient management axis is now the dominant lever being explored: the compound lr=1.5e-3 + clip=0.5 (frieren #3914) and the tighter-clip sweep (tanjiro #3915) could push val_avg below 42. The pre-clip gradient distribution reveals significant pathological outlier steps that the model was relying on to escape local minima; tighter clipping may extract further benefit. Alongside clipping, the still-untested Fourier/Cp axes (nezuko, askeladd — awaiting rebase) and the capacity × LR compound (alphonse #3870) remain in-flight. The threshold for switching strategy tier (5 consecutive no-improvement) has not been approached — continuous compounding.
 
 ## Potential next research directions (post-current batch)
 

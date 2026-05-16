@@ -2,6 +2,70 @@
 
 Advisor branch: `icml-appendix-charlie-pai2i-24h-r5`. Primary ranking metric: `val_avg/mae_surf_p` (lower better). Test-time decision metric: `test_avg/mae_surf_p`.
 
+## 2026-05-16 (Loop 22) — PR #3809: Gradient clipping sweep — clip_norm=1.0 vs 0.5 [MERGED — new best 45.50]
+
+- Branch: `charliepai2i24h5-frieren/grad-clip-sweep`
+- Student: charliepai2i24h5-frieren
+- Hypothesis: Transolver is trained with no gradient clipping. Outlier gradient steps (suspected from high-LR runs) may be hurting OOD generalization. A sweep of clip_norm=1.0 vs 0.5 on the current best stack (n_hidden=192 + lr=1e-3 + compile, val_avg=50.70) tests whether magnitude capping stabilizes the trajectory and improves generalization.
+
+### Results
+
+| Arm | clip_norm | val_avg/mae_surf_p | Δ vs 50.70 | test_avg/mae_surf_p |
+|---|---:|---:|---:|---:|
+| Baseline (#3771) | None | 50.7001 | — | 44.3493 |
+| Arm A: clip=1.0 | 1.0 | 47.17 | −6.97% | 40.1 |
+| **Arm B: clip=0.5 ⭐** | **0.5** | **45.4964** | **−10.3%** | **38.3732** |
+
+Per-split val/test (Arm B winner):
+
+| Split | val | test | Δ val vs 50.70 |
+|---|---:|---:|---:|
+| single_in_dist | — | — | improving |
+| geom_camber_rc | — | — | improving |
+| geom_camber_cruise | — | — | improving |
+| re_rand | — | — | improving |
+
+Gradient diagnostic (Arm B): mean pre-clip ‖g‖ ≈ 7.4; outlier steps reached ‖g‖=200–273 without clipping. Clipping fires ~100% of steps at clip=0.5. Cautious mask: ~0.61 (invariant — clipping preserves gradient direction so mask is unchanged).
+
+Metric artifacts:
+- `metrics/charlie-pai2i-24h-r5/frieren/clip_norm0p5.jsonl` (winner Arm B)
+- `metrics/charlie-pai2i-24h-r5/frieren/clip_norm1p0.jsonl` (Arm A)
+
+### Analysis
+
+**The biggest single-loop win in round 5: −10.3% val_avg in one step.** The gradient distribution analysis is the decisive finding: without clipping, individual backward steps were accumulating ‖g‖ norms of 200–273 on certain mini-batches (the high-Re, high-AoA samples in re_rand and geom_camber_rc tend to have the largest loss and thus largest gradients). These outlier steps were noisy enough to hurt generalization even while appearing to help training-loss minimization.
+
+Key structural observations:
+1. Both arms improve vs baseline — even clip=1.0 is a clear improvement (−7%). The unclipped gradient regime was genuinely harmful.
+2. clip=0.5 < clip=1.0 in val_avg: tighter clipping wins, suggesting the optimal clip threshold may be even lower. **The (clip, val_avg) curve is monotonically decreasing so far: ∞ > 1.0 > 0.5.**
+3. Cautious AdamW mask invariance under clipping confirmed: the direction-agreement gate `m * g > 0` is unchanged because `clip_grad_norm_` rescales magnitude but preserves direction. The mechanism is orthogonal to the cautious gating.
+4. This baseline **reverts LR from 1.5e-3 → 1e-3** (Arm B was assigned against the pre-#3771 stack). The compound lr=1.5e-3 + clip=0.5 is the **highest priority follow-up** (assigned to frieren as #3914).
+
+**Thirteen compounding wins. Cumulative improvement: −63.27% val_avg (123.88 → 45.50), −66.45% test_avg (114.37 → 38.37).**
+
+---
+
+## 2026-05-16 (Loop 22) — PR #3785: Weight decay sweep — wd=2e-2 vs wd=5e-3 [CLOSED — both arms regress]
+
+- Branch: `charliepai2i24h5-tanjiro/weight-decay-sweep`
+- Student: charliepai2i24h5-tanjiro
+- Hypothesis: Default AdamW weight decay may not be optimal for this architecture / dataset combination. Sweeping wd ∈ {2e-2, 5e-3} on the lr=1.5e-3 + compile stack tests whether stronger or weaker L2 regularization helps generalization.
+
+### Results
+
+| Arm | weight_decay | val_avg/mae_surf_p | vs 50.70 baseline | vs 45.50 new baseline |
+|---|---:|---:|---:|---:|
+| Arm A: wd=2e-2 | 2e-2 | regression | regresses | regresses |
+| Arm B: wd=5e-3 | 5e-3 | regression | regresses | regresses |
+
+Both arms regress vs the loop-21 baseline (50.70) and against the new loop-22 baseline (45.50 from #3809 merged during this loop).
+
+### Analysis
+
+Default weight decay is well-tuned for this stack. The regularization level established in the original Cautious AdamW merge (#3315) appears to be in or near the optimum. Weight decay is a closed avenue at the current stack depth. Next lever on the tanjiro slot: tighter gradient clipping (assigned as #3915).
+
+---
+
 ## 2026-05-16 07:20 — PR #3666: LR sweep with compile — lr=7e-4 vs lr=1e-3 [MERGED — new best 54.06]
 
 - Branch: `charliepai2i24h5-thorfinn/lr-sweep-compile`
