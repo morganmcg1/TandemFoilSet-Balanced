@@ -34,7 +34,7 @@ import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
 from torch.amp import autocast
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from tqdm import tqdm
 
 from data import (
@@ -61,6 +61,103 @@ def seed_worker(worker_id: int) -> None:
     worker_seed = torch.initial_seed() % 2**32
     np.random.seed(worker_seed)
     random.seed(worker_seed)
+
+
+# ---------------------------------------------------------------------------
+# Corrected horizontal-flip augmentation (z-flip)
+# ---------------------------------------------------------------------------
+# Physics: the underlying Navier-Stokes solution is invariant under z-reflection
+# combined with sign-flipping the z-component of velocity and the angle of
+# attack. The NACA shape parameters (camber, position, thickness) are unsigned
+# magnitudes; sign-flipping them produces invalid airfoils.
+#
+# Feature flip plan (x layout from program.md / prepare_splits.py):
+#   FLIP:    x[:, 1]   pos_z  (geometric z-coordinate)
+#            x[:, 3]   saf_z  (signed arc-length z-component, foil-centered)
+#            x[:, 14]  AoA foil 1
+#            x[:, 18]  AoA foil 2
+#            x[:, 22]  gap (signed z-separation between tandem foils)
+#            y[:, 1]   Uy target (z-velocity)
+#   KEEP:    x[:, 0]   pos_x, x[:, 2] saf_x          (x-direction, unchanged)
+#            x[:, 4:12] dsdf                          (unsigned distance descriptors)
+#            x[:, 12]  is_surface, x[:, 13] log(Re)   (orientation-invariant)
+#            x[:, 15:18] NACA foil 1 (camber/pos/thickness — unsigned magnitudes)
+#            x[:, 19:22] NACA foil 2
+#            x[:, 23]  stagger (x-direction separation)
+#            y[:, 0]   Ux, y[:, 2] pressure
+#
+# Cruise samples (pos_z spans negative values — z-symmetric freestream) are
+# skipped: their distribution is already z-symmetric so flip adds no new info.
+# RaceCar samples have one-sided pos_z (ground effect at z>=0); flipping doubles
+# the effective training data on this physically-asymmetric domain.
+
+class CorrectedFlipDataset(Dataset):
+    def __init__(self, base_dataset: Dataset, flip_prob: float = 0.5):
+        self.base = base_dataset
+        self.flip_prob = flip_prob
+
+    def __len__(self) -> int:
+        return len(self.base)
+
+    def __getitem__(self, idx):
+        x, y, is_surface = self.base[idx]
+
+        # Cruise samples (freestream, z-symmetric) have pos_z spanning negative
+        # values; raceCar samples sit at pos_z >= 0 due to ground effect.
+        is_cruise = x[:, 1].min().item() < -0.5
+
+        if (not is_cruise) and (torch.rand(1).item() < self.flip_prob):
+            x = x.clone()
+            y = y.clone()
+            x[:, 1] = -x[:, 1]
+            x[:, 3] = -x[:, 3]
+            x[:, 14] = -x[:, 14]
+            x[:, 18] = -x[:, 18]
+            x[:, 22] = -x[:, 22]
+            y[:, 1] = -y[:, 1]
+
+        return x, y, is_surface
+
+
+def audit_flip_rate(wrapped_ds: "CorrectedFlipDataset", n_samples: int = 200) -> dict:
+    """Single-process pass over the wrapper to verify flip behavior.
+
+    Returns observed cruise/raceCar counts and the empirical flip rate on the
+    flippable (non-cruise) subset, so we can confirm the augmentation is firing
+    at the configured probability before training kicks off.
+    """
+    # Sample evenly across the dataset (files are sorted by name, so the first
+    # 200 are all raceCar; an even stride hits both domains for a meaningful
+    # cruise-skip audit).
+    total = len(wrapped_ds.base)
+    n = min(n_samples, total)
+    stride = max(total // n, 1)
+    idxs = [i * stride for i in range(n) if i * stride < total]
+
+    torch.manual_seed(12345)  # local RNG seed for reproducible audit
+    n_cruise = 0
+    n_flipped_eligible = 0
+    n_eligible = 0
+    for i in idxs:
+        x_base, _, _ = wrapped_ds.base[i]
+        is_cruise_i = x_base[:, 1].min().item() < -0.5
+        x_aug, _, _ = wrapped_ds[i]
+        was_flipped = (x_base[:, 1] != x_aug[:, 1]).any().item()
+        if is_cruise_i:
+            n_cruise += 1
+        else:
+            n_eligible += 1
+            if was_flipped:
+                n_flipped_eligible += 1
+    rate = n_flipped_eligible / max(n_eligible, 1)
+    return {
+        "audit_n": len(idxs),
+        "audit_n_cruise": n_cruise,
+        "audit_n_eligible": n_eligible,
+        "audit_n_flipped_eligible": n_flipped_eligible,
+        "audit_flip_rate_eligible": rate,
+    }
+
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -411,6 +508,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     seed: int = 42
     deterministic: bool = False
+    flip_prob: float = 0.5  # corrected horizontal-flip aug (z-flip) probability on non-cruise samples
 
 
 cfg = sp.parse(Config)
@@ -426,6 +524,15 @@ print(f"Device: {device}  seed={cfg.seed}" + (" [DEBUG]" if cfg.debug else ""))
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
+train_ds_flip = CorrectedFlipDataset(train_ds, flip_prob=cfg.flip_prob)
+flip_audit = audit_flip_rate(train_ds_flip, n_samples=min(200, len(train_ds)))
+print(
+    f"Corrected h-flip aug: prob={cfg.flip_prob}  audit over {flip_audit['audit_n']} samples → "
+    f"cruise={flip_audit['audit_n_cruise']} (skipped), eligible={flip_audit['audit_n_eligible']}, "
+    f"flipped={flip_audit['audit_n_flipped_eligible']} "
+    f"(rate {flip_audit['audit_flip_rate_eligible']:.3f})"
+)
+
 _loader_gen = torch.Generator()
 _loader_gen.manual_seed(cfg.seed)
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
@@ -433,11 +540,11 @@ loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      worker_init_fn=seed_worker, generator=_loader_gen)
 
 if cfg.debug:
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
+    train_loader = DataLoader(train_ds_flip, batch_size=cfg.batch_size,
                               shuffle=True, **loader_kwargs)
 else:
     sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
+    train_loader = DataLoader(train_ds_flip, batch_size=cfg.batch_size,
                               sampler=sampler, **loader_kwargs)
 
 val_loaders = {
@@ -477,9 +584,12 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "flip_audit": flip_audit,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
+
+wandb.summary.update({f"flip/{k}": v for k, v in flip_audit.items()})
 
 wandb.define_metric("global_step")
 wandb.define_metric("train/*", step_metric="global_step")
