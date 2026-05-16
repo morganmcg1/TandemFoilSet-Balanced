@@ -121,13 +121,13 @@ class SwiGLUMlp(nn.Module):
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    def __init__(self, dim, heads=8, dim_head=64, attn_drop=0.0, proj_drop=0.0, slice_num=64):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
         self.heads = heads
         self.softmax = nn.Softmax(dim=-1)
-        self.dropout = nn.Dropout(dropout)
+        self.attn_drop = attn_drop
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
 
         self.in_project_x = nn.Linear(dim, inner_dim)
@@ -137,7 +137,7 @@ class PhysicsAttention(nn.Module):
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
-        self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
+        self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(proj_drop))
 
     def forward(self, x):
         B, N, _ = x.shape
@@ -164,7 +164,7 @@ class PhysicsAttention(nn.Module):
         v = self.to_v(slice_token)
         out_slice = F.scaled_dot_product_attention(
             q, k, v,
-            dropout_p=self.dropout.p if self.training else 0.0,
+            dropout_p=self.attn_drop if self.training else 0.0,
             is_causal=False,
         )
 
@@ -174,7 +174,7 @@ class PhysicsAttention(nn.Module):
 
 
 class TransolverBlock(nn.Module):
-    def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
+    def __init__(self, num_heads, hidden_dim, attn_drop=0.0, proj_drop=0.0, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
                  use_swiglu=False):
         super().__init__()
@@ -182,7 +182,7 @@ class TransolverBlock(nn.Module):
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
-            dropout=dropout, slice_num=slice_num,
+            attn_drop=attn_drop, proj_drop=proj_drop, slice_num=slice_num,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         if use_swiglu:
@@ -206,7 +206,7 @@ class TransolverBlock(nn.Module):
 
 
 class Transolver(nn.Module):
-    def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
+    def __init__(self, space_dim=1, n_layers=5, n_hidden=256, attn_drop=0.0, proj_drop=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
@@ -229,7 +229,8 @@ class Transolver(nn.Module):
         self.space_dim = space_dim
         self.blocks = nn.ModuleList([
             TransolverBlock(
-                num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
+                num_heads=n_head, hidden_dim=n_hidden,
+                attn_drop=attn_drop, proj_drop=proj_drop,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 use_swiglu=use_swiglu,
@@ -439,6 +440,8 @@ class Config:
     seed: int = 42
     deterministic: bool = False
     use_swiglu: bool = False
+    attn_drop: float = 0.0
+    proj_drop: float = 0.0
 
 
 cfg = sp.parse(Config)
@@ -477,11 +480,13 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=192,
+    n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=96,
+    slice_num=64,
     mlp_ratio=2,
+    attn_drop=cfg.attn_drop,
+    proj_drop=cfg.proj_drop,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
     use_swiglu=cfg.use_swiglu,
@@ -496,7 +501,7 @@ n_ffn_params = sum(
 print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN={n_ffn_params})")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=18)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
