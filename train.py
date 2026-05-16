@@ -139,6 +139,28 @@ class GeGLUMlp(nn.Module):
         return self.fc_out(self.fc_main(x) * self.act(self.fc_gate(x)))
 
 
+class ReGLUMlp(nn.Module):
+    """ReGLU FFN: gated linear unit with ReLU activation in the gate.
+
+    Shazeer 2020, "GLU Variants Improve Transformers". Identical structure to
+    SwiGLUMlp/GeGLUMlp; only the gate nonlinearity differs (ReLU vs SiLU/GELU).
+    Same 2/3 hidden-dim factor keeps param count at parity. Closes the GLU
+    family ablation — ReLU has hard zero-out below 0, so dead-gate units are
+    possible (unlike the smooth SiLU/GELU gates).
+    """
+
+    def __init__(self, n_input, n_hidden, n_output):
+        super().__init__()
+        reglu_h = int(round(n_hidden * 2 / 3))
+        self.fc_main = nn.Linear(n_input, reglu_h)
+        self.fc_gate = nn.Linear(n_input, reglu_h)
+        self.fc_out = nn.Linear(reglu_h, n_output)
+        self.act = nn.ReLU()
+
+    def forward(self, x):
+        return self.fc_out(self.fc_main(x) * self.act(self.fc_gate(x)))
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -197,10 +219,10 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 use_swiglu=False, use_geglu=False):
+                 use_swiglu=False, use_geglu=False, use_reglu=False):
         super().__init__()
-        if use_swiglu and use_geglu:
-            raise ValueError("use_swiglu and use_geglu are mutually exclusive")
+        if sum([use_swiglu, use_geglu, use_reglu]) > 1:
+            raise ValueError("use_swiglu, use_geglu, use_reglu are mutually exclusive")
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
@@ -212,6 +234,8 @@ class TransolverBlock(nn.Module):
             self.mlp = SwiGLUMlp(hidden_dim, hidden_dim * mlp_ratio, hidden_dim)
         elif use_geglu:
             self.mlp = GeGLUMlp(hidden_dim, hidden_dim * mlp_ratio, hidden_dim)
+        elif use_reglu:
+            self.mlp = ReGLUMlp(hidden_dim, hidden_dim * mlp_ratio, hidden_dim)
         else:
             self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                            n_layers=0, res=False, act=act)
@@ -236,7 +260,7 @@ class Transolver(nn.Module):
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
-                 use_swiglu=False, use_geglu=False):
+                 use_swiglu=False, use_geglu=False, use_reglu=False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -257,7 +281,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
-                use_swiglu=use_swiglu, use_geglu=use_geglu,
+                use_swiglu=use_swiglu, use_geglu=use_geglu, use_reglu=use_reglu,
             )
             for i in range(n_layers)
         ])
@@ -339,6 +363,53 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
            "loss": vol_loss + surf_weight * surf_loss}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
     return out
+
+
+def compute_dead_gate_fraction(model, val_loader, stats, device, n_batches=5):
+    """Fraction of fc_gate pre-activations <= 0 across n_batches val batches.
+
+    Dead-ReLU diagnostic for ReGLU: if >50% the gate is killing units, if <20%
+    gates are healthy. Also informative for SwiGLU/GeGLU as a sanity check (both
+    have nonzero output for x<0, so the fraction is just descriptive there).
+    Returns (overall_fraction, per_layer_fractions).
+    """
+    gate_modules = []
+    for block in model.blocks:
+        if hasattr(block.mlp, "fc_gate"):
+            gate_modules.append(block.mlp.fc_gate)
+    if not gate_modules:
+        return None, []
+
+    counts = [[0, 0] for _ in gate_modules]  # [n_neg, n_total] per layer
+
+    def make_hook(idx):
+        def hook(module, inputs, output):
+            counts[idx][0] += (output <= 0).sum().item()
+            counts[idx][1] += output.numel()
+        return hook
+
+    handles = [m.register_forward_hook(make_hook(i)) for i, m in enumerate(gate_modules)]
+
+    was_training = model.training
+    model.eval()
+    with torch.no_grad():
+        for i, (x, _y, _is_surf, _mask) in enumerate(val_loader):
+            if i >= n_batches:
+                break
+            x = x.to(device, non_blocking=True)
+            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            _ = model({"x": x_norm})
+
+    for h in handles:
+        h.remove()
+    if was_training:
+        model.train()
+
+    per_layer = [n / max(t, 1) for n, t in counts]
+    total_neg = sum(n for n, _ in counts)
+    total_all = sum(t for _, t in counts)
+    overall = total_neg / max(total_all, 1)
+    return overall, per_layer
 
 
 def _sanitize_artifact_token(s: str) -> str:
@@ -465,6 +536,7 @@ class Config:
     deterministic: bool = False
     use_swiglu: bool = False
     use_geglu: bool = False
+    use_reglu: bool = False
 
 
 cfg = sp.parse(Config)
@@ -512,6 +584,7 @@ model_config = dict(
     output_dims=[1, 1, 1],
     use_swiglu=cfg.use_swiglu,
     use_geglu=cfg.use_geglu,
+    use_reglu=cfg.use_reglu,
 )
 
 model = Transolver(**model_config).to(device)
@@ -645,6 +718,21 @@ for epoch in range(MAX_EPOCHS):
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+
+    if (epoch + 1) in (5, 15) and (cfg.use_reglu or cfg.use_swiglu or cfg.use_geglu):
+        diag_loader = next(iter(val_loaders.values()))
+        overall, per_layer = compute_dead_gate_fraction(
+            model, diag_loader, stats, device, n_batches=5
+        )
+        if overall is not None:
+            log_metrics["diag/dead_gate_fraction"] = overall
+            for i, frac in enumerate(per_layer):
+                log_metrics[f"diag/dead_gate_fraction_layer{i}"] = frac
+            print(
+                f"  Dead-gate fraction (fc_gate<=0, 5 val batches): "
+                f"overall={overall:.4f}  per_layer={[f'{f:.3f}' for f in per_layer]}"
+            )
+
     wandb.log(log_metrics)
 
     tag = ""
