@@ -511,7 +511,9 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            pred = model({"x": x_norm})["preds"]
+        pred = pred.float()
         abs_err = (pred - y_norm).abs()
         sq_err = torch.where(
             abs_err < cfg.huber_delta,
