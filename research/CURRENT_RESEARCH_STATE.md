@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 16:10
+- **Date:** 2026-05-16 16:35
 - **Launch:** willow-pai2i-48h-r1 (round 6 — SwiGLU/GeGLU era; NEW programme best val=62.10)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN)
@@ -58,31 +58,33 @@ Cross-context comparison of β_p=20 (from #3611, #3837):
 
 **Conclusion:** per-channel surface weighting is **width-coupled**, not gating-coupled. SwiGLU is a different axis of capacity and the two don't compose additively at h=128.
 
-## Active WIP — 7/8 students (thorfinn idle → seed=1 T_max=17 being assigned)
+## Active WIP — 8/8 students (zero idle)
 
 | PR | Student | Hypothesis | Status |
 |----|---------|-----------|--------|
-| **#3999** | **tanjiro** | **gradient clipping clip_norm=1.0 on SwiGLU h=128** | Running (T_max=15, will evaluate directional signal) |
-| **#3998** | **edward** | **slice_num=128 (2×) on SwiGLU — attention granularity** | Running (T_max=15, will evaluate directional signal) |
-| **#3996** | **alphonse** | **AdamW weight_decay 1e-4 → 1e-2 on SwiGLU** | Running (T_max=15, will evaluate directional signal) |
-| **#3995** | **fern** | **AdamW β2=0.95 + GeGLU stack** | SENT BACK 15:30 for stack; running (T_max=15 base) |
-| **#3993** | **askeladd** | **head_and_embed 2.5× LR + 500-step warmup** | Running (T_max=15, will evaluate directional signal) |
-| #3973 | frieren | RMSNorm replacement of LayerNorm on SwiGLU | Running (T_max=15, stale flag — rate-limit artifact) |
-| #3644 | nezuko | Cosine T_max=10 + constant tail + SWA (rebased onto SwiGLU) | WIP (long-running; stale flags are benign) |
-| **thorfinn** | **seed=1 T_max=17 SwiGLU** | **Confirming #3994 win across seeds** | **ASSIGNING NOW** |
+| **#4028** | **thorfinn** | **T_max=17 SwiGLU seed=1 — confirm programme-record win** | WIP (assigned 16:05) |
+| **#4032** | **askeladd** | **T_max=17 + GeGLU stack — compound two validated wins** | NEW — assigned 16:35 |
+| **#3999** | **tanjiro** | **gradient clipping clip_norm=1.0 on SwiGLU h=128** | Running (T_max=15; rate-limit recovery, training starting ~16:22) |
+| **#3998** | **edward** | **slice_num=128 (2×) on SwiGLU — attention granularity** | Running (T_max=15; rate-limit recovery, training starting ~16:22) |
+| **#3996** | **alphonse** | **AdamW weight_decay 1e-4 → 1e-2 on SwiGLU** | Running (T_max=15; rate-limit recovery, training starting ~16:20) |
+| **#3995** | **fern** | **β2=0.95 + GeGLU + T_max=17 triple stack (rebase required)** | WIP (sent rebase+triple-stack instructions at 16:30) |
+| #3973 | frieren | RMSNorm replacement of LayerNorm on SwiGLU | Running (T_max=15; rate-limit recovery, training starting ~16:22) |
+| #3644 | nezuko | Cosine T_max=10 + constant tail + SWA (rebased onto SwiGLU) | WIP (long-running; conflict + stale flags are benign) |
 
-**IMPORTANT for reviews of in-flight T_max=15 PRs:** All current WIP PRs (alphonse, edward, tanjiro, askeladd, fern, frieren) are running on T_max=15. Their results will be in the ~65-67 range on that schedule and CANNOT beat the new 62.10 baseline directly. Evaluate them for **directional signal** (does wd/clip/slice_num/LR improve things when tested on T_max=15?). If positive directional effect: reassign to T_max=17 stack. If null/negative: close the direction.
+**IMPORTANT for reviews of in-flight T_max=15 PRs:** alphonse #3996, edward #3998, tanjiro #3999, frieren #3973 are all running on T_max=15 (just started due to GitHub rate-limit recovery at 16:22). Their results will be in the ~65-67 range and CANNOT beat the new 62.10 baseline directly. Evaluate them for **directional signal** (does wd/clip/slice_num/RMSNorm improve at T_max=15?). If positive directional effect: reassign to T_max=17. If null/negative: close the direction. Results expected ~17:00-17:15.
 
 ## Recently closed PRs (this session)
 
 | PR | Hypothesis | val | Reason |
 |----|-----------|-----|--------|
 | **#3994** | **T_max=17 SwiGLU (thorfinn)** | **62.10 ← MERGED** | **NEW PROGRAMME BEST. T_max=17 enables "snap to minimum" descent in eps 16-17 (LR~4e-6→0) that T_max=15 missed (LR=0 hard at ep 15). Single-knob +3.27pt win.** |
+| **#3993** | **head_embed 2.5× + warmup500 (askeladd)** | **69.61** | **Zone-4. MAJOR: warmup WORSENED early dynamics (val@ep1=222 vs 185 no-warmup). 3.09× equilibrium NOT a unique attractor — warmup permanently shifted basin to 2.35×. Head_embed LR boost lever class exhausted.** |
 | **#3959** | **lr=1e-3 (tanjiro)** | **68.87 (+5.34σ)** | **Zone-4 regression. MAJOR: lower σ̂ ≠ larger LR headroom. MAJOR: cosine T_max=15 cannot absorb early inefficiency.** |
 | **#3933** | **ReGLU (edward)** | **67.92** | **+1.6σ regression. Dead-gate pathology. GLU family DEFINITIVELY closed.** |
 | **#3886** | **DropPath p=0.1 (alphonse)** | **μ̂=73.63 (+8.19)** | **Zone-5. Activation-noise regularisation family closed.** |
 | **#3904** | **GeGLU 3-seed confirm (fern)** | **μ̂=65.99** | **Population tie with SwiGLU. Activation choice in gate is noise.** |
-| **#3932** | **head_and_embed 2.5× (askeladd)** | **70.31** | **Zone-5. Mechanism confirmed at steady-state; rescue is warmup (#3993).** |
+| **#3993** | **head_embed 2.5× + warmup500 (askeladd)** | **69.61** | **Zone-4. Warmup worsened early dynamics; equilibrium ratio shifted. Lever class exhausted.** |
+| **#3932** | **head_and_embed 2.5× (askeladd)** | **70.31** | **Zone-5. Mechanism confirmed at steady-state; warmup did not rescue.** |
 | **#3934** | **T_max=12 (thorfinn)** | **72.13 best, 81.45 final** | **MAJOR PyTorch finding: CosineAnnealingLR un-clamped past T_max → LR rebounds.** |
 
 ## Recent TIE result (not merged, stack queued)
@@ -105,8 +107,8 @@ Cross-context comparison of β_p=20 (from #3611, #3837):
 
 ## Next research directions (queue for next idle students)
 
-1. **seed=1 T_max=17 SwiGLU** (thorfinn — ASSIGNING NOW) — confirm the +3.27pt win holds across seeds. Priority 1.
-2. **T_max=17 + GeGLU stack** — once seed=1 confirms T_max=17, test GeGLU+T_max=17. GeGLU is marginally more reliable (σ̂=0.54 vs 0.90 for SwiGLU) and may compound with T_max=17.
+1. **seed=1 T_max=17 SwiGLU** (thorfinn #4028 — IN FLIGHT) — confirm the +3.27pt win holds across seeds. Priority 1.
+2. **T_max=17 + GeGLU stack** (askeladd #4032 — IN FLIGHT) — two validated independent wins stacked. GeGLU is marginally more reliable (σ̂=0.54 vs 0.90) and should compound with T_max=17 schedule fix.
 3. **T_max=17 + β2=0.95** — fern's β2=0.95 showed SwiGLU→GeGLU gap closure at T_max=15. Stack with T_max=17 (or better: triple stack T_max=17 + GeGLU + β2=0.95).
 4. **Directional signals from T_max=15 experiments (alphonse #3996, edward #3998, tanjiro #3999, askeladd #3993, fern #3995)** — evaluate on completion. If positive directional effect, reassign to T_max=17.
 5. **T_max=20 (cosine never fully anneals)** — thorfinn's suggestion. With T_max=17, the snap happens at LR~4e-6→0. T_max=20 would keep LR~1.5e-4 at ep 17 — likely too high for the final snap, so probably regresses. Worth testing to falsify.
@@ -137,6 +139,7 @@ Cross-context comparison of β_p=20 (from #3611, #3837):
 17. **`CosineAnnealingLR(T_max=N)` with N < total_epochs** — #3934. PyTorch footgun: LR rebounds past T_max.
 18. **ReGLU (ReLU gate)** — #3933. Dead-gate pathology.
 19. **lr=1e-3 under T_max=15** — #3959. Two findings: (a) lower σ̂ ≠ LR headroom; (b) T_max=15 cannot absorb early inefficiency.
+20. **head_and_embed LR boost — all variants** — #3832 (1.75×), #3932 (2.5× no-warmup), #3993 (2.5× + warmup500). Warmup WORSENED early dynamics (val@ep1=222 vs 185); 3.09× gradient equilibrium is NOT a unique attractor (shifted to 2.35× under warmup). The structural cost of 2.5× boost (~4-5pt val) is not recoverable within 17 epochs regardless of warmup. Lever class closed.
 
 ## PyTorch scheduler gotchas (programme-wide)
 

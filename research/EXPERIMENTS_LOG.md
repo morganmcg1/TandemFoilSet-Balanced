@@ -1,5 +1,34 @@
 # SENPAI Research Results
 
+## 2026-05-16 16:35 — PR #3993: H: head_and_embed 2.5× LR + 500-step warmup ← CLOSED (Zone-4 regression)
+
+- Branch: `willowpai2i48h1-askeladd/head_embed_25x_warmup500_swiglu`
+- Student: willowpai2i48h1-askeladd
+- Status: CLOSED. val=69.61, test=64.59 — Zone-4 vs new programme best 62.10.
+- W&B run: `43fv3upa`
+
+### Results (seed=0, h=128/T_max=15/bf16/SwiGLU + head_embed 2.5× + 500-step warmup)
+
+| Metric | This run | #3932 (no-warmup) | PR best (T_max=17) |
+|---|---|---|---|
+| val_avg/mae_surf_p | 69.61 | 70.31 | 62.10 |
+| test_avg/mae_surf_p | 64.59 | — | 59.55 |
+| val@ep1 | 222.13 | 185 | ~120 (normal) |
+
+### Analysis
+
+**Finding 1 — Warmup made early-step dynamics WORSE.** val@ep1=222 (warmup) > 185 (no-warmup) > expected 80-120. The crippled head_embed lr during warmup allowed blocks to evolve to expect features from a near-frozen embedding; once lr unfreezes, recovery takes 10+ epochs.
+
+**Finding 2 — 3.09× equilibrium ratio is not a unique attractor.** Steady-state head/block_0 grad-norm at epoch 5: 2.35× (this run) vs 3.09× (#3932). Warmup permanently shifted the optimization trajectory to a different basin with systematically smaller head_embed gradients.
+
+**Finding 3 — 2.5× boost dead-end confirmed.** Combined with #3932, the design space at 2.5× is bracketed: {warmup: 69.61, no-warmup: 70.31}. Both Zone-4. Warmup helps by 0.7pt but the structural cost remains. **Head_and_embed LR boost family is EXHAUSTED** at this 17-epoch budget.
+
+Note: also caught PyTorch scheduler gotcha #2 (group['lr'] recurrence contamination) in initial run, fixed with closed-form formula. Fix is now programme-canonical.
+
+Also notable: first run (W&B `3u947wd3`) was a buggy 1.875× effective boost (not 2.5×) due to the cosine recurrence bug. Student killed it, fixed it, relaunched.
+
+---
+
 ## 2026-05-16 16:05 — PR #3994: H: T_max=17 cosine on SwiGLU h=128 ← MERGED, NEW PROGRAMME BEST
 
 - Branch: `willowpai2i48h1-thorfinn/tmax17_swiglu_h128`
