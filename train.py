@@ -136,6 +136,19 @@ class PhysicsAttention(nn.Module):
         return self.to_out(out_x)
 
 
+class GEGLUBlock(nn.Module):
+    """Single GEGLU FFN layer: projects to 2*d, gates one half via GELU, projects back."""
+    def __init__(self, in_dim, out_dim, hidden_dim=None):
+        super().__init__()
+        hidden_dim = hidden_dim or out_dim
+        self.w1 = nn.Linear(in_dim, hidden_dim * 2)
+        self.w2 = nn.Linear(hidden_dim, out_dim)
+
+    def forward(self, x):
+        gate, val = self.w1(x).chunk(2, dim=-1)
+        return self.w2(F.gelu(gate) * val)
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
@@ -147,8 +160,8 @@ class TransolverBlock(nn.Module):
             dropout=dropout, slice_num=slice_num,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
-        self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                       n_layers=0, res=False, act=act)
+        # GEGLU FFN: effective hidden=hidden_dim, gated feature selection
+        self.mlp = GEGLUBlock(hidden_dim, hidden_dim, hidden_dim=hidden_dim)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
