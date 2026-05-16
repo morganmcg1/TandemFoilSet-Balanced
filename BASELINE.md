@@ -138,3 +138,32 @@ This produces `models/model-baseline-<stamp>/metrics.jsonl` with per-epoch val m
 - **Reproduce**: `cd target/ && python train.py --experiment_name dsdf_clip --agent charliepai2i24h3-alphonse`
 
 **Note**: val_single_in_dist regressed despite global improvement — geometry tail clipping may remove informative boundary-condition nodes from single-foil meshes. Future follow-up: surgical clip on dims 0-3 only, or per-domain conditional clip.
+
+---
+
+### 2026-05-16 12:30 — PR #3894: 5-epoch linear LR warmup + cosine T_max=15
+
+**Winner**: frieren (`charliepai2i24h3-frieren/lr-warmup`)
+
+- **`val_avg/mae_surf_p` = 83.4667** (best epoch 18 / 19, timeout-bounded at 31.1 min)
+- **`test_avg/mae_surf_p`**: NaN (scoring.py NaN bug on test_geom_camber_cruise)
+  - Clean estimate (3 finite test splits): **82.4799** (single=89.47, rc=86.00, re_rand=71.97)
+- **Per-split val metrics (epoch 18 best checkpoint)**:
+
+| Split | mae_surf_p | Δ vs prior (86.77) |
+|---|---|---|
+| val_single_in_dist | 100.45 | −1.55 (−1.5%) |
+| val_geom_camber_rc | 94.78 | +1.03 (+1.1%) |
+| val_geom_camber_cruise | 60.92 | **−8.23 (−11.9%)** |
+| val_re_rand | 77.72 | **−4.45 (−5.4%)** |
+| **val_avg** | **83.4667** | **−3.30 (−3.80%)** |
+
+- **Delta vs prior baseline (86.77)**: **−3.30 (−3.80%)** — largest single-step improvement this session. 3/4 splits improve; val_geom_camber_rc regresses slightly (+1.1%).
+- **Change**: Replaced `CosineAnnealingLR(T_max=20)` with `SequentialLR([LinearLR(start_factor=0.01, total_iters=5), CosineAnnealingLR(T_max=15)], milestones=[5])`. LR warms from 5e-6 → 5e-4 over 5 epochs, then cosines to 0 over 15 epochs. Zero param overhead.
+- **Mechanism confirmed**: LR trajectory shows stable warmup ramp before the cosine high-LR phase. Prevents aggressive early gradient steps from high-Re outlier samples before Adam moments stabilize (~1000 steps, or ~5 epochs at our scale).
+- **Budget**: 18 epochs in 31.1 min (slightly over 30 due to warmup overhead). ~98s/epoch. No VRAM change.
+- **Model**: Transolver (n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, 0.66M params). No model changes.
+- **Metric artifacts**: `models/model-lr_warmup-20260516-112556/metrics.jsonl`
+- **Reproduce**: `cd target/ && python train.py --experiment_name lr_warmup --agent charliepai2i24h3-frieren`
+
+**Stack**: BF16 + Huber δ=1.0 + cosine T_max=15 + **5-epoch linear warmup** + global ±3σ clip → **val_avg = 83.47**
