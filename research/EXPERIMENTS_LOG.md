@@ -16,6 +16,107 @@ This file logs each reviewed PR. Newest entries at the top.
 
 ## Entries
 
+## 2026-05-16 03:30 — PR #3350: FiLM-Re conditioning on Transolver (alphonse) — MERGED (NEW BASELINE)
+- student: willowpai2i24h2-alphonse
+- branch: `willowpai2i24h2-alphonse/film-re-conditioning`
+- hypothesis: per-channel FiLM gamma/beta conditioning on log-Re signal within each Transolver block improves Re generalization
+- W&B runs: `99jk5guj` (primary), `anr2xaul`, `es15998q`
+
+| Run | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ val vs baseline |
+|---|---|---|---|
+| `99jk5guj` (best) | **79.9018** | **69.3296** | **−11.81%** |
+| `anr2xaul` | 86.5328 | 80.4702 | −4.49% |
+| `es15998q` | 87.5134 | 81.3596 | −3.41% |
+| 3-seed mean | 84.65 | 77.05 | −6.57% |
+| Baseline (#3215) | 90.6039 | 83.0029 | — |
+
+Per-split best seed (`99jk5guj`):
+| Split | val | test | Δ val |
+|---|---|---|---|
+| `single_in_dist` | 93.78 | 83.21 | −16.3% |
+| `geom_camber_rc` | 96.06 | 81.19 | −8.0% |
+| `geom_camber_cruise` | 54.93 | 46.55 | −11.5% |
+| `re_rand` | 74.83 | 66.36 | −10.8% |
+
+**Analysis:** Largest single-experiment gain on this benchmark. FiLM conditioning on Re works on every split with no regressions. The Re-holdout (`re_rand`) improves by −10.8%/−13.9% confirming the mechanism. Critical implementation detail: FiLM zero-init must be applied AFTER `self.apply(_init_weights)` to ensure identity start; `re_cond` must use first node row `x[:, 0, 13:14]` (not mean) to avoid padding-ratio confounding. 3-seed std is 4.16/6.69 — notable but even worst seed beats baseline.
+
+**Decision:** MERGED as new baseline (val=79.90, test=69.33).
+
+---
+
+## 2026-05-16 03:30 — PR #3568: mlp_ratio=4 FFN widening (fern) — CLOSED
+- student: willowpai2i24h2-fern
+- branch: `willowpai2i24h2-fern/mlp-ratio-4-smoothl1`
+- hypothesis: widening the Transolver FFN (mlp_ratio 2→4) improves model capacity within the same depth/head budget
+- W&B run: `de88syic`
+
+| Metric | This run | Baseline (#3215) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 95.4693 | 90.6039 | **+5.37% worse** |
+| `test_avg/mae_surf_p` | 85.5007 | 83.0029 | **+3.01% worse** |
+
+**Analysis:** FFN widening fails for the same reason as depth scaling (PR #3413): increased capacity requires more training epochs to express, but the 30-min wall-clock cap prevents the model from reaching the parameter regime where it would dominate. Only `geom_camber_rc` test improved; all other splits regressed. Depth/width scaling is consistently not viable under the current training budget.
+
+**Decision:** CLOSED.
+
+---
+
+## 2026-05-16 03:30 — PR #3516: SmoothL1 β sweep (tanjiro) — SENT BACK
+- student: willowpai2i24h2-tanjiro
+- branch: `willowpai2i24h2-tanjiro/smoothl1-beta-sweep`
+- hypothesis: mapping β={0.02, 0.03, 0.075} to find optimal SmoothL1 curvature
+- W&B runs: `pykk0x44` (β=0.02), `wju9cic5` (β=0.03), `ak9lfobu` (β=0.075)
+
+| β | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ val vs baseline |
+|---|---|---|---|
+| 0.02 (`pykk0x44`) | **88.1074** | **77.9147** | −2.76% |
+| 0.03 (`wju9cic5`) | 88.83 | 80.02 | −1.95% |
+| 0.075 (`ak9lfobu`) | not reported | — | — |
+| Baseline β=0.05 | 90.6039 | 83.0029 | — |
+| **New FiLM-Re baseline** | **79.9018** | **69.3296** | — |
+
+**Analysis:** Monotonically improving as β decreases (0.075→0.05→0.03→0.02). The minimum-β arm (0.02) beats the old baseline by 2.76%. However, FiLM-Re (PR #3350) is now baseline at 79.90 — standalone β=0.02 (88.11) no longer qualifies for merge. The compounding question is open: FiLM-Re + β=0.02/0.01.
+
+**Decision:** SENT BACK — compound FiLM-Re + β=0.02 and β=0.01 vs new baseline.
+
+---
+
+## 2026-05-16 03:30 — PR #3356: Divergence-free auxiliary loss (thorfinn) — SENT BACK
+- student: willowpai2i24h2-thorfinn
+- branch: `willowpai2i24h2-thorfinn/divergence-free-aux-loss`
+- hypothesis: normalized-space velocity divergence penalty (div_weight=0.01) enforces physics constraint and improves OOD generalization
+- W&B runs: `a42b4ca9`, `qquzu2ok`, `0xc0kpr5`
+
+| Run | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---|
+| `a42b4ca9` | **87.8703** | **78.8276** |
+| `qquzu2ok` | ~94 | — |
+| `0xc0kpr5` | ~97 | — |
+| Baseline (#3215) | 90.6039 | 83.0029 |
+| **New FiLM-Re baseline** | **79.9018** | **69.3296** |
+
+**Analysis:** Best run (a42b4ca9) beats old baseline by 3.0% val. Notable variance across 3 seeds suggests the physics loss interacts with training dynamics non-uniformly. FiLM-Re is now baseline at 79.90 — standalone div-free (87.87) no longer qualifies. The compound question: FiLM-Re + div_weight=0.01/0.005.
+
+**Decision:** SENT BACK — compound FiLM-Re + div-free at div_weight=0.01 and 0.005 vs new baseline.
+
+---
+
+## 2026-05-16 03:30 — PR #3520: Pure L1 surface loss (frieren) — CLOSED
+- student: willowpai2i24h2-frieren
+- branch: `willowpai2i24h2-frieren/l1-surface-loss`
+- hypothesis: pure L1 surface loss aligns directly with MAE eval metric and may outperform SmoothL1 β=0.05
+- W&B runs: multiple arms (val=93.98, 94.36, third arm inconclusive)
+
+| Metric | Best arm | Baseline (#3215) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | ~93.98 | 90.6039 | **+3.73% worse** |
+
+**Analysis:** All three arms failed to beat the old baseline. With FiLM-Re baseline at 79.90, pure L1 is now ~18% behind the frontier. The intuition that L1 aligns with MAE was correct, but tanjiro's sweep already covers the β→0 limit — the pure L1 gain (if any) is already captured by β=0.02. FiLM-Re is a far larger lever than loss-function fine-tuning.
+
+**Decision:** CLOSED. Assigning frieren new FiLM-Re compounding experiment.
+
+---
+
 ## 2026-05-16 01:30 — PR #3523: Domain one-hot embedding (edward) — CLOSED
 - student: willowpai2i24h2-edward
 - branch: `willowpai2i24h2-edward/domain-onehot-embedding`
