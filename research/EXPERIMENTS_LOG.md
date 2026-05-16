@@ -16,6 +16,27 @@ This file logs each reviewed PR. Newest entries at the top.
 
 ## Entries
 
+## 2026-05-16 10:30 — Cycle 22 interim: W&B-verified results for 3 stale_wip PRs (#3799 / #3806 / #3803)
+
+GitHub API rate-limit exhaustion at ~09:39 UTC interrupted the student polling loop for edward, fern, and tanjiro. All three completed training (W&B runs FINISHED) but never pushed their `train.py` changes or posted SENPAI-RESULT markers — only the assignment commits exist on origin. I independently audited the W&B runs to derive correct, apples-to-apples results against the SWA baseline (`val_avg/mae_surf_p_swa` vs baseline 76.6091, `test_avg/mae_surf_p_swa` vs 68.1999).
+
+| PR | Student | Best run | val_avg/mae_surf_p_swa | test_avg/mae_surf_p_swa | Δ val | Δ test | Action |
+|---|---|---|---|---|---|---|---|
+| #3799 | edward | `xuugyx5t` (ema_decay=0.99) | **70.569** | **61.976** | **−6.04** | **−6.22** | Commented: WINNER pending student push + SENPAI-RESULT + mark-ready |
+| #3799 | edward | `h6cy3nf8` (ema_decay=0.999) | 74.080 | 65.496 | −2.53 | −2.70 | Secondary arm, also beats baseline |
+| #3806 | fern | `pnmb6bd5` (surf-refine seed 2) | **76.203** | **67.110** | **−0.41** | **−1.09** | Commented: marginal winner pending student submission |
+| #3806 | fern | `rsnbhc5a` (surf-refine seed 1) | 76.573 | 67.933 | −0.04 | −0.27 | Confirms direction |
+| #3803 | tanjiro | `wr1yyf4l` (swa_start=4) | 83.231 | 75.036 | +6.62 | +6.84 | Commented: swa_start=4 worse, asked to pivot to {8,9,10} |
+| #3803 | tanjiro | `0wirafuw` (swa_start=4) | 83.305 | 74.034 | +6.70 | +5.83 | Same — 3 arms all ran swa_start=4, not the full sweep |
+
+**Key mechanistic finding (edward):** ema_decay=0.99 is a major (val −6.0 / test −6.2) improvement over uniform SWA. Mechanistically, decay=0.99 weights the late cosine-tail epochs much more than uniform SWA (effective decay ≈ (N-1)/N ≈ 0.9996 over 2250 updates), so the averaged weights live closer to the converged low-LR basin instead of being dragged by earlier mid-LR epochs.
+
+**Key mechanistic finding (tanjiro):** swa_start=4 contaminates the SWA estimate with mid-LR weight drift; later starts (>baseline 7) are likely the productive direction.
+
+**Status as of 2026-05-16 10:30:** Pending student push + SENPAI-RESULT submission on #3799 (winner) and #3806 (marginal winner). #3803 awaiting student response on sweep pivot. Pods are still running and polling (heartbeat iterations 207/49/206 observed at 10:19-10:23 UTC); should pick up within next 1-2 polling cycles.
+
+---
+
 ## 2026-05-16 09:30 — PR #3820: Residual learning over linear baseline (nezuko) — CLOSED
 - student: willowpai2i24h2-nezuko
 - branch: `willowpai2i24h2-nezuko/residual-linear-baseline`
