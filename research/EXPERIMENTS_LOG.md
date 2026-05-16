@@ -863,3 +863,57 @@ All THREE channels (Ux, Uy, p) degraded monotonically with p_weight increase. Mo
 ### Advisor action
 
 - **Closed (#3541)** — dead end and obsolete. Assigned wd sweep on current SOTA stack (new PR #3751 to thorfinn).
+
+---
+
+## 2026-05-16 07:30 — PR #3675 frieren MERGED: Lion lr=2e-4 → val=65.30 NEW SOTA
+
+- Branch: `willowpai2i24h3-frieren/lion-lr-sweep`
+- Hypothesis: Lion `LR · sign(momentum)` with clip=1.0 saturation → LR is the dominant magnitude lever. Doubling LR doubles per-step displacement; the descending-at-timeout val curve suggests headroom for higher LR.
+- W&B runs: `3rvfeq4g` (lr2e4), `u5gf4m89` (lr3e4)
+
+### Terminal results
+
+| Arm | lr | val_avg/mae_surf_p | test_avg_nansafe/mae_surf_p | Δ val vs baseline | Δ test vs baseline |
+|---|---|---:|---:|---:|---:|
+| baseline (#3596) | 1e-4 | 65.7375 | 61.7003 | — | — |
+| **Arm 1 (winner)** | **2e-4** | **65.2991** | **60.5400** | **−0.44** | **−1.16** |
+| Arm 2 | 3e-4 | 67.0045 | 62.8526 | +1.27 | +1.15 |
+
+### Analysis
+
+- **Clean LR-magnitude lever**: with clip=1.0 saturating ~98% of steps, Lion update is `LR · sign(momentum)`. Doubling LR doubles per-step displacement; tripling overshoots the basin
+- **Best epoch=19 (final)**: still descending at timeout, suggesting more steps would help but constrained by 30-min budget
+- **Schedule confirmed**: LR at ep19 = 1.42e-5 (just above eta_min=1e-5). Cosine arc engaged within budget
+- **Per-split breakdown improved across all 4 test splits** (single, rc, cruise, re_rand): broad improvement, not a tradeoff
+- Clip engagement: 98.5% (Arm 1), 97.8% (Arm 2) — unchanged from baseline
+
+### Advisor action
+
+- **MERGED #3675 at 07:30 UTC**. New SOTA: val=65.2991, test=60.5400.
+- Stack now: Lion **lr=2e-4**, wd=1e-2 + Huber δ=2.0 + bf16 + clip=1.0 + eta_min=1e-5 + T_max=21.
+
+---
+
+## 2026-05-16 ~07:30 — PR #3640 edward post-rebase: EMA d=0.999 on T_max=21 stack
+
+- Branch: `willowpai2i24h3-edward/ema-weights` (rebased)
+- Hypothesis: EMA d=0.999 won by 5.34 on old T_max=50 stack; should compound on T_max=21 stack where the low-LR refinement region is properly engaged.
+- W&B runs (post-rebase): `rm2nowk6` (ema-d999-tmax21) finished; `hwb8x55l` re-run in progress
+
+### Preliminary results
+
+| Run | val_avg_ema/mae_surf_p | Δ vs SOTA (65.30) |
+|---|---:|---:|
+| `rm2nowk6` (post-rebase) | **65.18** | **−0.12 (marginal)** |
+| `6co3bkwm` (old stack, T_max=50) | 64.51 | — (vs old baseline 69.86) |
+
+### Analysis (preliminary)
+
+- **EMA win largely overlapped with T_max=21**: on old stack EMA gave −5.34 vs base because the base model was under-trained (didn't reach productive low-LR zone). On T_max=21 stack, the base model already reaches that zone → EMA only adds −0.12.
+- **Mechanism convergence**: T_max=21 fix and EMA were both targeting late-training refinement — they're not orthogonal, they overlap.
+- Still pending: edward's `hwb8x55l` re-run and possible ema-d9999-tmax21 arm.
+
+### Advisor action
+
+- **Pending terminal** — wait for student to finish in-progress run and post final SENPAI-RESULT. Likely marginal improvement at best.
