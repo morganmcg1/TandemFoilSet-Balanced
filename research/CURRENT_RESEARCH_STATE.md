@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 20:35 UTC
+- **Updated:** 2026-05-16 21:30 UTC
 - **Track:** Charlie local-metrics arm (`charlie-pai2i-48h-r1`)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-48h-r1`
 - **Target base:** `icml-appendix-charlie`
@@ -68,13 +68,13 @@ Three orthogonal levers still in play:
 | #4041 v2 | alphonse  | FiLM two-stage (base+geom, is_tandem gate) on bf16+GEGLU | FiLM architecture | WIP (sent back for bf16+GEGLU rebase) |
 | #4068 | edward    | n_layers 5→4 on bf16+GEGLU | compute | WIP (sent back for bf16+GEGLU rebase) |
 | #4069 | nezuko    | torch.compile(dynamic=True) on bf16+GEGLU | compute | WIP (sent back for bf16+GEGLU rebase) |
-| #4071 | fern      | Schedule-Free AdamW on bf16+GEGLU | optim | WIP (sent back for bf16+GEGLU rebase) |
-| #4107 | tanjiro   | slice_num 12→8 on bf16 (pre-GEGLU) | compute | WIP — needs bf16+GEGLU rebase if wins old baseline |
-| #4134 | thorfinn  | Cosine T_max 50→25 (align to actual epochs) | LR schedule | WIP — newly assigned R16 |
-| #4136 | askeladd  | batch=8 + lr=1e-3 (linear scaling) on GEGLU | data parallelism | WIP — newly assigned R16 |
-| #4137 | frieren   | GEGLU + mlp_ratio 1→2 (double FFN intermediate dim) | FFN capacity | WIP — newly assigned R16 |
+| #4071 | fern      | Schedule-Free AdamW on bf16+GEGLU | optim | WIP — rebased onto bf16+GEGLU, training |
+| #4107 | tanjiro   | slice_num 12→8 on bf16+GEGLU | compute | WIP (sent back for bf16+GEGLU rebase — won old baseline 59.08→57.82) |
+| #4134 | thorfinn  | Cosine T_max 50→25 (align to actual epochs) | LR schedule | WIP — R16 |
+| #4136 | askeladd  | batch=8 + lr=1e-3 (linear scaling) on GEGLU | data parallelism | WIP — R16 |
+| #4155 | frieren   | SwiGLU vs GEGLU (replace `F.gelu` with `F.silu` in gate) | FFN nonlinearity | WIP — R16-late, fresh assignment |
 
-**Note on the 4 sent-back PRs:** All four (#4041 v2, #4068, #4069, #4071) had architectural/optimization wins against the OLD baseline (68.80 fp32) but couldn't merge once the new bf16 baseline (59.08), then bf16+GEGLU baseline (50.57), landed underneath them. Each is fully orthogonal to the merged wins, so a compound win is expected on rebase.
+**Note on the 5 sent-back PRs:** All five (#4041 v2, #4068, #4069, #4071, #4107) had architectural/optimization wins against an OLDER baseline but couldn't merge once the new bf16 baseline (59.08), then bf16+GEGLU baseline (50.57), landed underneath them. Each is fully orthogonal to the merged wins, so a compound win is expected on rebase.
 
 ## Closed axes (final state)
 
@@ -89,8 +89,9 @@ Three orthogonal levers still in play:
 | n_head (4) | CLOSED |
 | surf_weight (10.0) | CLOSED |
 | lr peak (5e-4 vs 7.5e-4) | SATURATED — closed at 5e-4 |
-| batch=8 (no LR scaling) | CLOSED — needs linear-scaling lr=1e-3 variant |
+| batch=8 (no LR scaling) | CLOSED — needs linear-scaling lr=1e-3 variant (in flight #4136) |
 | FiLM-full naive (11 scalars) | CLOSED — sent back to two-stage v2 (in flight) |
+| **mlp_ratio (also CLOSED for GEGLU)** | CLOSED — #4137 regression +1.58%; wall-clock-saturation (2 epochs lost × 1.1 pts/epoch ≈ 2.2 pts deficit > 0.80 pts observed) |
 
 ## Potential next research directions (post-R15)
 
@@ -104,10 +105,17 @@ Three orthogonal levers still in play:
 8. **pad_collate ceiling investigation:** sec/epoch wall-clock floor identified as `pad_collate(max_n)` + Python/dataloader, not compute. Profiling could surface 10-20% throughput gains.
 9. **Multi-seed confirmation of bf16+GEGLU baseline:** Before ICML deadline, 3 seeds of the current config to tighten the variance estimate (currently ±5-10 pts).
 
-## Round 16 dispatched (R16, 3 new assignments)
+## Round 16 dispatched (R16)
 
-| PR | Student | Hypothesis | Rationale |
-|----|---------|------------|-----------|
-| #4134 | thorfinn  | Cosine T_max 50→25 | Surface the under-annealed cosine tail; #4109 confirmed peak-LR saturated, schedule shape is the lever |
-| #4136 | askeladd  | batch=8 + lr=1e-3 (linear scaling) | Tests Goyal et al. 2017 linear-scaling on GEGLU regime; corrects #4104's under-training |
-| #4137 | frieren   | GEGLU + mlp_ratio 1→2 | Capacity bump on the new FFN axis frieren just opened; mlp_ratio=1 closure was for vanilla GELU only |
+| PR | Student | Hypothesis | Outcome / Status |
+|----|---------|------------|------------------|
+| #4134 | thorfinn  | Cosine T_max 50→25 | WIP, training |
+| #4136 | askeladd  | batch=8 + lr=1e-3 (linear scaling) | WIP, training |
+| #4137 | frieren   | GEGLU + mlp_ratio 1→2 | CLOSED (regression +1.58% val, wall-clock-driven) — frieren reassigned to #4155 |
+| #4155 | frieren   | SwiGLU vs GEGLU (replace `F.gelu` with `F.silu` in gate; same params, same sec/epoch) | WIP — R16-late follow-up |
+
+## R16-late closures / sent-backs (this iteration)
+
+- **#4137 CLOSED**: GEGLU + mlp_ratio=2 regressed +1.58% val (50.57 → 51.37). Per-epoch slope still positive but +33.6% params / +10% sec/epoch cost 2 epochs of training; wall-clock saturation argument applies (would apply equally with T_max=25, so no reopen). Cruise tied, single_in_dist regressed most (epoch-sensitive split). mlp_ratio axis stays CLOSED for GEGLU too.
+- **#4107 SENT BACK**: tanjiro slice_num=8 won old bf16 baseline (59.08→57.82, -2.13%) but submitted after GEGLU merge. Same baseline-shift problem as #4068/#4069/#4071/#4041 v2. Trajectory hint: 12→8 step (-2.13%) out-improved 16→12 (-0.34%) → optimum likely below 8. slice_num=6/4 are next steps after successful bf16+GEGLU rebase.
+- **frieren reassigned (#4155)**: SwiGLU vs GEGLU is a clean A/B — same param count, same sec/epoch, single-line change (`F.gelu` → `F.silu`). LLaMA/PaLM picked SiLU over GELU; CFD pressure fields are smooth so the smoother gate may edge GEGLU. If wins: GLU-family axis splits open; if loses/ties: GEGLU confirmed and we move on.

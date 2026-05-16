@@ -965,6 +965,62 @@ Slice_num axis fully closed. Bottleneck is now per-batch matmul overhead. bf16 i
 
 ---
 
+## 2026-05-16 21:26 — PR #4137 — GEGLU + mlp_ratio 1→2 (CLOSED — regression, wall-clock-driven)
+
+- **Branch:** `charliepai2i48h1-frieren/geglu-mlp-ratio-2`
+- **Hypothesis:** Double FFN intermediate dim from `n_hidden*1=128` to `n_hidden*2=256` on top of GEGLU. Predicted: +30-40% params, +8% sec/epoch (loses ~2 epochs), but per-epoch quality gain dominates → net -3 to -8% val.
+- **Results vs baseline (val=50.57, test=43.94):**
+
+| Metric | Baseline (mlp_ratio=1) | mlp_ratio=2 | Δ |
+|--------|-----------------------:|------------:|--:|
+| `val_avg/mae_surf_p` | **50.57** | **51.37** | **+1.58% (regression)** |
+| `test_avg/mae_surf_p` | **43.94** | **44.39** | +1.02% (regression) |
+| `val_single_in_dist` | 56.18 | 57.95 | +3.15% (worst regression) |
+| `val_geom_camber_rc` | 63.01 | 63.59 | +0.92% |
+| `val_geom_camber_cruise` | 32.57 | 32.58 | +0.03% (tied) |
+| `val_re_rand` | 50.52 | 51.36 | +1.66% |
+| n_params | 737,491 | **984,531** | +33.6% (as predicted) |
+| sec/epoch | 78.9 | **86.8** | +10% (slightly over predicted +8%) |
+| epochs in 30-min cap | 23 | **21** | -2 |
+| Peak VRAM | 25.7 | 30.9 | +20% |
+
+- **Metrics path:** `models/model-geglu-mlp-ratio-2-20260516-204708/metrics.jsonl`
+- **Decision:** CLOSED. Per the PR's stated "If loses" protocol, **mlp_ratio axis closes at 1 for GEGLU.**
+- **Student's wall-clock attribution (correct):** Per-epoch slope at terminal: 1.0-2.2 pts/epoch (still steep descent). 2 epochs lost × 1.1 pts/epoch ≈ 2.2 pts deficit. Observed gap: 0.80 pts → mlp_ratio=2 is *slightly net-positive per epoch* but wall-clock cap prevents reaching the cross-over point.
+- **Per-split diagnostic:** cruise tied (gate already had room), single_in_dist regressed most (most epoch-sensitive split). Consistent with "running out of time" not "wrong direction".
+- **Why not reopen with T_max=25:** The same wall-clock-saturation argument applies — even with full annealing in 21 epochs, would need to cross 0.80 val pts via late-training sharpening, which is asking a lot from cosine tail alone. Compute budget simply doesn't fit.
+- **Follow-up assigned to frieren:** SwiGLU vs GEGLU clean A/B ablation (#4155). Same param count, same sec/epoch — clean test of gate activation choice.
+
+---
+
+## 2026-05-16 21:25 — PR #4107 — slice_num 12→8 on bf16-only baseline (SENT BACK — wins old, not new)
+
+- **Branch:** `charliepai2i48h1-tanjiro/slice-num-8-on-bf16`
+- **Hypothesis:** Continue the slice_num halving trajectory (64→32→16→12 already merged). Predicted -8 to -12% sec/epoch from O(N·S²) projection cost reduction → +2 epochs in 30-min cap.
+- **Results vs OLD bf16 baseline (val=59.08, test=51.29):**
+
+| Metric | Old bf16 baseline (slice=12) | slice=8 | Δ vs OLD |
+|--------|-----------------------------:|--------:|---------:|
+| `val_avg/mae_surf_p` | 59.08 | **57.82** | **-2.13% ✓** |
+| `test_avg/mae_surf_p` | 51.29 | **50.89** | -0.79% ✓ |
+| `val_single_in_dist` | 69.49 | 66.58 | -4.2% |
+| `val_geom_camber_rc` | 68.90 | 70.25 | +2.0% (only regression) |
+| `val_geom_camber_cruise` | 40.32 | 37.89 | -6.0% |
+| `val_re_rand` | 57.60 | 56.56 | -1.8% |
+| sec/epoch | 74.4 | **67.63** | **-9.1%** (as predicted) |
+| epochs in 30-min cap | 25 | **27** | +2 |
+| Peak VRAM | 23.5 | 22.7 | -3% |
+
+- **Metrics path:** `target/models/model-charliepai2i48h1-tanjiro-slice-num-8-on-bf16-20260516-202556/metrics.jsonl`
+- **Decision:** SENT BACK (not closed). Real win on 3 of 4 val splits and 3 of 4 test splits vs old bf16 baseline. Same baseline-shift problem as #4069, #4071, #4068, #4041 v2 — new baseline (bf16 + GEGLU #4105, val=50.57) merged during this run.
+- **Slice trajectory insight (student observation):** The 12→8 step out-improved the 16→12 step (-2.13% vs -0.34%) — suggests the optimum is BELOW 8, not above it. slice_num=6/4 are logical follow-ups if the bf16+GEGLU retest wins.
+- **Asymmetric per-split insight:** geom_camber_rc resists slice reduction (only regressed split) while cruise benefits most (-6.0%) — may motivate geometry-aware slicing in a future axis.
+- **Why orthogonal to GEGLU:** slice_num modifies attention sparsity (O(N·S²) projection); GEGLU modifies FFN nonlinearity (gating). Two independent mechanisms → expected to compound.
+- **Stacked prediction (slice=8 + bf16 + GEGLU):** sec/epoch ~71.7s → 25 epochs in 30-min cap; starting from GEGLU's 50.57 at 23 epochs still descending at 1.7 pts/epoch → +2 epochs × 1.7 pts ≈ **target val ≤ 47**.
+- **Next action:** tanjiro rebases onto current advisor branch (now has bf16 + GEGLU), re-runs same slice_num=8 change. Target: beat val=50.57. If wins, slice_num=6 is next assignment.
+
+---
+
 ## 2026-05-16 16:30 — PR #4018 — FiLM-Re+AoA (MERGED → new baseline, -3.7%)
 
 - **Branch:** `charliepai2i48h1-alphonse/film-re-aoa`
