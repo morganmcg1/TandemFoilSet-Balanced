@@ -2003,3 +2003,135 @@ The "direction normalization mechanism family" now has clearer geometry:
 - Arm A: `models/model-charliepai2i48h4-edward-agc-r2-arma-sf-clip1-20260516-163042/metrics.jsonl`
 - Arm B: `models/model-charliepai2i48h4-edward-agc-r2-armb-sf-agc-20260516-173702/metrics.jsonl`
 
+
+---
+
+## 2026-05-16 19:30 — PR #4012 [SENT BACK R2]: Sobolev gradient loss — edge-gradient L1 supervision via kNN
+
+- **Student branch:** `charliepai2i48h4-fern/sobolev-loss`
+- **Hypothesis:** Adding an edge-gradient L1 loss term (`sobolev_weight` × `||∇ŷ − ∇y||₁`) via in-batch kNN sharpens surface pressure prediction by supervising first-order spatial derivatives, not just point values. Expected −2% to −8% on val_avg.
+
+### Results (R1 — STALE STACK, sent back for R2)
+
+All R1 arms ran on **AdamW+cosine+clip=0.25 stack** (not SF-AdamW). Arm A control absolute 83.812 vs cited baseline 80.893 (+3.6% drift — expected session-level noise from different seed/run).
+
+| Arm | sobolev_weight | val_avg/mae_surf_p | Paired Δ vs A | Test 3-split | Test Δ vs A |
+|-----|---|---|---|---|---|
+| **A (ctrl)** | 0.0 | 83.812 | — | 79.938 | — |
+| B | 0.1 | 84.903 | +1.30% | 79.940 | +0.00% |
+| C | 0.3 | 82.912 | **−1.07%** | 79.790 | **−0.19%** |
+| D | 1.0 | 83.854 | +0.05% | 80.053 | +0.14% |
+
+**Arm C (w=0.3): paired Δ −1.07% val / −0.19% test.** Non-monotone ranking (B regresses, C wins, D flat). Strongest split gains: val_geom_camber_cruise (−4.07%), val_geom_camber_rc (−2.45%). Weakest: val_re_rand (−0.10%).
+
+### Decision: SENT BACK for SF-AdamW rebase + 2-arm confirmation
+
+Three blockers prevent merge on R1:
+1. **Stale stack** — Arm A absolute 83.812 vs current baseline 65.618 (+27.8%). The experiment was run on AdamW+cosine, not the merged SF-AdamW stack.
+2. **Weak test transfer** — val Δ −1.07% but test Δ only −0.19% (5× weaker). Sobolev surface-gradient supervision is more likely to fit the specific val split geometry than generalize to test.
+3. **Non-monotonicity** — B regresses +1.30%, C wins, D ties. Suggests the win may be noise-sensitive.
+
+### R2 instruction (sent to student 19:20 UTC)
+
+- Rebase onto advisor HEAD `02ae7e3`
+- Run 2-arm paired comparison only: Arm A (SF+sobolev_weight=0) vs Arm B (SF+sobolev_weight=0.3)
+- Decision gates: (1) reproduces −1% with test transfer → R3 full sweep, (2) val win without test signal → close, (3) regresses or ties → close
+
+### Metric artifacts (R1)
+
+- Arm A: `models/model-charliepai2i48h4-fern-sobolev-r1-arma-sw0_0-*/metrics.jsonl`
+- Arm B: `models/model-charliepai2i48h4-fern-sobolev-r1-armb-sw0_1-*/metrics.jsonl`
+- Arm C: `models/model-charliepai2i48h4-fern-sobolev-r1-armc-sw0_3-*/metrics.jsonl`
+- Arm D: `models/model-charliepai2i48h4-fern-sobolev-r1-armd-sw1_0-*/metrics.jsonl`
+
+---
+
+## 2026-05-16 19:55 — PR #4051 [CLOSED]: SF-AdamW weight-decay sweep — wd ∈ {1e-4, 3e-4, 1e-3, 1e-2}
+
+- **Student branch:** `charliepai2i48h4-thorfinn/sf-wd-sweep`
+- **Hypothesis:** Weight decay (wd) was never re-tuned for SF-AdamW; the 100× range sweep probes whether higher wd helps regularize under SF's constant-LR regime. Expected −1% to −3% at some larger wd.
+
+### Results
+
+All arms ran on SF-AdamW stack with 17 epochs.
+
+| Arm | wd | val_avg | Paired Δ vs A | Test 3-split | Test Δ vs A |
+|-----|---|---|---|---|---|
+| **A (ctrl)** | 1e-4 | **61.758** | — | **60.373** | — |
+| B | 3e-4 | 63.278 | +2.46% | 60.612 | +0.40% |
+| C | 1e-3 | 63.788 | +3.29% | 60.860 | +0.81% |
+| D | 1e-2 | 69.161 | +11.99% | 66.357 | +9.91% |
+
+All four splits regress monotonically. Higher wd uniformly hurts across all splits and test splits. The train/val gap at Arm A is only **+0.00489** — no overfitting to regularize away. Arm C (wd=1e-3) has the smallest gap (+0.00072) but worst val of {A,B,C} — higher wd raises train loss without lowering val loss.
+
+**Weight L2 trajectory:** All arms' weights grow monotonically (gradient signal dominates wd shrinkage). Only Arm D shows a meaningful gap in final weight norm (−2.1% vs A). Arms B and C indistinguishable from A on weight norm (<0.25% Δ).
+
+### Decision: CLOSED (per rule: all higher-wd arms regress → wd=1e-4 at or below optimum)
+
+### Mechanism finding (HIGH VALUE)
+
+**SF Polyak averaging + EMA already saturate the implicit-regularization role.** This is the 3rd "two mechanisms for same role"-style finding under SF-AdamW:
+1. Capacity (n_hidden=192, #3492 R4) — budget-subsumed under SF
+2. AGC (#3985 R2) — mechanism-flip under SF
+3. Weight decay (#4051) — Polyak + EMA absorb the regularization role; external wd has no headroom
+
+**General principle:** SF-AdamW's iterate-averaging absorbs roles previously played by scheduler-mediated regularization mechanisms (cosine LR decay, explicit wd, AGC's late-low-LR regime). Consistent with Defazio et al. (2024) theoretical claim.
+
+**Key secondary finding:** Arm A absolute val=61.758 (5.9% below merged baseline 65.618 at 17 epochs). Multiple within-session controls now land 61-63 absolute (nezuko R4 A=62.95, frieren Lion B=63.336, thorfinn #4051 A=61.758). The merged 65.618 was likely a slightly-unlucky single-seed run; true SF-AdamW+EMA+clip=1.0 stack is approximately 61-63 absolute.
+
+### New assignments
+
+- **thorfinn → #4114**: batch_size sweep under SF-AdamW {4, 6, 8, 12} (VRAM headroom: 39 GB peak at bs=4 vs 96 GB available)
+
+### Metric artifacts
+
+- Arm A: `models/model-charliepai2i48h4-thorfinn-sf-wd-r1-arma-wd1e-4-20260516-164911/metrics.jsonl`
+- Arm B: `models/model-charliepai2i48h4-thorfinn-sf-wd-r1-armb-wd3e-4-20260516-172402/metrics.jsonl`
+- Arm C: `models/model-charliepai2i48h4-thorfinn-sf-wd-r1-armc-wd1e-3-20260516-175851/metrics.jsonl`
+- Arm D: `models/model-charliepai2i48h4-thorfinn-sf-wd-r1-armd-wd1e-2-20260516-183339/metrics.jsonl`
+
+---
+
+## 2026-05-16 19:58 — PR #4003 [CLOSED]: Clip threshold R2 — tighter sweep {0.05, 0.1, 0.15, 0.25 control}
+
+- **Student branch:** `charliepai2i48h4-tanjiro/clipthresh-r2-tighter`
+- **Hypothesis:** R1 found clip=0.25 improved over clip=1.0; R2 sweeps tighter {0.05, 0.10, 0.15} to find whether the monotone-improvement continues or saturates at 0.25.
+
+### Results (AdamW+cosine stack)
+
+All arms on AdamW+cosine+Huber+EMA+FiLM stack. **Within-session noise floor: 0.97% paired** (measured from two identical clip=0.25 replicates, same seed=1 — the most precise per-step variance measurement this track has produced).
+
+| Arm | clip | val_avg | Paired Δ vs A | Test 3-split | Test Δ vs A |
+|-----|---|---|---|---|---|
+| A r1 (rerun ctrl) | 0.25 | 82.028 | −0.96% | 78.261 | — |
+| **A r2 (official ctrl)** | **0.25** | **82.823** | — | **78.876** | — |
+| B | 0.10 | 82.766 | **−0.07%** (tie) | 79.724 | +1.08% |
+| C | 0.05 | 83.913 | +1.32% | 79.856 | +1.24% |
+| D | 0.15 | 83.274 | +0.54% | 80.003 | +1.43% |
+
+Arm B within noise floor. Arms C/D regress. **All arms at 100% clip rate** at every epoch including clip=0.05 — direction-normalization is fully saturated at 0.25.
+
+**Pre-clip p50 grad norm: ~5-6** across all arms (23× / 61× / 129× / 41× over threshold). Even at clip=0.05, effective LR collapses to ~4e-6/step (far below optimizer's useful regime). Tighter clip is just effective-LR shrinkage, not direction improvement.
+
+### Decision: CLOSED (per rule: no arm beats control by >0.5% paired → clip=0.25 is AdamW+cosine optimum)
+
+### Mechanism finding (HIGH VALUE)
+
+**100% clip rate at all thresholds including 0.05** → direction-normalization is a binary switch, not a knob. Once every gradient is rescaled, the *threshold value* is just a global LR scaling factor. The natural gradient distribution has p50 ≈ 5-6 across all arms; clip=0.25 is already 20-25× below median, so tighter just shrinks effective LR.
+
+**Noise floor calibration:** 0.97% paired variance from cuDNN non-determinism alone (identical seed, config, hardware). This tightens the previous ±1.5-2% stated band — for AdamW+cosine at this stack, the 1-sigma noise is ~0.5% paired. Threshold for a real signal: >1% paired (2-sigma).
+
+**Note:** This is on AdamW+cosine, not SF-AdamW. The SF-clip question remains open under alphonse #4019 (2×2 factorial: clip ∈ {0.25, 1.0} × EMA ∈ {off, on}). Lion's potential win (frieren #3980) must come from momentum dynamics, not direction-only signal.
+
+### New assignments
+
+- **tanjiro → #4113**: EMA decay value sweep under SF-AdamW {0.99, 0.999, 0.9995, 0.9999}
+
+### Metric artifacts
+
+- A r2 (official): `models/model-charliepai2i48h4-tanjiro-clipthresh-r2-arma-clip0_25-20260516-162240/metrics.jsonl`
+- A r1 (duplicate ctrl): `models/model-charliepai2i48h4-tanjiro-clipthresh-r2-arma-clip0_25-20260516-143815/metrics.jsonl`
+- Arm B: `models/model-charliepai2i48h4-tanjiro-clipthresh-r2-armb-clip0_1-20260516-152719/metrics.jsonl`
+- Arm C: `models/model-charliepai2i48h4-tanjiro-clipthresh-r2-armc-clip0_05-20260516-172649/metrics.jsonl`
+- Arm D: `models/model-charliepai2i48h4-tanjiro-clipthresh-r2-armd-clip0_15-20260516-182441/metrics.jsonl`
+
