@@ -1,6 +1,6 @@
 # SENPAI Research State — TandemFoilSet (willow-pai2i-24h-r4)
 
-- **As of:** 2026-05-16 01:35 UTC
+- **As of:** 2026-05-16 01:40 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r4`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced`
 - **W&B:** `wandb-applied-ai-team/senpai-v1`
@@ -31,10 +31,10 @@ All remaining PRs must beat **test_avg/mae_surf_p < 69.27**.
 | 4 | tanjiro  | #3406 | surf_weight sweep — sw5 rerun on cosine base; notified of new 69.27 target | WIP (rebase+rerun, branch updated 01:23) |
 | 5 | alphonse | #3565 | AdamW betas=(0.9,0.95) + weight_decay=0.05 sweep (3 arms) | WIP (assigned 00:40) |
 | 6 | askeladd | #3351 | EMA β=0.99 (shorter horizon) — SENT BACK for full-stack rebase | WIP (rebasing; branch CONFLICTING) |
-| 7 | edward   | — | (idle after #3262 R2#2 merge) | needs hypothesis |
+| 7 | edward   | #3599 | RFF σ sweep {0.5,1.0,2.0} × n_freqs {16,32} — R3 refinement on own win | WIP (assigned 01:37) |
 | 8 | fern     | #3258 | Grad-clip 1.0 + 5-epoch warmup — SENT BACK for full-stack rebase | WIP (rebasing) |
 
-**edward just freed up after winning** with #3262 — needs a new hypothesis.
+**All 8 students active.** Edward assigned #3599 (RFF σ/n_freqs sweep) at 01:37 UTC.
 
 ## R1/R2 closed/merged history
 
@@ -100,7 +100,7 @@ Assigning RFF n_freqs/σ sweep as R3 for edward.
 5. ✗ Richer FiLM conditioning ← REBASE IN FLIGHT (#3504)
 6. ✗ Volume MAE reformulation ← IN FLIGHT (#3550)
 7. ✗ AdamW betas / weight-decay sweep ← IN FLIGHT (#3565)
-8. **RFF σ sweep {0.5, 1.0, 2.0} + n_freqs {16, 32, 64}** ← assign to edward (just freed)
+8. ✗ **RFF σ sweep {0.5, 1.0, 2.0} + n_freqs {16, 32, 64}** ← IN FLIGHT (#3599 edward)
 9. **Per-block × richer-FiLM compose** (if both #3468 + #3504 land on new base)
 10. **Single-foil FiLM mask** (mask foil-2/gap/stagger features when gap=0; fixes mid128 single_in_dist regression frieren observed)
 11. **Geometry-aware input features** (node distance to nearest surface; may be redundant with dsdf)
@@ -113,6 +113,10 @@ Assigning RFF n_freqs/σ sweep as R3 for edward.
 
 ## Next immediate action
 
-1. **Assign edward** a new R3 hypothesis: RFF σ sweep {0.5, 1.0, 2.0} + n_freqs bump {32, 64}.
-2. **Monitor** results from the rebase reruns (#3468, #3406, #3504, #3258, #3351) and first-run assignments (#3550, #3565).
-3. **Rate limit** resets regularly; next wakeup scheduled for ~02:15 UTC.
+**All 8 students active.** Monitor for results from rebase reruns (#3468 thorfinn, #3406 tanjiro, #3504 frieren, #3258 fern, #3351 askeladd) and fresh assignments (#3550 nezuko, #3565 alphonse, #3599 edward).
+
+Key monitors:
+- #3468 thorfinn per-block FiLM v2 on cosine+RFF base: predicted hopeful test ~64–66
+- #3406 tanjiro sw=5 on cosine+RFF base: predicted test ~64–65 (branch updated at 01:23)
+- #3504 frieren richer-FiLM film_mid=64 on full stack: predicted hopeful test ~64.4
+- #3599 edward RFF σ sweep: σ=0.5 and σ=2.0 bracket around the winning σ=1.0
