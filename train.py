@@ -465,6 +465,10 @@ class Config:
     deterministic: bool = False
     use_swiglu: bool = False
     use_geglu: bool = False
+    # PR #4089: SWA averaging over the last N epochs of the cosine schedule.
+    # NO LR perturbation — purely additive on top of the standard cosine T_max=epochs.
+    # n_swa_tail=0 disables SWA; default 4 averages epochs (E-3..E) for E=cfg.epochs.
+    n_swa_tail: int = 4
 
 
 cfg = sp.parse(Config)
@@ -562,6 +566,22 @@ best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
 
+# PR #4089: SWA over the last `n_swa_tail` epochs of the cosine schedule.
+# We collect deep-cloned state_dicts after each in-window epoch's val eval,
+# then uniformly average them at end of training. Transolver uses LayerNorm
+# only (no BN running stats), so no `update_bn` recalibration pass is needed.
+swa_n_tail = max(0, int(cfg.n_swa_tail))
+swa_first_epoch = MAX_EPOCHS - swa_n_tail  # 0-indexed: epochs in [swa_first_epoch, MAX_EPOCHS)
+swa_snapshots: list[dict] = []
+final_epoch_path = model_dir / "final_epoch.pt"
+# Track last epoch actually trained (for the "epoch{E}_weights" sanity arm) — populated
+# inside the loop in case the wall-clock timeout truncates training before MAX_EPOCHS.
+last_completed_epoch = -1
+print(
+    f"SWA tail: averaging last {swa_n_tail} epochs of {MAX_EPOCHS} cosine epochs "
+    f"(window: epoch {swa_first_epoch+1}..{MAX_EPOCHS} 1-indexed)"
+)
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -658,6 +678,17 @@ for epoch in range(MAX_EPOCHS):
         torch.save(model.state_dict(), model_path)
         tag = " *"
 
+    # PR #4089: snapshot collection inside the SWA tail window.
+    # Cloned post-optimizer-step weights (model is in eval mode here, but weight
+    # values are unchanged by .eval()). bf16 autocast leaves weights in fp32 so
+    # .clone() preserves precision.
+    in_swa_window = (swa_n_tail > 0) and (epoch >= swa_first_epoch)
+    if in_swa_window:
+        swa_snapshots.append({k: v.detach().clone() for k, v in model.state_dict().items()})
+        tag += " [swa]"
+    # Final-epoch sanity arm: always overwrite so the last-completed epoch wins.
+    torch.save(model.state_dict(), final_epoch_path)
+    last_completed_epoch = epoch
 
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s, step={step_time_ms:.1f}ms) [{peak_gb:.1f}GB]  "
@@ -670,58 +701,192 @@ for epoch in range(MAX_EPOCHS):
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
-# --- Test evaluation + artifact upload ---
-if best_metrics:
-    print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
-    wandb.summary.update({
-        "best_epoch": best_metrics["epoch"],
-        "best_val_avg/mae_surf_p": best_avg_surf_p,
-        "total_train_minutes": total_time,
-    })
+# --- PR #4089: 3-arm evaluation (best_val_ckpt / epoch{E}_weights / swa_tail{N}) ---
+# Build test loaders once and reuse across all arms.
+test_loaders = None
+if not cfg.skip_test:
+    print("\nEvaluating on held-out test splits (3-arm SWA comparison)...")
+    test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
+    test_loaders = {
+        name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+        for name, ds in test_datasets.items()
+    }
 
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+
+def _average_state_dicts(state_dicts: list[dict]) -> dict:
+    """Uniform mean of N state_dicts. Cast to fp32 for stable summation then
+    back to the original dtype (Transolver weights are fp32, so no-op cast)."""
+    avg = {}
+    for key in state_dicts[0].keys():
+        stacked = torch.stack([sd[key].float() for sd in state_dicts], dim=0)
+        avg[key] = stacked.mean(dim=0).to(state_dicts[0][key].dtype)
+    return avg
+
+
+def _eval_arm(state: dict, label: str) -> tuple[dict, dict, dict | None, dict | None]:
+    """Load `state` into `model`, eval on val + test, return (v_metrics, v_avg, t_metrics, t_avg)."""
+    model.load_state_dict(state)
     model.eval()
-
-    test_metrics = None
-    test_avg = None
-    if not cfg.skip_test:
-        print("\nEvaluating on held-out test splits...")
-        test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
-        test_loaders = {
-            name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
-            for name, ds in test_datasets.items()
-        }
-        test_metrics = {
+    v_metrics = {
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        for name, loader in val_loaders.items()
+    }
+    v_avg = aggregate_splits(v_metrics)
+    t_metrics = t_avg = None
+    if test_loaders is not None:
+        t_metrics = {
             name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
             for name, loader in test_loaders.items()
         }
-        test_avg = aggregate_splits(test_metrics)
-        print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
-        for name in TEST_SPLIT_NAMES:
-            print_split_metrics(name, test_metrics[name])
+        t_avg = aggregate_splits(t_metrics)
+    t_str = (
+        f"  test_avg/mae_surf_p={t_avg['avg/mae_surf_p']:.4f}" if t_avg is not None else ""
+    )
+    print(f"  [{label}] val_avg/mae_surf_p={v_avg['avg/mae_surf_p']:.4f}{t_str}")
+    for name in (TEST_SPLIT_NAMES if t_metrics is not None else []):
+        print_split_metrics(name, t_metrics[name])
+    return v_metrics, v_avg, t_metrics, t_avg
 
+
+# Arm-result collector: flat dict for wandb.log / wandb.summary
+arm_results: dict = {}
+
+
+def _record_arm(arm: str, v_metrics: dict, v_avg: dict, t_metrics, t_avg) -> None:
+    arm_results[f"{arm}/val_avg/mae_surf_p"] = v_avg["avg/mae_surf_p"]
+    for split in VAL_SPLIT_NAMES:
+        arm_results[f"{arm}/{split}/mae_surf_p"] = v_metrics[split]["mae_surf_p"]
+    if t_avg is not None:
+        arm_results[f"{arm}/test_avg/mae_surf_p"] = t_avg["avg/mae_surf_p"]
+        for split in TEST_SPLIT_NAMES:
+            arm_results[f"{arm}/{split}/mae_surf_p"] = t_metrics[split]["mae_surf_p"]
+
+
+# Arm 1: best_val_ckpt — best validation checkpoint over all epochs (baseline sanity)
+arm1_state = None
+if best_metrics:
+    arm1_state = torch.load(model_path, map_location=device, weights_only=True)
+    v_m, v_a, t_m, t_a = _eval_arm(arm1_state, "best_val_ckpt")
+    arm_results["best_val_ckpt/epoch"] = best_metrics["epoch"]
+    _record_arm("best_val_ckpt", v_m, v_a, t_m, t_a)
+
+# Arm 2: epoch{E}_weights — final cosine-epoch weights (sanity arm; pre-SWA reference)
+arm2_state = None
+final_epoch_1idx = last_completed_epoch + 1  # 1-indexed for human-friendly naming
+arm2_label = f"epoch{final_epoch_1idx}_weights"
+if final_epoch_path.exists():
+    arm2_state = torch.load(final_epoch_path, map_location=device, weights_only=True)
+    v_m, v_a, t_m, t_a = _eval_arm(arm2_state, arm2_label)
+    arm_results[f"{arm2_label}/epoch"] = final_epoch_1idx
+    # Also log under canonical key for cross-run comparison
+    arm_results["final_epoch/epoch"] = final_epoch_1idx
+    arm_results["final_epoch/val_avg/mae_surf_p"] = v_a["avg/mae_surf_p"]
+    for split in VAL_SPLIT_NAMES:
+        arm_results[f"final_epoch/{split}/mae_surf_p"] = v_m[split]["mae_surf_p"]
+    if t_a is not None:
+        arm_results["final_epoch/test_avg/mae_surf_p"] = t_a["avg/mae_surf_p"]
+        for split in TEST_SPLIT_NAMES:
+            arm_results[f"final_epoch/{split}/mae_surf_p"] = t_m[split]["mae_surf_p"]
+
+# Arm 3: swa_tail{N} — uniform average of last N cosine-epoch snapshots
+swa_state = None
+swa_label = f"swa_tail{len(swa_snapshots)}"
+if len(swa_snapshots) >= 2:
+    swa_state = _average_state_dicts(swa_snapshots)
+    swa_path = model_dir / "swa_tail.pt"
+    torch.save(swa_state, swa_path)
+    v_m, v_a, t_m, t_a = _eval_arm(swa_state, swa_label)
+    arm_results["swa_tail/n_snapshots"] = len(swa_snapshots)
+    arm_results["swa_tail/first_epoch"] = swa_first_epoch + 1  # 1-indexed
+    arm_results["swa_tail/last_epoch"] = final_epoch_1idx
+    _record_arm("swa_tail", v_m, v_a, t_m, t_a)
+elif len(swa_snapshots) == 1:
+    print(f"\n[warn] only {len(swa_snapshots)} SWA snapshot collected — averaging arm skipped")
+else:
+    print("\n[warn] no SWA snapshots collected — averaging arm skipped")
+
+# Final arm comparison + winner pick
+arm_val_scores = {}
+for arm in ("best_val_ckpt", "final_epoch", "swa_tail"):
+    k = f"{arm}/val_avg/mae_surf_p"
+    if k in arm_results:
+        arm_val_scores[arm] = arm_results[k]
+winning_arm = min(arm_val_scores, key=arm_val_scores.get) if arm_val_scores else None
+score_str = "  ".join(f"{a}={v:.4f}" for a, v in arm_val_scores.items())
+print(f"\nArm comparison (val_avg/mae_surf_p):  {score_str}  → winner: {winning_arm}")
+arm_results["winning_arm"] = winning_arm
+
+wandb.log(arm_results)
+wandb.summary.update(arm_results)
+
+# --- Artifact upload + top-level test logging ---
+# Primary arm for this PR is swa_tail (the experimental hypothesis), so the artifact
+# and top-level `test_*` summary reflect swa_tail weights when available. Falls back
+# to best_val_ckpt if SWA averaging was skipped.
+if swa_state is not None:
+    primary_state = swa_state
+    primary_label = swa_label
+    primary_val_avg = arm_results["swa_tail/val_avg/mae_surf_p"]
+    primary_epoch = final_epoch_1idx  # SWA ends at final epoch
+elif arm1_state is not None:
+    primary_state = arm1_state
+    primary_label = "best_val_ckpt"
+    primary_val_avg = arm_results["best_val_ckpt/val_avg/mae_surf_p"]
+    primary_epoch = best_metrics["epoch"]
+else:
+    primary_state = None
+
+if primary_state is not None:
+    # Overwrite model_path so artifact upload picks up the primary arm's weights
+    torch.save(primary_state, model_path)
+    model.load_state_dict(primary_state)
+    model.eval()
+
+    wandb.summary.update({
+        "primary_arm": primary_label,
+        "best_epoch": best_metrics["epoch"] if best_metrics else final_epoch_1idx,
+        "best_val_avg/mae_surf_p": primary_val_avg,
+        "total_train_minutes": total_time,
+    })
+
+    # Top-level test_* (parity with baseline trainer): reflect the primary arm
+    if test_loaders is not None:
+        t_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            for name, loader in test_loaders.items()
+        }
+        t_avg = aggregate_splits(t_metrics)
         test_log: dict[str, float] = {}
-        for split_name, m in test_metrics.items():
+        for split_name, m in t_metrics.items():
             for k, v in m.items():
                 test_log[f"test/{split_name}/{k}"] = v
-        for k, v in test_avg.items():
+        for k, v in t_avg.items():
             test_log[f"test_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
+        print(f"\n  TEST (primary={primary_label})  avg_surf_p={t_avg['avg/mae_surf_p']:.4f}")
+    else:
+        t_metrics = None
+        t_avg = None
 
+    # Synthesize best_metrics for the artifact API if SWA replaced it.
+    artifact_best_metrics = {
+        "epoch": primary_epoch,
+        "val_avg/mae_surf_p": primary_val_avg,
+    }
     save_model_artifact(
         run=run,
         model_path=model_path,
         model_dir=model_dir,
         cfg=cfg,
-        best_metrics=best_metrics,
-        best_avg_surf_p=best_avg_surf_p,
-        test_metrics=test_metrics,
-        test_avg=test_avg,
+        best_metrics=artifact_best_metrics,
+        best_avg_surf_p=primary_val_avg,
+        test_metrics=t_metrics,
+        test_avg=t_avg,
         n_params=n_params,
         model_config=model_config,
     )
 else:
-    print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping artifact upload.")
+    print("\nNo arm state available — skipping artifact upload.")
 
 wandb.finish()
