@@ -1,6 +1,50 @@
 # BASELINE — TandemFoilSet (willow-pai2i-24h-r4)
 
-## Current best — PR #3358 (alphonse, merged 2026-05-16 00:24 UTC)
+## Current best — PR #3262 (edward, merged 2026-05-16 01:27 UTC)
+
+**Random Fourier Features positional encoding (σ=1.0, n_freqs=16), stacked on top of #3358 cosine T_max=14 + #3263 FiLM(log_Re) + #3257 surf-MAE+p_weight=3.**
+
+| Metric | Value | W&B run | Δ vs prior baseline |
+|--------|------:|---------|---------------------|
+| `val_avg/mae_surf_p` | **79.2847** | `tnna02ob` (edward) | **−12.3%** (from 90.44) |
+| `test_avg/mae_surf_p` | **69.2741** | `tnna02ob` (edward) | **−13.5%** (from 80.08) |
+| `test_single_in_dist/mae_surf_p` | 78.6939 | `tnna02ob` | **−18.4%** |
+| `test_geom_camber_rc/mae_surf_p` | 79.5933 | `tnna02ob` | −11.8% |
+| `test_geom_camber_cruise/mae_surf_p` | 49.1630 | `tnna02ob` | −12.1% |
+| `test_re_rand/mae_surf_p` | 69.6460 | `tnna02ob` | −10.3% |
+
+**Cumulative path:** vanilla 106.23 → #3257 94.35 → #3263 90.06 → #3358 80.08 → #3262 **69.27** (**−34.8% from vanilla in 4 PRs**).
+
+All subsequent PRs must beat **test_avg/mae_surf_p < 69.27**.
+
+### What changed
+- **Random Fourier Features (RFF) on (x, z) node coordinates.** `fourier_n_freqs=16` produces 32 additional features (sin + cos pairs) appended to the raw 24-dim input (`x[..., 24:]`). The RFF sigma `fourier_sigma=1.0` is appropriate for chord-length-normalized geometry (typical node spacing << 1).
+- **No architecture changes** (same TransolverFiLM trunk, FiLM(log_Re) head, loss, schedule).
+- **Param delta:** +7,680 (32 RFF features × 128 hidden × 2 halves = 8K, minus the original (x,z) 2-dim direct input path that was replaced) → effective +~8K, from 679,619 → 687,319.
+- **All `_skipped_y_samples` correct:** cruise = 1 (canonical), other splits = 0. `n_nonfinite_pred=0` across all splits — RFF features did not introduce numerical issues.
+
+### Mechanism summary
+RFF maps the low-dimensional (x, z) Cartesian coordinates into a 32-dim Fourier basis, allowing the Transolver to resolve higher-frequency spatial patterns in surface pressure. On the old MSE baseline, RFF gave −9.8% val — on the fully-stacked new base (better loss + FiLM conditioning + cosine annealing), it scales up to −12.3% val / −13.5% test. The cleaner loss surface and better-conditioned optimizer give the network more capacity to exploit the richer input representation. The gain is largest on `test_single_in_dist` (−18.4%), the hardest split with the densest geometry — consistent with RFF's theoretical advantage on high-frequency structure.
+
+### Model config
+- `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2`
+- `lr=5e-4, weight_decay=1e-4, batch_size=4, surf_weight=10, p_channel_weight=3, surface-MAE loss, epochs=50`
+- **FiLM:** `cond_dim=1 (log_Re), mid_dim=64, hidden=128, zero-init`
+- **Cosine LR:** `T_max=14`
+- **RFF:** `fourier_n_freqs=16, fourier_sigma=1.0` on (x, z) coordinates
+- `dropout=0.0, grad_clip=none, warmup=none`
+- Peak VRAM: ~42 GB / 96 GB, wall-clock: 32.3 min, 14 epochs of 50
+
+### Reproduce command
+
+```bash
+cd target && python train.py --wandb_group fourier-pos-enc --wandb_name rff-sigma1.0-on-cosine-tmax-base \
+    --fourier_n_freqs 16 --fourier_sigma 1.0
+```
+
+---
+
+## Previous best — PR #3358 (alphonse, merged 2026-05-16 00:24 UTC)
 
 **Cosine LR schedule T_max=14 (matched to wall-clock epoch cap), on top of #3263 FiLM(log_Re) + #3257 surf-MAE+p_weight=3 base.**
 
@@ -47,6 +91,7 @@ cd target && python train.py --wandb_group cosine-tmax --wandb_name cosine-tmax1
 
 | Date | PR | Hypothesis | val_avg | test_avg | Merge |
 |------|----|------------|--------:|--------:|:-----:|
+| 2026-05-16 | #3262 (edward) | RFF σ=1.0, n_freqs=16 on (x,z) coords | **79.28** | **69.27** | ✓ R2#2 |
 | 2026-05-16 | #3358 (alphonse) | Cosine LR T_max=14 (matched to wall-clock cap) | **90.44** | **80.08** | ✓ R2#1 |
 | 2026-05-15 | #3263 (thorfinn) | FiLM(log_Re) conditioning on hidden state | 100.24 | 90.06 | ✓ R1#2 |
 | 2026-05-15 | #3257 (frieren) | Surface MAE + p-weight 3× + NaN guard | 106.67 | 94.35 | ✓ R1#1 |
