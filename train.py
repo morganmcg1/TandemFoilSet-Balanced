@@ -456,6 +456,7 @@ class Config:
     eta_min: float = 0.0   # CosineAnnealingLR floor; 0 = anneal to zero (default)
     n_head: int = 4   # Transolver attention heads; head_dim = n_hidden // n_head
     n_layers: int = 5   # Transolver depth (number of TransolverBlocks)
+    slice_num: int = 64   # Transolver attention slice token count
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -496,7 +497,7 @@ model_config = dict(
     n_hidden=128,
     n_layers=cfg.n_layers,
     n_head=cfg.n_head,
-    slice_num=64,
+    slice_num=cfg.slice_num,
     mlp_ratio=2,
     cond_dim=cfg.cond_dim,  # log(Re), AoA1, NACA1(3), AoA2, NACA2(3), gap, stagger = 11; 0 disables FiLM
     ffn_act=cfg.ffn_act,
