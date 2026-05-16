@@ -1983,3 +1983,32 @@ These two hypotheses target the two architectural levers that have NOT yet been 
 | #4147 | tanjiro | H86: n_hidden expansion under Lion+slice=96 | n_hidden=192 (Arm A), n_hidden=256 (Arm B) |
 
 **Strategic rationale:** All recent sweeps (lr, wd, warmup, n_head, n_layers) hit a frontier at val≈43. Optimization levers are largely tapped. The model is wall-cut at ep 15 — capacity is the next frontier. Lion's scale-invariant sign-update should accommodate larger models cleanly. n_hidden has been locked at 128 since H33 (under AdamW); first expansion test under Lion+slice=96.
+
+---
+
+## 2026-05-16 21:25 — PR #4098: H81 RMSNorm under Lion+slice=96 (alphonse) — **CLOSED, anti-compound confirmed**
+
+- Branch: `charliepai2i48h3-alphonse/h81-rmsnorm-under-lion-slice96`
+- Hypothesis: Lion's sign-update changes effective gradient scale → maybe RMSNorm (no learned bias) is the better fit at slice=96 (contra H72's AdamW+RMSNorm anti-compound).
+
+| Arm | norm | lr | val_avg | Δ vs H73 | test 3-split | best epoch | s/epoch |
+|-----|------|----|--------:|---------:|-------------:|-----------:|--------:|
+| H73 baseline | LayerNorm | 3e-4 | **42.9784** | — | **41.5455** | — | — |
+| A | RMSNorm | 3e-4 | 45.4152 | **+2.44** (clear regression) | 43.5394 | 15 | 119.11 |
+| B | RMSNorm | 2e-4 | 43.8744 | +0.90 (within 2.6 noise) | 43.2968 | 15 | 119.46 |
+
+**Per-split sensitivity:** `val_geom_camber_rc` (unseen-camber OOD) is the most sensitive split to LayerNorm→RMSNorm (Arm A +4.57, Arm B –0.57). The cruise split is essentially insensitive.
+
+**Mechanistic conclusion:** The H72 anti-compound (AdamW+RMSNorm+slice=96: +1.58) reproduces under Lion at +2.44 pts. RMSNorm is **not** optimizer-specific — it genuinely hurts at slice=96 under both optimizers. The H59 RMSNorm win at slice=64 (under AdamW) was likely driven by kernel-op speedup giving more effective steps per epoch; at slice=96 that advantage vanishes (more compute per step), and the cost of removing the learned bias becomes visible. No measurable s/epoch speedup observed at slice=96 in this codebase.
+
+**Status: CLOSED — negative. Normalization question closed. LayerNorm locked at slice=96 under both optimizers.**
+
+---
+
+## 2026-05-16 21:30 — Round 5 Cycle 26: Assign H87 to alphonse (eta_min > 0)
+
+| PR | Student | Hypothesis | Key Change |
+|----|---------|-----------|------------|
+| TBD | alphonse | H87: CosineAnnealingLR eta_min > 0 — keep meaningful LR through wall-cut | eta_min=3e-5 (Arm A, lr/10), eta_min=1e-5 (Arm B, lr/30) |
+
+**Strategic rationale:** Every recent run (H73, H75, H81) shows the val trajectory still monotonically descending at epoch 15 (the wall-cut). The cosine schedule reaches LR=0 at ep 15, so the last few epochs receive near-zero gradient updates. eta_min > 0 holds the LR floor above zero so all 15 epochs contribute meaningful gradient steps. This is the **inverse** of H84 (T_max compression) — H84 lets the model fine-tune at LR=0, H87 prevents the LR from collapsing to zero. The two ideas test opposite sides of the schedule-tail question. Picked from alphonse's own follow-up suggestion list in the H81 PR.

@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-16 21:10
+- **Date**: 2026-05-16 21:30
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
-- **Round**: 5 late-phase — Lion+slice=96 baseline (H73, val=42.98). LR + wd + warmup + n_head all confirmed locked at H73 values. Optimization-lever frontier reached. **Pivoting to capacity scaling (n_hidden expansion).**
+- **Round**: 5 late-phase — Lion+slice=96 baseline (H73, val=42.98). LR + wd + warmup + n_head + LayerNorm all confirmed locked at H73 values. **Capacity scaling (H86 n_hidden) + schedule-tail (H84/H87) are the active fronts.**
 - **Most recent human research directive**: None received
 
 ## Current Best
@@ -78,13 +78,13 @@ The H67-H73 Lion compound batch revealed:
 | **#4126** | fern | **H82: slice_num sweep under Lion (slice=128, slice=80)** | HIGH (untested Lion regime) | ~40-46 |
 | **#4127** | frieren | **H83: n_layers sweep under Lion (n_layers=5, n_layers=3)** | MED (depth retune at slice=96) | ~41-46 |
 | **#4135** | nezuko | **H85: FFN activation (swiglu, vanilla) under Lion** | MED (test if GEGLU locked under Lion) | ~43-47 |
-| **#4093** | thorfinn | **H80: Full Lion stack — warmup+wd+β₂+n_head compound** | HIGH (bold swing) | ~35-40 optimistic |
-| **#4097** | edward | **H78: Lion β₂ sweep (β₂=0.999, β₂=0.995)** | HIGH | ~41-43 |
-| **#4098** | alphonse | **H81: RMSNorm under Lion+slice=96** | HIGH (closes normalization question) | ~41-44 |
+| **#4093** | thorfinn | **H80: Full Lion stack — warmup+wd+β₂+n_head compound** | LOW (warmup+n_head negative isolated; expecting regress) | ~46-50 revised |
+| **#4097** | edward | **H78: Lion β₂ sweep (β₂=0.999, β₂=0.995)** | HIGH (only Lion β₂ retune at slice=96) | ~41-43 |
+| **TBD** | alphonse | **H87: CosineAnnealingLR eta_min > 0 — keep meaningful LR through wall-cut** | HIGH (schedule-tail counter to H84) | ~41-44 |
 
-**Closed this round:** H61 (LR-down), H62 (mlp_ratio), H63 (DropPath), H64 (Huber δ_p), H65 (EMA), H72 (RMSNorm+slice96 anti-compound), H68/H69/H70/H71 (Lion variants at slice=64, all superseded by H73), H58/H67 (superseded by H73), **H76 (warmup negative)**, **H77 (n_head negative)**, **H79 (wd negative, partly ties)**, **H74 (schedule extension negative; revealed noise floor)**.
+**Closed this round:** H61 (LR-down), H62 (mlp_ratio), H63 (DropPath), H64 (Huber δ_p), H65 (EMA), H72 (RMSNorm+slice96 anti-compound), H68/H69/H70/H71 (Lion variants at slice=64, all superseded by H73), H58/H67 (superseded by H73), **H76 (warmup negative)**, **H77 (n_head negative)**, **H79 (wd negative, partly ties)**, **H74 (schedule extension negative; revealed noise floor)**, **H81 (RMSNorm anti-compound under Lion confirmed; normalization locked)**, H75 (LR U-shape).
 
-**H76/H77 negative-result implication for H80:** H80 (thorfinn full stack) combines warmup=2 + wd=1e-4 + β₂=0.999 + n_head=4. Two of these four levers (warmup, n_head) are now confirmed NEGATIVE at slice=96. H80's predicted range should be revised downward — still possible to win if wd+β₂ wins compensate, but less likely.
+**H76/H77 negative-result implication for H80:** H80 (thorfinn full stack) combines warmup=2 + wd=1e-4 + β₂=0.999 + n_head=4. Two of these four levers (warmup, n_head) are now confirmed NEGATIVE at slice=96. **H80's predicted range revised to ~46-50**, expecting regress. Will close once results arrive unless β₂ effect dominates.
 
 ## Lever Status (post-H73)
 
@@ -99,8 +99,9 @@ The H67-H73 Lion compound batch revealed:
 | slice_num | 🏆 96 locked | 42.98 (H73) | Confirmed under Lion. 128 still untested under Lion. |
 | n_layers | ✅ Locked at 4 (H60) | 4 | Shallower wins under GEGLU |
 | FFN activation | ✅ GEGLU locked (H48) | GEGLU | > SwiGLU > vanilla |
-| Normalization | 🔀 LayerNorm at slice=96 | LN (H73) | RMSNorm anti-compounds with slice=96 (H72) |
+| Normalization | ✅ LayerNorm locked (H72 AdamW, H81 Lion) | LN (H73) | RMSNorm anti-compounds at slice=96 under BOTH optimizers (+1.58 AdamW, +2.44 Lion) |
 | n_hidden | 🔬 H86 expansion test active | 128 (H73) | First Lion+slice=96 test of 192/256 |
+| Schedule eta_min | 🔬 H87 active | 0 (H73 default) | Val still descending at ep 15; eta_min>0 keeps LR meaningful through wall-cut |
 | clip_grad_norm | ✅ Locked at 1.0 | H20+H56 | — |
 | surf_weight | ✅ Locked at 10 | H54 | — |
 | Huber δ_p | ✅ Locked at 0.25 | H25/H64 | — |
