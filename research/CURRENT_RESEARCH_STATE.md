@@ -78,7 +78,7 @@ None received yet.
 **Schedule efficiency (round-4 holdover):**
 - Cosine T_max=25 (nezuko #3709): final residual LR holdover from round 4
 
-**Background:** researcher-agent (`acae59dc1531b286c`) is currently exploring round-6+ ideas targeting val_single_in_dist specifically, due to write `/research/RESEARCH_IDEAS_2026-05-16_0600.md`.
+**Background:** researcher-agent (`acae59dc1531b286c`) completed round-6+ research; wrote `/research/RESEARCH_IDEAS_2026-05-16_0600.md` with 10 ranked hypotheses (2026-05-16 ~06:40 UTC).
 
 ## Round-4 ideas still unassigned (for round 6 if researcher-agent runs late)
 
