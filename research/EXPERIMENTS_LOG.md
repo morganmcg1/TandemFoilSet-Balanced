@@ -1,5 +1,36 @@
 # SENPAI Research Results
 
+## 2026-05-16 22:35 — 1 closure (#4172) + 1 rebase send-back (#4151) + 1 new assignment (#4184)
+
+### Closed: PR #4172 (edward) — vol_weight=0.5 on new baseline
+
+Run `5hx5pdvc`: val_avg=60.7572 (+7.68% vs new baseline 56.4260), test_3split=60.3826 (+9.11% vs 55.3387). All 4 splits regressed, including the hoped-for val_geom_camber_rc (+10.3%). **Pre-stated failure-mode #1 triggered cleanly.**
+
+**Mechanism (confirmed)**: the volume loss is **load-bearing for the shared latent space**, not a gradient diluent. Dropping the vol_loss contribution from ~22% of total loss to ~11% starves the shared trunk MLP + attention layers of the dense interior supervision they use to learn the underlying pressure/velocity field. Surface metric degrades alongside volume metric — they are coupled through the shared representation, not competing for gradient capacity. Edward's analysis was excellent: epoch-17 vol_loss=0.0473 vs surf_loss=0.0162 (with implicit 10× surface weight); the 11% supervisory cut is exactly what hurt.
+
+**vol_weight axis closed at 1.0 (default)**. No sweep at 0.25/0.75 — sign is wrong, mechanism not surgical.
+
+Edward's suggested follow-ups (queued):
+1. Surface-conditional loss reweighting (per-sample weight scaling with peak |p|) — strong candidate
+2. Camber-stratified mini-batches — targets val_geom_camber_rc directly
+3. Spectral surface loss (FFT) — physically motivated, captures peak structure
+
+Cruise NaN flag acknowledged — fleet-wide data/scoring.py bug, read-only for students.
+
+### Sent-back: PR #4151 (thorfinn) — LLRD decay=0.85 on slice=8
+
+Run `kn22nc05`: val_avg=56.4394 / test_3split=55.6056. **Beats OLD slice=8 baseline (56.8954) by −0.80% / −0.67%** as the brief targeted, but is +0.024% val / +0.48% test versus the new alphonse baseline (56.4260 / 55.3387). Hits the SEND-BACK band of the merge decision tree (beats old baseline but not new).
+
+**Excellent diagnostic work**: thorfinn logged per-LLRD-group grad norms. Finding: **early layers carry the largest grad signal**, not late layers (opposite of BERT/ViT pretrained-feature intuition). LLRD is therefore acting as a **brake on early-layer noise**, not as a feature-protection mechanism. The win lands disproportionately on `val_re_rand` (−2.36%), not the dominant `val_geom_camber_rc` residual (−0.34%). Reads as: LLRD is acting as a regularizer on the input encoder, helping it find a more Re-invariant representation.
+
+**Action**: rebase + retest on the new baseline (slice=16 + β2=0.95). LLRD code is orthogonal to slice_num and β2, so this is a clean compounding-check experiment. Expected behavior bands documented in the send-back comment.
+
+### Round-15 new assignment
+
+| PR | Student | Hypothesis | Mechanism |
+|----|---------|-----------|-----------|
+| **#4184** | **edward** | EMA decay=0.995 (slower Polyak averaging) on new baseline | First-ever EMA-decay sweep on this programme. β2 (snappier wins, gradient EMA) and EMA (slower wins?, weight EMA) plausibly want opposite directions — coherent stack hypothesis |
+
 ## 2026-05-16 22:10 — PR #4142 (nezuko Lookahead): MAJOR WIN, sent back for rebase
 
 ### Sent-back: PR #4142 (nezuko) — Lookahead(k=5, α=0.5) on slice=8 stack
