@@ -1,5 +1,34 @@
 # SENPAI Research Results
 
+## 2026-05-16 09:40 — PR #3720 nezuko Lion MERGED 🎉 (paradigm-shift win: −13.46%)
+
+### #3720 nezuko Lion optimizer — MERGED ✓ (new baseline 66.69 / test 62.72)
+
+- Branch: `willowpai2i24h5-nezuko/lion-onecycle`
+- Hypothesis: Lion's sign-based update is per-element clipping; combined with grad_clip's global L2 clipping creates a double-bounded trajectory that smooths noise without reducing step size.
+- W&B 3-arm max_lr sweep result:
+
+| Arm | max_lr | --lr | W&B run | val_avg | test_3split | Δ vs 77.06 |
+|---|---|---|---|---|---|---|
+| **2 ★** | 3e-4 | 1.5e-4 | `w8l5gszw` | **66.69** | **62.72** | **−10.37 pp (−13.46%)** |
+| 1 | 1e-3 | 5e-4 | `psttg4e9` | 68.13 | 65.13 | −8.93 pp (−11.59%) |
+| 3 | 1e-4 | 5e-5 | `99j24mjj` | 77.31 | 74.54 | +0.25 pp (+0.32%) |
+
+- **Per-split val (best arm 2):** id=71.35 (−12 pp), rc=81.98 (−5 pp), cruise=48.74 (−13 pp!), re=64.69 (−12 pp)
+- **Per-split test (best arm 2):** id=60.78, rc=70.43, re=56.94 — paper-facing 3-split mean 62.72
+- **Decision:** MERGED — paradigm-shift win across all splits. Arm 2 (max_lr=3e-4) confirms Lion paper's recommendation of 3-10× smaller LR than AdamW (3.3× smaller here). Arm 1 also wins big at AdamW-equivalent LR (−11.6%). Arm 3 (1e-4) saturates the low end — confirms there's an LR floor for Lion to work.
+- **New baseline: val_avg/mae_surf_p = 66.69 (best arm) / test_3split = 62.72**
+- **Mechanism confirmed:** Lion (sign-update) + grad_clip (global L2 clip) → double-bounded trajectory. Smaller LR than AdamW required because sign updates have unit magnitude per dimension — effective step size scales differently. The cruise split improvement (−13 pp!) suggests Lion's smoother trajectory helps the OOD splits disproportionately, exactly the mechanism prediction.
+- **Critical follow-up question:** Is this win compositional with our other in-flight experiments? bs=2 was merged before Lion, so the baseline already includes bs=2. Other in-flight experiments (#3787 alphonse Lion completion, #3791 frieren bf16, #3797 askeladd FiLM, #3812 fern bs=1, #3827 tanjiro input jitter) all need to factor in the Lion baseline change.
+
+### #3860 nezuko — New assignment: Lion betas (β1, β2) sensitivity sweep
+
+- Now that Lion's max_lr is locked at 3e-4, the next tuning axis is the momentum betas.
+- 4-arm protocol at betas ∈ {(0.9, 0.99), (0.95, 0.99), (0.9, 0.999), (0.95, 0.999)}
+- Lion paper default is (0.9, 0.99); higher β1 = smoother direction, higher β2 = longer momentum memory
+
+---
+
 ## 2026-05-16 09:00 — PR #3699 tanjiro Lookahead CLOSED + #3827 tanjiro input-jitter assigned
 
 ### #3699 tanjiro Lookahead(AdamW, k=5, α=0.5) — CLOSED

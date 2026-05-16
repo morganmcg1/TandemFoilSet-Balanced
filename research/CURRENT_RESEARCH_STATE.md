@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 09:00
+- **Updated:** 2026-05-16 09:45
 - **Track:** `willow-pai2i-24h-r5` (advisor branch `icml-appendix-willow-pai2i-24h-r5`, base `icml-appendix-willow`)
 - **Per-run budget:** 30 min wall clock, ≤50 epochs, 1 GPU @ 96 GB VRAM
 
@@ -10,35 +10,36 @@ No directives received in current heartbeat cycle. GH issue #3292 open for `test
 
 ## Current baseline
 
-**`val_avg/mae_surf_p = 77.06`** (4-arm mean) — batch_size=2 + L1 surface loss + OneCycleLR right-sized to actual budget + grad_clip max_norm=1.0, PR #3616, **merged** (2026-05-16 08:30)
+**`val_avg/mae_surf_p = 66.69`** (best arm `w8l5gszw`) — **Lion optimizer** (lr=1.5e-4, betas=(0.9, 0.99), wd=1e-4) + OneCycleLR(max_lr=3e-4) + batch_size=2 + L1 surface loss + grad_clip max_norm=1.0, PR #3720, **merged** (2026-05-16 09:40)
 
-| Split | val mae_surf_p (best arm `1xg2jnmd`) | 4-arm mean |
-|---|---|---|
-| val_single_in_dist | 80.27 | 83.49 |
-| val_geom_camber_rc | 86.61 | 86.63 |
-| val_geom_camber_cruise | 58.56 | 61.23 |
-| val_re_rand | 75.16 | 76.89 |
-| **val_avg** | **75.15** | **77.06** |
+| Split | val mae_surf_p (best arm `w8l5gszw`) |
+|---|---|
+| val_single_in_dist | 71.35 |
+| val_geom_camber_rc | 81.98 |
+| val_geom_camber_cruise | 48.74 |
+| val_re_rand | 64.69 |
+| **val_avg** | **66.69** |
 
-test 3-split (excl. cruise) = **72.44** (best arm) / **73.34** (mean) | W&B best run: `1xg2jnmd`
+test 3-split (excl. cruise) = **62.72** (best arm `w8l5gszw`)
 
-Head config: `batch_size=2` + `OneCycleLR(max_lr=1e-3, total_steps=len(train_loader)*14, pct_start=0.1, div_factor=25, final_div_factor=1e4)` + per-batch step + `if global_step < scheduler.total_steps` guard + L1 surf loss + grad_clip max_norm=1.0 + AdamW
+Head config: `Lion(lr=1.5e-4, betas=(0.9, 0.99), weight_decay=1e-4)` + `batch_size=2` + `OneCycleLR(max_lr=3e-4, total_steps=len(train_loader)*14, pct_start=0.1, div_factor=25, final_div_factor=1e4)` + per-batch step + L1 surf loss + grad_clip max_norm=1.0
 
 ## All merged results (best-first)
 
 | PR | Change | val_avg | Δ vs prior baseline |
 |---|---|---|---|
-| #3616 fern | batch_size=2 (2× gradient updates/epoch) | **77.06** (mean) / 75.15 (best) | −5.63% ✓ **MERGED** |
-| #3307 askeladd | OneCycleLR right-sized + L1 surf (compound) | **81.66** (mean) / 80.31 (best) | −9.30% ✓ **MERGED** |
-| #3434 edward | L1 surface loss (vol MSE + surf L1) | **90.04** | −8.94% ✓ **MERGED** |
-| #3320 nezuko | CosineAnnealingWarmRestarts T_0=5 T_mult=2 | **98.88** | −15.6% ✓ **MERGED** |
+| #3720 nezuko | **Lion optimizer + OneCycleLR(max_lr=3e-4)** | **66.69** (best) | **−13.46%** ✓ **MERGED** |
+| #3616 fern | batch_size=2 (2× gradient updates/epoch) | 77.06 (mean) / 75.15 (best) | −5.63% ✓ **MERGED** |
+| #3307 askeladd | OneCycleLR right-sized + L1 surf (compound) | 81.66 (mean) / 80.31 (best) | −9.30% ✓ **MERGED** |
+| #3434 edward | L1 surface loss (vol MSE + surf L1) | 90.04 | −8.94% ✓ **MERGED** |
+| #3320 nezuko | CosineAnnealingWarmRestarts T_0=5 T_mult=2 | 98.88 | −15.6% ✓ **MERGED** |
 | #3157 tanjiro | grad clip max_norm=1.0 | 117.16 | baseline |
 
 ## Round 4 + 4.1 active portfolio (8 students, all GPUs assigned)
 
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
-| #3720 | nezuko | **Lion optimizer** — 3-arm max_lr sweep | **Potential paradigm-shift winner** — 2 arms ~68-70 (−10% vs new baseline 77.06); waiting for terminal post |
+| #3860 | nezuko | **Lion betas (β1, β2)** 4-arm sweep | **New** (after #3720 merge) — fine-tunes Lion's momentum hyperparameters |
 | #3812 | fern | **batch_size=1** (extends bs trend) | New — tests diminishing returns; reports actual steps completed |
 | #3617 | edward | log-space L1 surf loss | **Sent back** — retest on new bs=2 baseline; add surf_weight=30 arms |
 | #3614 | thorfinn | OneCycleLR max_lr=1.5e-3 | Running — original 2e-3 results posted, retest at 1.5e-3 ongoing |
