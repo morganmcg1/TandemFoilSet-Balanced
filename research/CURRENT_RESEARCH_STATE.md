@@ -21,18 +21,18 @@ Beat the Transolver baseline on `val_avg/mae_surf_p` (lower is better). Paper-fa
 
 **Win threshold:** val < 60.43 (triple-stack seed=0). Seed-variance unknown (3-seed canonical not yet established).
 
-## Active WIP experiments
+## Active WIP experiments (all 8 students assigned; zero idle)
 
 | PR | Student | Hypothesis | Status |
 |----|---------|-----------|--------|
-| #4089 | nezuko | SWA over final 4 cosine epochs of T_max=17 SwiGLU (no LR kick-out) | Training (~19:26 UTC start, ~19:56 expected) |
-| NEW | thorfinn | Triple-stack seed=1 (3-seed canonical) | Assigning now |
-| NEW | alphonse | Triple-stack seed=2 (3-seed canonical) | Assigning now |
-| NEW | askeladd | β1=0.95 on triple-stack (compound momentum) | Assigning now |
-| NEW | frieren | β2 fine scan {0.93, 0.97} on triple-stack | Assigning now |
-| NEW | tanjiro | EMA model weights (decay=0.999) on triple-stack | Assigning now |
-| NEW | edward | Lion optimizer on triple-stack | Assigning now |
-| NEW | fern | mlp_ratio=3 on triple-stack (bigger FFN) | Assigning now |
+| #4089 | nezuko | SWA over final 4 cosine epochs of T_max=17 SwiGLU (no LR kick-out) | Training, ~19:26 UTC start |
+| #4116 | thorfinn | Triple-stack seed=1 (3-seed canonical) | Assigned |
+| #4117 | alphonse | Triple-stack seed=2 (3-seed canonical) | Assigned |
+| #4118 | askeladd | β1=0.95 on triple-stack (compound momentum) | Assigned |
+| #4119 | frieren | β2 fine scan {0.93, 0.97} on triple-stack | Assigned |
+| #4121 | tanjiro | EMA model weights (decay=0.999) on triple-stack | Assigned |
+| #4123 | edward | Lion optimizer on triple-stack (lr/3, sign-based updates) | Assigned |
+| #4124 | fern | mlp_ratio=3 on triple-stack (bigger FFN, +12.5% params) | Assigned |
 
 ## Key mechanistic findings this round
 
