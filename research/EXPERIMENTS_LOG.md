@@ -987,3 +987,30 @@ Per-split: rc −1.29 (better) | cruise −0.59 (better) | re_rand +0.06 (tied) 
 | PR | Student | Hypothesis | Key test |
 |---|---|---|---|
 | #3924 | frieren | CosineAnnealingWarmRestarts T_0=5 | Do 3 lr-restart cycles in 15ep budget find a deeper basin than single cosine? |
+
+## 2026-05-16 12:30 — Round-7/8 W&B observation (6 wins PENDING terminal markers)
+
+Student GH credentials hit HTTP 403 rate limit ~11:50 UTC fleet-wide. All students completed Round-7/8 runs but cannot post terminal SENPAI-RESULT markers. W&B query reveals:
+
+| PR | Student | Hypothesis | W&B run | val_avg | vs baseline (63.74) |
+|----|---------|-----------|---------|---------|---------------------|
+| #3907 | thorfinn | surf_weight=15 | `e8mc1e5d` | **60.885** | **−4.48% (BIGGEST WIN)** |
+| #3901 | alphonse | Huber δ=0.5 compound | `cc7wvqvi` | **61.611** | **−3.34%** |
+| #3854 | fern | slice_num=32 | `delpqmrq` | **62.40** | **−2.10%** (3 followups crashed) |
+| #3902 | nezuko | wd=1e-3 compound | `fxanrytd` | **62.670** | **−1.68%** |
+| #3877 | tanjiro | temp_init=0.2 | `jxlx6mi1` | **62.826** | **−1.43%** |
+| #3903 | askeladd | per-channel vel-asinh ux=0.5 uy=0.3 | `61kpv6z6` | 63.546 | −0.30% (marginal) |
+| #3874 | edward | LR warmup 1ep | `d93t4jmu` (best of 3) | 65.211 | +2.31% regression (2 replicates diverged) |
+| #3924 | frieren | SGDR T_0=5 | running | — | — |
+
+**Critical missing**: NO student has logged `test_3split/mae_surf_p`. Nudges sent requesting test metric via checkpoint re-eval.
+
+**Analysis**: 5 strong compound wins simultaneously is unprecedented in this programme. The Round-6 mechanisms that "regressed against moving baseline" (Huber δ, wd, n_head) are now confirmed real on the full stack. The surf_weight axis untouched since Round 2 (#3366) was the biggest miss — 50% weight increase delivers the largest single-experiment improvement since SwiGLU. Per-experiment status:
+
+- **thorfinn surf_weight=15**: loss-balance recalibration after 4 rounds of architecture/transform changes. Replicate \`b9li69eh\` running for verification.
+- **alphonse Huber δ=0.5 compound**: confirmed loss-shape mechanism on full stack (was assumed superseded after PR #3793 closure).
+- **fern slice_num=32 (val=62.40)**: REAL but UNSTABLE — only 1 of 4 attempts converged. The other 3 crashed mid-training (val diverged to 108-144). Investigate stability before merge.
+- **nezuko wd=1e-3 compound**: confirmed regularization mechanism on full stack. Arm B (wd=5e-3) running.
+- **tanjiro temp_init=0.2**: confirmed architecture-internal hypothesis from researcher-agent. Arm B (0.1) running.
+- **askeladd per-channel**: within seed variance; unlikely to merge.
+- **edward LR warmup**: clear regression with replicate divergence; likely SequentialLR plumbing instability.

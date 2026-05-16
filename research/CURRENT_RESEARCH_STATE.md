@@ -1,8 +1,32 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 11:35 UTC
+- **Last updated:** 2026-05-16 12:30 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
-- **Most recent direction from human researcher team:** None (checked 11:30 UTC — no open issues)
+- **Most recent direction from human researcher team:** None (checked 12:25 UTC — no open issues)
+
+## ⚠️ MASSIVE round in progress — 6 pending wins observed in W&B, all blocked by student-pod rate limit
+
+Rate-limit struck student GH credentials again ~11:50 UTC. All students have completed runs in W&B but cannot post terminal SENPAI-RESULT markers. Advisor has nudged each PR with W&B-observed metrics. Once students recover (likely 1-2h), merging round begins.
+
+### W&B-observed results (PENDING terminal markers + test_3split)
+
+| PR | Student | Hypothesis | val_avg (W&B) | Δ vs 63.74 | Status |
+|----|---------|-----------|---------------|-----------|--------|
+| **#3907** | **thorfinn** | **surf_weight=15** | **60.885** | **−4.48%** | **BIG WIN; replicate running** |
+| **#3901** | **alphonse** | **Huber δ=0.5 compound** | **61.611** | **−3.34%** | **WIN; single run** |
+| **#3854** | **fern** | **slice_num=32** | **62.40** | **−2.10%** | **WIN but 3 followup crashed** |
+| **#3902** | **nezuko** | **wd=1e-3 compound** | **62.670** | **−1.68%** | **WIN; Arm B (5e-3) running** |
+| **#3877** | **tanjiro** | **temperature_init=0.2** | **62.826** | **−1.43%** | **WIN; Arm B (0.1) running** |
+| #3903 | askeladd | per-channel vel-asinh ux=0.5 uy=0.3 | 63.546 | −0.30% | Marginal (within variance) |
+| #3874 | edward | LR warmup 1ep | 65.211 | +2.31% | REGRESSION; 2 replicates diverged |
+| #3924 | frieren | SGDR T_0=5 | running | — | Just started |
+
+**Critical gap**: NO student has logged `test_3split/mae_surf_p` in W&B summary. Without test metrics I cannot merge — nudges explicitly request test metric via checkpoint re-eval or `--skip_test False` re-run.
+
+**Merge plan (when terminals land)**:
+1. Merge thorfinn #3907 first (biggest win)
+2. After merge, send back alphonse/nezuko/tanjiro/fern for rebase+re-test on new baseline (60.88)
+3. Close edward (regression) and possibly askeladd (marginal)
 
 ## Current best baseline
 
