@@ -395,4 +395,54 @@ cd target && python train.py --agent <student> \
 ```
 (In-tree default is still 80 — must pass `--cosine_t_max_epochs 30` explicitly.)
 
-> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **56.0011** with a terminal `SENPAI-RESULT` marker.
+> ~~**Beat this:** submit a PR improving `val_avg/mae_surf_p` below **56.0011**~~ — superseded by PR #3674 below.
+
+---
+
+## 2026-05-16 13:50 — PR #3674: Per-channel pressure weight (pw=2.0) — 8th compounding mechanism
+
+**Student:** charliepai2i48h2-nezuko
+**Change:** Added `pressure_weight: float = 1.0` to Config; applied as `loss = vol_loss + surf_weight * (surf_weight_Ux * mae_Ux + surf_weight_Uy * mae_Uy + pressure_weight * mae_p)` (or equivalent) in the training loss. Arm B (pw=2.0) wins — pressure channel up-weighted 2× in loss, letting the optimizer spend more gradient budget on the primary scoring metric.
+
+| Metric | Value |
+|--------|-------|
+| **val_avg/mae_surf_p** | **53.7235** |
+| val_single_in_dist/mae_surf_p | 59.9048 |
+| val_geom_camber_rc/mae_surf_p | 67.0791 |
+| val_geom_camber_cruise/mae_surf_p | 35.4058 |
+| val_re_rand/mae_surf_p | 52.5042 |
+| **test_avg/mae_surf_p** | **46.6011** |
+| test_single_in_dist/mae_surf_p | 53.4787 |
+| test_geom_camber_rc/mae_surf_p | 59.3855 |
+| test_geom_camber_cruise/mae_surf_p | 28.9082 |
+| test_re_rand/mae_surf_p | 44.6319 |
+| Best epoch | 18 (timeout-bound; val still descending) |
+| Per-epoch time | ~100s |
+| Peak GPU memory | 32.96 GB |
+
+**Model config:** unchanged — n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, GELU
+**Optimizer:** unchanged — Lion lr=1.7e-4, wd=3e-4, betas=(0.9, 0.99)
+**Scheduler:** unchanged — CosineAnnealingLR(T_max=30)
+**Loss:** vol_loss + 25·surf_loss with asinh(z) on pressure + **pressure_weight=2.0** on the pressure MAE term
+**Precision:** unchanged — bf16 autocast on forward+loss
+**EMA:** unchanged — decay=0.999
+**Gradient clipping:** unchanged — max_norm=1.0
+**Batch:** 4
+**Metric artifacts:** `models/model-charliepai2i48h2-nezuko-pressure-weight-2p0-20260516-112553/metrics.jsonl`
+
+**Note:** −4.07% on val (53.72 vs 56.00), −4.79% on test (46.60 vs 48.95). All 8 splits improved. Arm A (pw=0.5) regressed +3.20% — down-weighting pressure under-trains the primary metric channel. Key finding: asinh compression didn't fully neutralise the channel imbalance — pw=2.0 constructively stacks with asinh by re-emphasising pressure without losing asinh-driven stability. Velocity channels Ux/Uy mildly regress (+11-21%) but pressure improvement dominates since it is the primary metric. Val still descending at epoch 18.
+
+**8-mechanism stack:** Lion + surf_weight=25 + asinh(pressure) + EMA(0.999) + grad_clip(max_norm=1.0) + bf16 autocast + cosine T_max=30 + **pressure_weight=2.0**
+
+**Cumulative improvement from initial baseline:** 135.02 → 53.72 = **−60.2%**
+
+**Reproduce:**
+```bash
+cd target && python train.py --agent <student> \
+    --experiment_name "<student>/your-experiment-name" \
+    --surf_weight 25 \
+    --cosine_t_max_epochs 30 \
+    --pressure_weight 2.0
+```
+
+> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **53.7235** with a terminal `SENPAI-RESULT` marker.
