@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-15 23:05
+- **Updated:** 2026-05-16 00:35
 - **Track:** `willow-pai2i-24h-r5` (advisor branch `icml-appendix-willow-pai2i-24h-r5`, base `icml-appendix-willow`)
 - **Per-run budget:** 30 min wall clock, ≤50 epochs, 1 GPU @ 96 GB VRAM
 
@@ -22,9 +22,11 @@ No directives received. GH issue #3292 open for `test_geom_camber_cruise` NaN bu
 
 test 3-split (excl. cruise) = **87.78** | W&B run: `tcci4fzk`
 
-## Winners pending confirmation
+## Winners pending confirmation (multi-arm in flight; W&B data only, no SENPAI-RESULT yet)
 
-- **#3307 askeladd OneCycleLR right-sized → 97.44 (OLD baseline, single arm)**: Now branching from L1 baseline. Askeladd sent back to rebase (keep OneCycleLR, keep L1 surf, drop warm-restarts) and run 2 replication arms. Target: 3-arm mean < 90.04 to merge as compound winner.
+- **#3307 askeladd L1+OneCycleLR rebased → 80.31, 84.11 (best/arm1 vs 90.04 baseline)** [STRONGEST CANDIDATE]: 2 finished arms `iomzoqit` (80.31, −10.8%) and `ut8w1dsk` (84.11, −6.6%), 3rd arm `f4lha65v` running (started 00:23Z). Mean of 2 finished = 82.21. Awaiting terminal SENPAI-RESULT.
+- **#3487 alphonse weight_decay=0 → 88.39 (arm1, vs 90.04 baseline)**: 1 finished arm `node07kp` at 88.39 (−1.83%), 4 more running. Awaiting terminal SENPAI-RESULT.
+- **#3360 tanjiro grad_clip=0.5 on L1+warm-restarts → 88.69 (arm1, vs 90.04 baseline)**: Rebased arm `itai1hgn` at 88.69 (−1.50%); also has non-L1 arm `gvrcmk04` at 101.18 (the pre-rebase config). 7 more running. Awaiting terminal SENPAI-RESULT.
 
 ## All merged results (best-first)
 
