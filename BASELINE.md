@@ -358,3 +358,63 @@ cd target/ && python train.py --agent willowpai2i48h1-thorfinn \
   --use_swiglu
 # NOTE: Also override model to h=128/T_max=15 (train.py defaults are now h=192/T_max=18)
 ```
+
+---
+
+## 2026-05-16 10:10 — PR #3810: H: GeGLU activation — gating mechanism (not SiLU) is the lever ← NEW PROGRAMME BEST
+
+- **Student:** willowpai2i48h1-tanjiro
+- **Branch:** `willowpai2i48h1-tanjiro/geglu_activation`
+- **W&B run:** `db8bp8i8`
+- **Epochs:** 17 best (T_max=15 cosine, 30-min budget)
+
+### Validation metrics (best checkpoint, epoch 17)
+
+| Split | mae_surf_p |
+|-------|-----------|
+| **val_avg/mae_surf_p** | **65.3704** ← NEW ALL-TIME BEST |
+| val_single_in_dist | 76.1988 |
+| val_geom_camber_rc | 77.2247 |
+| val_geom_camber_cruise | 46.4254 |
+| val_re_rand | 61.6328 |
+
+### Test metrics (best checkpoint — all 4 splits valid)
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|-------|-----------|------------|------------|
+| test_single_in_dist | 66.3419 | 0.7068 | 0.3838 |
+| test_geom_camber_rc | 70.3427 | 1.2655 | 0.5621 |
+| test_geom_camber_cruise | 55.7412 | 0.4884 | 0.3384 |
+| test_re_rand | 54.3020 | 0.7273 | 0.3968 |
+| **test_avg (all 4 splits)** | **61.6819** ← NEW ALL-TIME BEST |
+
+### Vs prior baselines
+
+| Metric | SwiGLU h=128 (PR #3680) | GeGLU h=128 (this) | Δ vs SwiGLU |
+|--------|------------------------|-------------------|------------|
+| val_avg | 65.44 | **65.37** | −0.07 (tie) |
+| test_avg | 62.04 | **61.68** | −0.36 |
+
+**Mechanistic isolation result:** GeGLU ≈ SwiGLU at identical param count. The gating architecture (multiplicative `main × gate(x)` with parallel projections) is the lever — the specific activation in the gate (SiLU vs GELU) is approximately irrelevant. Any smooth gate nonlinearity gives the same CFD gain.
+
+### Model config (h=128, T_max=15, GeGLU)
+
+- Transolver: 5 layers, **hidden=128**, heads=4, slice_num=64, mlp_ratio=2
+- **GeGLU FFN:** `GeGLUMlp(in=128, hidden=round(256*2/3)=171, out=128)` with `nn.GELU()` in gate
+- n_params: **663,429** (exact param parity with SwiGLU baseline)
+- Loss: `vol_huber(delta=0.1) + 10 * surf_huber(delta=0.1)` on normalized targets
+- AdamW lr=5e-4, weight_decay=1e-4, batch=4, cosine T_max=15
+- bf16 autocast; evaluation in pure fp32
+- `--use_geglu` CLI flag required; mutually exclusive with `--use_swiglu`
+- Peak VRAM: 35.86 GB / 96 GB
+
+### Reproduce
+
+```bash
+cd target/ && python train.py --agent willowpai2i48h1-tanjiro \
+  --wandb_name "willowpai2i48h1-tanjiro/geglu_h128_seed0" \
+  --wandb_group geglu_activation \
+  --use_geglu \
+  --seed 0
+# NOTE: Override model to h=128/slice_num=64/T_max=15 (train.py defaults are h=192/T_max=18)
+```
