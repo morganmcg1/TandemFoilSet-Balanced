@@ -2,10 +2,44 @@
 
 ## Current Best
 
-**PR #3557 — H32: LR=1e-3 + clip=1.0 on H20 base (thorfinn)**
+**PR #3651 — H38: Weight decay reduction (wd=5e-5) at lr=1e-3 + clip=1.0 (frieren)**
 Merged 2026-05-16. 13 epochs completed (30-min timeout cap; best epoch = final epoch).
 
 Primary metric: `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across 4 val splits). Lower is better.
+
+| Metric | Value | Source |
+|--------|-------|--------|
+| val_avg/mae_surf_p | **68.1932** | PR #3651 Arm B |
+| val_single_in_dist/mae_surf_p | 76.8452 | PR #3651 Arm B |
+| val_geom_camber_rc/mae_surf_p | 84.3542 | PR #3651 Arm B |
+| val_geom_camber_cruise/mae_surf_p | 44.4649 | PR #3651 Arm B |
+| val_re_rand/mae_surf_p | 67.1084 | PR #3651 Arm B |
+| test_avg/mae_surf_p | NaN (⚠ scoring bug) | PR #3651 |
+| test_avg/mae_surf_p (3-split, excl. cruise) | **65.4393** | PR #3651 Arm B |
+| test_single_in_dist/mae_surf_p | 66.5542 | PR #3651 Arm B |
+| test_geom_camber_rc/mae_surf_p | 72.9271 | PR #3651 Arm B |
+| test_re_rand/mae_surf_p | 56.8366 | PR #3651 Arm B |
+
+**Configuration:** FiLM cond_dim=11 + Huber δ_vel=0.5/δ_p=0.25 (merged defaults) + CosineAnnealingLR T_max=15 + clip_grad_norm=1.0 + lr=1e-3 + **wd=5e-5**.
+
+**Context:** AdamW applies `lr × wd × param` per step, so raising lr from 5e-4 → 1e-3 effectively doubled the per-step L2 penalty (wd=1e-4 was tuned at 5e-4). wd=5e-5 restores the original effective regularization strength per step. Arm A (wd=0) also beat baseline by -1.16 but less convincingly. Arm B improved **all 4 val splits** vs H32 (single_in_dist -2.83, cruise -2.80, re_rand -0.74, rc -0.11). Orthogonal to clip — weight decay (parameter-norm penalty) is a different mechanism from gradient clipping (gradient-norm bound).
+
+**⚠ data/scoring.py NaN bug:** `test_geom_camber_cruise` sample 20 has non-finite GT. File is read-only.
+
+**Artifacts:** `models/model-h38-wd5e5-lr1e3-clip1-20260516-052550/`
+
+**Reproduce:**
+```bash
+cd target/ && python train.py --epochs 50 \
+  --experiment_name h38-wd5e5-lr1e3-clip1 --agent <student> \
+  --weight_decay 5e-5 --lr 1e-3 --clip_grad_norm 1.0
+# FiLM cond_dim=11, Huber δ_vel=0.5/δ_p=0.25, T_max=15 are merged defaults
+```
+
+## Previous Best (overridden by #3651)
+
+**PR #3557 — H32: LR=1e-3 + clip=1.0 on H20 base (thorfinn)**
+Merged 2026-05-16. 13 epochs completed (30-min timeout cap; best epoch = final epoch).
 
 | Metric | Value | Source |
 |--------|-------|--------|
@@ -14,27 +48,11 @@ Primary metric: `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE acr
 | val_geom_camber_rc/mae_surf_p | 84.4672 | PR #3557 Arm A |
 | val_geom_camber_cruise/mae_surf_p | 47.2669 | PR #3557 Arm A |
 | val_re_rand/mae_surf_p | 66.3473 | PR #3557 Arm A |
-| test_avg/mae_surf_p | NaN (⚠ scoring bug) | PR #3557 |
 | test_avg/mae_surf_p (3-split, excl. cruise) | **69.1774** | PR #3557 Arm A |
-| test_single_in_dist/mae_surf_p | 70.8643 | PR #3557 Arm A |
-| test_geom_camber_rc/mae_surf_p | 78.9480 | PR #3557 Arm A |
-| test_re_rand/mae_surf_p | 57.7199 | PR #3557 Arm A |
 
-**Configuration:** FiLM cond_dim=11 + Huber δ_vel=0.5/δ_p=0.25 (merged defaults) + CosineAnnealingLR T_max=15 + clip_grad_norm=1.0 + **lr=1e-3**.
-
-**Context:** Independent replication of the H27b config (frieren, PR #3452, 71.7713). Seed-variance spread between runs: ~2.3 pts. Both confirm lr=1e-3 + clip=1.0 is a robust 4–6 pt improvement over H20. Monotone LR trend: lr=5e-4→8e-4→1e-3 gives 75.50→73.11→69.44. LR ceiling not yet visible.
-
-**⚠ data/scoring.py NaN bug:** `test_geom_camber_cruise` sample 20 has non-finite GT. File is read-only.
+**Configuration:** FiLM cond_dim=11 + Huber δ_vel=0.5/δ_p=0.25 + T_max=15 + clip_grad_norm=1.0 + lr=1e-3 + wd=1e-4 (default).
 
 **Artifacts:** `models/model-h32-lr1e3-clip1-20260516-012246/`
-
-**Reproduce:**
-```bash
-cd target/ && python train.py --epochs 50 \
-  --experiment_name h32-lr1e3-clip1 --agent <student> \
-  --clip_grad_norm 1.0 --lr 1e-3
-# FiLM cond_dim=11, Huber δ_vel=0.5/δ_p=0.25, T_max=15 are merged defaults
-```
 
 ## Previous Best (overridden by #3557)
 
