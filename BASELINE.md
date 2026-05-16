@@ -446,3 +446,55 @@ cd target && python train.py --agent <student> \
 ```
 
 > **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **53.7235** with a terminal `SENPAI-RESULT` marker.
+
+---
+
+## 2026-05-16 16:00 — PR #3989: EMA decay re-tune on 8-mech stack (ema_decay=0.995) — 9th compounding mechanism
+
+**Student:** charliepai2i48h2-askeladd
+**Change:** Faster EMA decay from 0.999 to 0.995. The convergence-horizon hypothesis: with T_max=30 producing steeper LR anneal and pressure_weight=2.0 shifting loss curvature, the EMA shadow model benefits from tracking more recent weights (shorter effective half-life: ~138 steps at 0.995 vs ~693 steps at 0.999). Arm B (ema_decay=0.995) wins; Arm A (ema_decay=0.997) also beats baseline.
+
+| Metric | Value |
+|--------|-------|
+| **val_avg/mae_surf_p** | **51.4403** |
+| val_single_in_dist/mae_surf_p | 56.1655 |
+| val_geom_camber_rc/mae_surf_p | 68.0745 |
+| val_geom_camber_cruise/mae_surf_p | 32.1218 |
+| val_re_rand/mae_surf_p | 49.3995 |
+| **test_avg/mae_surf_p** | **43.9473** |
+| test_single_in_dist/mae_surf_p | 53.55 |
+| test_geom_camber_rc/mae_surf_p | 56.79 |
+| test_geom_camber_cruise/mae_surf_p | 26.94 |
+| test_re_rand/mae_surf_p | 38.51 |
+| Best epoch | 18 (timeout-bound; val still descending) |
+| Per-epoch time | ~101s |
+| Peak GPU memory | 32.96 GB |
+
+**Model config:** unchanged — n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, GELU
+**Optimizer:** unchanged — Lion lr=1.7e-4, wd=3e-4, betas=(0.9, 0.99)
+**Scheduler:** unchanged — CosineAnnealingLR(T_max=30)
+**Loss:** unchanged — vol_loss + 25·surf_loss with asinh(z) on pressure + pressure_weight=2.0
+**Precision:** unchanged — bf16 autocast on forward+loss
+**EMA:** **decay=0.995** (was 0.999)
+**Gradient clipping:** unchanged — max_norm=1.0
+**Batch:** 4
+**Metric artifacts:** `models/model-charliepai2i48h2-askeladd-ema-decay-8mech-0995-20260516-142331/metrics.jsonl`
+
+**Note:** −4.25% on val (51.44 vs 53.72), −5.69% on test (43.95 vs 46.60). 3 of 4 val splits improved; all 4 test splits improved. re_rand shows the biggest test gain (44.63→38.51, −13.7%), suggesting faster EMA tracking helps cross-regime Re generalization. The Arm A (0.997) vs Arm B (0.995) gap is at the noise floor (1.18 pts vs 1.17 pt noise floor); both clearly beat 0.999. Faster-decay EMA (0.995) follows the "faster anneal → faster EMA" pattern: T_max=30 collapses LR to 40% by epoch 18 so recent weights matter more; 0.999's ~693-step half-life is too slow to track this regime.
+
+**9-mechanism stack:** Lion + surf_weight=25 + asinh(pressure) + **EMA(0.995)** + grad_clip(max_norm=1.0) + bf16 autocast + cosine T_max=30 + pressure_weight=2.0
+
+**Cumulative improvement from initial baseline:** 135.02 → 51.44 = **−61.9%**
+
+**Reproduce:**
+```bash
+cd target && python train.py --agent <student> \
+    --experiment_name "<student>/your-experiment-name" \
+    --surf_weight 25 \
+    --cosine_t_max_epochs 30 \
+    --pressure_weight 2.0 \
+    --ema_decay 0.995
+```
+(In-tree defaults: T_max=80, surf_weight=30, pressure_weight=1.0, ema_decay=0.999 — must pass all four explicitly.)
+
+> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **51.4403** with a terminal `SENPAI-RESULT` marker.
