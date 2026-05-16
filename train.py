@@ -405,6 +405,7 @@ class Config:
     surf_weight: float = 10.0
     epochs: int = 50
     huber_delta: float = 2.0
+    lr_T_max: int = 0  # 0 = use MAX_EPOCHS (current behavior); >0 = override cosine anneal horizon
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -457,7 +458,8 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+t_max = cfg.lr_T_max if cfg.lr_T_max > 0 else MAX_EPOCHS
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=t_max)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
