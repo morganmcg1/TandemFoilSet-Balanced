@@ -370,6 +370,7 @@ class Config:
     surf_weight: float = 25.0
     epochs: int = 50
     smooth_l1_beta: float = 1.0  # transition point between quadratic/linear regions of SmoothL1
+    grad_clip_norm: float = 0.0  # when >0, apply nn.utils.clip_grad_norm_ between backward and step
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -457,6 +458,10 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    grad_norm_sum = 0.0
+    grad_norm_max = 0.0
+    grad_clip_hits = 0
+    grad_nonfinite = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -478,6 +483,28 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        # Use a very large clip threshold when disabled so the same code path
+        # returns the true pre-clip gradient norm for telemetry.
+        clip_threshold = cfg.grad_clip_norm if cfg.grad_clip_norm > 0 else float("inf")
+        pre_clip_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_threshold)
+        pre_clip_norm_val = float(pre_clip_norm)
+        if not (pre_clip_norm_val == pre_clip_norm_val) or pre_clip_norm_val == float("inf"):
+            grad_nonfinite += 1
+        else:
+            grad_norm_sum += pre_clip_norm_val
+            if pre_clip_norm_val > grad_norm_max:
+                grad_norm_max = pre_clip_norm_val
+            if cfg.grad_clip_norm > 0 and pre_clip_norm_val > cfg.grad_clip_norm:
+                grad_clip_hits += 1
+        if epoch == 0:
+            append_metrics_jsonl(metrics_jsonl_path, {
+                "event": "batch",
+                "epoch": epoch + 1,
+                "batch": n_batches,
+                "train/grad_norm_pre_clip": pre_clip_norm_val,
+                "train/vol_loss": float(vol_loss.item()),
+                "train/surf_loss": float(surf_loss.item()),
+            })
         optimizer.step()
 
         with torch.no_grad():
@@ -493,6 +520,8 @@ for epoch in range(MAX_EPOCHS):
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    grad_norm_mean = grad_norm_sum / max(n_batches - grad_nonfinite, 1)
+    grad_clip_frac = grad_clip_hits / max(n_batches, 1)
 
     # --- Validate (using EMA model) ---
     model.eval()
@@ -524,6 +553,11 @@ for epoch in range(MAX_EPOCHS):
         "peak_memory_gb": peak_gb,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/grad_norm_mean": grad_norm_mean,
+        "train/grad_norm_max": grad_norm_max,
+        "train/grad_clip_frac": grad_clip_frac,
+        "train/grad_nonfinite_batches": grad_nonfinite,
+        "train/grad_clip_threshold": cfg.grad_clip_norm,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -531,6 +565,7 @@ for epoch in range(MAX_EPOCHS):
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"grad[mean={grad_norm_mean:.3f} max={grad_norm_max:.3f} clip_frac={grad_clip_frac:.3f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
