@@ -466,6 +466,7 @@ class Config:
     loss_type: str = "l1"  # mse | l1 | huber — l1 won 12.9% over huber, locking it in
     num_freq: int = 4  # Fourier positional-encoding frequencies (Tancik 2020); 4 won vs 8
     coord_noise_std: float = 0.01  # Gaussian noise std on normalized (x,z) coords during training
+    asinh_scale: float = 0.0  # >0 applies symmetric asinh(t*s)/s to pred + y_norm in training loss only
 
 
 cfg = sp.parse(Config)
@@ -589,7 +590,13 @@ for epoch in range(MAX_EPOCHS):
         x_enc = encode_inputs(x_norm, cfg.num_freq)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_enc})["preds"]
-        err = _pointwise_loss(pred, y_norm, cfg.loss_type)
+        if cfg.asinh_scale > 0:
+            s = cfg.asinh_scale
+            pred_t = torch.asinh(pred * s) / s
+            y_t = torch.asinh(y_norm * s) / s
+            err = _pointwise_loss(pred_t, y_t, cfg.loss_type)
+        else:
+            err = _pointwise_loss(pred, y_norm, cfg.loss_type)
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
