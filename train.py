@@ -214,10 +214,36 @@ class Transolver(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Feature clipping / soft-clipping
+# ---------------------------------------------------------------------------
+
+def apply_feature_clip(x_norm: torch.Tensor, mode: str) -> torch.Tensor:
+    """Apply a ±3σ clip transform to normalized input features.
+
+    Modes:
+      - ``"global_hard_3sigma"``: hard clip all 24 dims to [-3, 3] (PR #3753 baseline).
+      - ``"surgical_hard_3sigma"``: hard clip only dims 0-3 (pos_x, pos_z, saf_a, saf_b).
+      - ``"global_tanh_3sigma"``: smooth ``tanh(x/3) * 3`` over all 24 dims.
+      - ``"none"``: pass-through.
+    """
+    if mode == "global_hard_3sigma":
+        return x_norm.clamp(-3.0, 3.0)
+    if mode == "surgical_hard_3sigma":
+        x_norm = x_norm.clone()
+        x_norm[..., 0:4] = x_norm[..., 0:4].clamp(-3.0, 3.0)
+        return x_norm
+    if mode == "global_tanh_3sigma":
+        return torch.tanh(x_norm / 3.0) * 3.0
+    if mode == "none":
+        return x_norm
+    raise ValueError(f"Unknown clip_mode: {mode!r}")
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, clip_mode: str) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -237,7 +263,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            x_norm = x_norm.clamp(-3.0, 3.0)
+            x_norm = apply_feature_clip(x_norm, clip_mode)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=torch.cuda.is_available()):
                 pred = model({"x": x_norm})["preds"]
@@ -362,6 +388,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    clip_mode: str = "global_hard_3sigma"  # one of: global_hard_3sigma, surgical_hard_3sigma, global_tanh_3sigma, none
 
 
 cfg = sp.parse(Config)
@@ -458,17 +485,30 @@ for epoch in range(MAX_EPOCHS):
             n_outlier_all = ((x_norm.abs() > 3.0) & real).float().sum()
             frac_clipped_all = (n_outlier_all / n_total_all).item()
             per_dim_frac = (((x_norm.abs() > 3.0) & real).float().sum(dim=(0, 1)) / n_real).tolist()
-            print(f"  clip diag (first batch): fraction clipped DSDF dims 4-11 = {frac_clipped_dsdf:.4f}; all 24 dims = {frac_clipped_all:.4f}")
+            pre_dims_0_3_max_abs = x_norm[..., 0:4].abs().max().item()
+            pre_all_max_abs = x_norm.abs().max().item()
+            x_norm_clipped = apply_feature_clip(x_norm, cfg.clip_mode)
+            post_dims_0_3_max_abs = x_norm_clipped[..., 0:4].abs().max().item()
+            post_all_max_abs = x_norm_clipped.abs().max().item()
+            print(f"  clip diag (first batch, pre-transform): fraction clipped DSDF dims 4-11 = {frac_clipped_dsdf:.4f}; all 24 dims = {frac_clipped_all:.4f}")
             print(f"  per-dim clipped fraction: {[f'{f:.4f}' for f in per_dim_frac]}")
+            print(f"  pre-transform  max_abs: dims 0-3 = {pre_dims_0_3_max_abs:.3f}; all = {pre_all_max_abs:.3f}")
+            print(f"  post-transform max_abs: dims 0-3 = {post_dims_0_3_max_abs:.3f}; all = {post_all_max_abs:.3f}  (clip_mode={cfg.clip_mode})")
             append_metrics_jsonl(metrics_jsonl_path, {
                 "event": "clip_diag",
                 "frac_clipped_dsdf": frac_clipped_dsdf,
                 "frac_clipped_all": frac_clipped_all,
                 "per_dim_frac_clipped": per_dim_frac,
-                "clip_mode": "global_24_dims",
+                "pre_dims_0_3_max_abs": pre_dims_0_3_max_abs,
+                "pre_all_max_abs": pre_all_max_abs,
+                "post_dims_0_3_max_abs": post_dims_0_3_max_abs,
+                "post_all_max_abs": post_all_max_abs,
+                "clip_mode": cfg.clip_mode,
             })
+            x_norm = x_norm_clipped
             clip_diag_logged = True
-        x_norm = x_norm.clamp(-3.0, 3.0)
+        else:
+            x_norm = apply_feature_clip(x_norm, cfg.clip_mode)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=torch.cuda.is_available()):
             pred = model({"x": x_norm})["preds"]
@@ -494,7 +534,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.clip_mode)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -552,7 +592,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.clip_mode)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
