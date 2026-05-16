@@ -454,6 +454,7 @@ class Config:
     surf_weight: float = 30.0
     epochs: int = 80
     ema_decay: float = 0.999
+    max_grad_norm: float = 1.0
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -564,14 +565,14 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.max_grad_norm)
         optimizer.step()
         ema.update(model)
 
         gn = grad_norm.item()
         epoch_gn_sum += gn
         epoch_gn_max = max(epoch_gn_max, gn)
-        if gn > 1.0:
+        if gn > cfg.max_grad_norm:
             epoch_gn_clipped += 1
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
