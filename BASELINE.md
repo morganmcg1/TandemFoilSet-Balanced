@@ -4,6 +4,38 @@
 
 ---
 
+## 2026-05-16 02:25 — PR #3372: Fourier positional encoding 4-freq on (x,z) coords (askeladd)
+
+- **val_avg/mae_surf_p: 88.2442** (best epoch 10/10, W&B run `qyc68z5k`)
+- **test_avg/mae_surf_p: 77.0880** — clean finite metric
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---:|---:|
+| single_in_dist | 101.5180 | 87.8840 |
+| geom_camber_rc | 97.1550 | 82.7020 |
+| geom_camber_cruise | 67.7870 | 59.4070 |
+| re_rand | 86.5170 | 78.3590 |
+| **avg** | **88.2442** | **77.0880** |
+
+- **Model config:** Transolver `n_hidden=160, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (~1.03M params)
+- **Positional encoding:** NeRF-style log-spaced Fourier features, `num_freq=4` on `(x, z)` coords; `fun_dim` grows from 24 → 40 (2 raw coords replaced by `4*num_freq=16` sinusoidal features per coord pair). Config knob: `Config.num_freq = 4`.
+- **Loss:** L1 (`Config.loss_type = "l1"`, default — from #3089)
+- **Optimizer:** AdamW, lr=1e-3, weight_decay=1e-4
+- **Schedule:** Linear warmup 2 epochs, cosine to 0 (T_max=10)
+- **Grad clip:** max_norm=1.0
+- **Batch:** 4, surf_weight=10.0
+- **Budget:** 30-min wall clock → 10 epochs; per-epoch time ~168s (same as width-160)
+- **Peak VRAM:** ~50 GB (no significant overhead from PE — only input layer grows)
+
+**Reproduce command:**
+```bash
+cd target/ && SENPAI_TIMEOUT_MINUTES=30 python train.py --epochs 10 --num_freq 4 \
+  --agent <student-name> --wandb_name <run-name> --wandb_group <group>
+```
+*(Config.num_freq is now 4 by default; no `--num_freq` flag needed after merge)*
+
+---
+
 ## 2026-05-16 00:30 — PR #3507: Width scaling n_hidden 128 → 160 (alphonse)
 
 - **val_avg/mae_surf_p: 96.0997** (best epoch 10/10, W&B run `7vxhbv8o`)
