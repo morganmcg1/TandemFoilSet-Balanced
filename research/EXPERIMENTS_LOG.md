@@ -1,5 +1,24 @@
 # SENPAI Research Results — willow-pai2i-24h-r4
 
+## 2026-05-16 02:00 — PR #3618: Surface-only decoder head (parallel zero-init residual) — ASSIGNED to nezuko
+
+- **Student/branch:** willowpai2i24h4-nezuko / `willowpai2i24h4-nezuko/surf_head`
+- **Hypothesis:** Add a parallel 128→128→3 surface-only decoder head on `h = ln_3(fx)` after block 5, zero-init final layer, gated by `is_surface`. Architectural surface specialization — first output-head split in this track. Orthogonal to all 4 prior wins (loss / input conditioning / schedule / input encoding).
+- **Predicted impact:** Conservative 2–4% (test ~66–68), hopeful 5–7% (~64–66). Pessimistic wash. +16,899 params (+2.5%). Zero-init keeps initial loss within ~1% of baseline.
+- **Status:** WIP, awaiting first run
+
+---
+
+## 2026-05-16 01:55 — PR #3550: Volume MAE reformulation (unify L1 across surface + volume) — CLOSED
+
+- **Student/branch:** willowpai2i24h4-nezuko / `willowpai2i24h4-nezuko/volume_mae`
+- **Hypothesis:** Replace MSE volume loss with MAE for L1 consistency surface↔volume.
+- **W&B run:** result run on OLD pre-RFF base
+- **Result:** test_avg/mae_surf_p ≈ 83.85 (+4.7% vs #3358 baseline 80.08 on old base; +21% above current 69.27 baseline)
+- **Decision:** CLOSED — the volume MSE→MAE swap regressed even before factoring in the RFF baseline shift. The asymmetry (MSE volume, MAE surface) appears load-bearing: MSE on the volume provides rich gradient signal across the dense mesh, while MAE on the surface aligns with the ranking metric. Unifying loses information.
+
+---
+
 ## 2026-05-16 01:27 — PR #3262: Random Fourier Features σ=1.0 — MERGED (R2 winner #2)
 
 - **Student/branch:** willowpai2i24h4-edward / `willowpai2i24h4-edward/fourier-pos-enc`

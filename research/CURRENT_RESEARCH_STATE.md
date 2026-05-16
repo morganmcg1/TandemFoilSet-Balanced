@@ -1,6 +1,6 @@
 # SENPAI Research State — TandemFoilSet (willow-pai2i-24h-r4)
 
-- **As of:** 2026-05-16 01:40 UTC
+- **As of:** 2026-05-16 02:05 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r4`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced`
 - **W&B:** `wandb-applied-ai-team/senpai-v1`
@@ -25,7 +25,7 @@ All remaining PRs must beat **test_avg/mae_surf_p < 69.27**.
 
 | # | Student | PR | Hypothesis | Status |
 |---|---------|----|-----------|--------|
-| 1 | nezuko   | #3550 | Volume MAE reformulation (unify L1 loss across surface + volume) | WIP (assigned 00:30) |
+| 1 | nezuko   | #3618 | **Surface-only decoder head (parallel zero-init residual on surface nodes)** | WIP (assigned 02:00) |
 | 2 | frieren  | #3504 | Richer FiLM conditioning (cond_dim 1→11) — SENT BACK for full-stack rebase | WIP (rebasing; VRAM: start film_mid=64) |
 | 3 | thorfinn | #3468 | Per-block FiLM heads — v2 on cosine base; notified of new 69.27 target | WIP (rebase+rerun in flight) |
 | 4 | tanjiro  | #3406 | surf_weight sweep — sw5 rerun on cosine base; notified of new 69.27 target | WIP (rebase+rerun, branch updated 01:23) |
@@ -34,7 +34,7 @@ All remaining PRs must beat **test_avg/mae_surf_p < 69.27**.
 | 7 | edward   | #3599 | RFF σ sweep {0.5,1.0,2.0} × n_freqs {16,32} — R3 refinement on own win | WIP (assigned 01:37) |
 | 8 | fern     | #3258 | Grad-clip 1.0 + 5-epoch warmup — SENT BACK for full-stack rebase | WIP (rebasing) |
 
-**All 8 students active.** Edward assigned #3599 (RFF σ/n_freqs sweep) at 01:37 UTC.
+**All 8 students active.** Nezuko assigned #3618 (Surface-only decoder head) at 02:00 UTC after #3550 (Volume MAE) was closed (+4.7% test regression on old base, +21% above 69.27).
 
 ## R1/R2 closed/merged history
 
@@ -47,6 +47,7 @@ All remaining PRs must beat **test_avg/mae_surf_p < 69.27**.
 | ✗ | frieren  | Re-stratified loss (1/per_sample_y_std) | #3386 | **CLOSED** — failed (+1.7% test regression) |
 | ✗ | nezuko   | Multi-scale slice tokens | #3429 | **CLOSED** — equal-epoch tie with control |
 | ✗ | nezuko   | Surface-biased slice routing | #3260 | **CLOSED** (paired −0.05%) |
+| ✗ | nezuko   | Volume MAE reformulation (L1 on both) | #3550 | **CLOSED** — failed (+4.7% test regression on old base, +21% above 69.27) |
 | ✗ | tanjiro  | Huber loss delta=0.5 | #3256 | **CLOSED** (redundant with #3257) |
 | ✗ | alphonse | Wider-shallower 256d | #3261 | **CLOSED** (+24% worse) |
 | ✗ | askeladd | Dropout p=0.1 | #3264 | **CLOSED** (+6% worse) |
@@ -68,18 +69,11 @@ All remaining PRs must beat **test_avg/mae_surf_p < 69.27**.
 - **thorfinn per-block FiLM rebased (#3468):** v1 on old base gave test=84.00 (−6.73% vs #3263). On new RFF base, per-block FiLM is orthogonal (multiple architectural gates vs input encoding). Predicted hopeful test ~64–66, conservative ~66–68, pessimistic ~68–72. New target hard but plausible.
 - **tanjiro sw=5 rebased (#3406):** sw5 won on old frieren-only base (−5.88% test). On new RFF base with surf_weight=5 — if still orthogonal, expect test ~64–65. But the new target is harder. Branch updated at 01:23, may be running now.
 - **frieren richer FiLM rebased (#3504):** cond_dim=11, film_mid=64 first. Old gain −7.16% (film_mid=64 on #3263 ref). On new RFF+cosine+FiLM base, predicted hopeful test ~64.4, conservative ~65.8–67.2. Use film_mid=64 due to VRAM limits (mid128 was 94.0 GiB, RFF adds overhead).
-- **nezuko volume MAE (#3550):** Unifies L1 loss. Conservative expectation: ~1–3% test gain. Predicted test ~67–68.5. Now needs to beat 69.27.
+- **nezuko surface-only decoder head (#3618):** Parallel zero-init 128→128→3 head on `h = ln_3(fx)` after block 5, gated by `is_surface`. Orthogonal to all 4 prior wins (output-head specialization vs loss/input/schedule/encoding). +16,899 params (+2.5%). Predicted conservative ~2–4% gain (test ~66–68), hopeful 5–7% (test ~64–66), pessimistic wash.
 - **alphonse AdamW sweep (#3565):** beta2=(0.999→0.95) + weight_decay=(1e-4→0.05). 3 arms. Standard transformer optimizer recipe. Predicted val ~85–91, test ~65–68. Conservative: ~2% gain.
 - **askeladd EMA β=0.99 (#3351):** β=0.99 (100-step horizon) on new stacked base. Cosine T_max=14 anneals LR→0, which may reduce oscillation benefit. Conservative expectation: small gain (~1–2%) or wash. Rebasing now (branch CONFLICTING).
 - **fern grad-clip+warmup (#3258):** clip=1.0, warmup=5 on new stacked base. Grad-norm median was 60, peak 1004. Cosine LR may have already tamed late-epoch norms. Predicted conservative: 3–5% gain, pessimistic: wash. Rebasing now.
-
-## edward newly idle — needs R3 hypothesis
-
-edward just won with #3262 (RFF σ=1.0). The natural next steps for edward:
-1. **RFF σ sweep {0.5, 1.0, 2.0}** — the old MSE-base bracket showed σ=1.0 wins; the new base may have a different optimum. Fast, cheap, well-motivated.
-2. **n_freqs bump {32, 64}** — current 32 features (n_freqs=16) is at the low end of RFF literature. 64 features (n_freqs=32) is a natural next step. Trivial param cost.
-
-Assigning RFF n_freqs/σ sweep as R3 for edward.
+- **edward RFF σ/n_freqs sweep (#3599):** σ {0.5, 2.0} × n_freqs {16, 32}, brackets the winning σ=1.0 / n_freqs=16. CLI-only, no code changes. Conservative: σ=1.0 was already optimal → wash. Hopeful: n_freqs=32 doubles spatial resolution → modest 1–2% gain.
 
 ## Open issues / live diagnostics
 
@@ -100,23 +94,26 @@ Assigning RFF n_freqs/σ sweep as R3 for edward.
 5. ✗ Richer FiLM conditioning ← REBASE IN FLIGHT (#3504)
 6. ✗ Volume MAE reformulation ← IN FLIGHT (#3550)
 7. ✗ AdamW betas / weight-decay sweep ← IN FLIGHT (#3565)
-8. ✗ **RFF σ sweep {0.5, 1.0, 2.0} + n_freqs {16, 32, 64}** ← IN FLIGHT (#3599 edward)
-9. **Per-block × richer-FiLM compose** (if both #3468 + #3504 land on new base)
-10. **Single-foil FiLM mask** (mask foil-2/gap/stagger features when gap=0; fixes mid128 single_in_dist regression frieren observed)
-11. **Geometry-aware input features** (node distance to nearest surface; may be redundant with dsdf)
-12. **Loss decomposition by domain** (per-split loss tracking + dynamic per-split weight)
-13. **Soft slice-softmax temperature** (addresses gradient-norm root cause)
-14. **Surface-only decoder head** (deeper architectural surface specialization)
+8. ✗ RFF σ sweep {0.5, 1.0, 2.0} + n_freqs {16, 32} ← IN FLIGHT (#3599 edward)
+9. ✗ **Surface-only decoder head (parallel zero-init)** ← IN FLIGHT (#3618 nezuko)
+10. **Per-block × richer-FiLM compose** (if both #3468 + #3504 land on new base)
+11. **Single-foil FiLM mask** (mask foil-2/gap/stagger features when gap=0; fixes mid128 single_in_dist regression frieren observed)
+12. **Geometry-aware input features** (node distance to nearest surface; may be redundant with dsdf)
+13. **Loss decomposition by domain** (per-split loss tracking + dynamic per-split weight)
+14. **Soft slice-softmax temperature** (addresses gradient-norm root cause)
 15. **TTA at inference** (test-time augmentation)
 16. **Variance reduction via fixed `--seed` flag + multi-seed protocol**
 17. **`single_in_dist` deep-dive** (per-sample Re vs error diagnostic)
+18. **Deeper surface head** (if #3618 wins: 256/512 mid dim, or 2-block surface decoder)
+19. **Surface + volume dual head** (if #3618 wins: also a parallel vol_head, learn full residual decomposition)
 
 ## Next immediate action
 
-**All 8 students active.** Monitor for results from rebase reruns (#3468 thorfinn, #3406 tanjiro, #3504 frieren, #3258 fern, #3351 askeladd) and fresh assignments (#3550 nezuko, #3565 alphonse, #3599 edward).
+**All 8 students active.** Monitor for results from rebase reruns (#3468 thorfinn, #3406 tanjiro, #3504 frieren, #3258 fern, #3351 askeladd) and fresh assignments (#3618 nezuko, #3565 alphonse, #3599 edward).
 
 Key monitors:
 - #3468 thorfinn per-block FiLM v2 on cosine+RFF base: predicted hopeful test ~64–66
 - #3406 tanjiro sw=5 on cosine+RFF base: predicted test ~64–65 (branch updated at 01:23)
 - #3504 frieren richer-FiLM film_mid=64 on full stack: predicted hopeful test ~64.4
 - #3599 edward RFF σ sweep: σ=0.5 and σ=2.0 bracket around the winning σ=1.0
+- #3618 nezuko surface-only decoder head: predicted hopeful test ~64–66 (architectural surface specialization)
