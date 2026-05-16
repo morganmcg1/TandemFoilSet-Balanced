@@ -477,10 +477,10 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=192,
+    n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=96,
+    slice_num=64,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
@@ -495,8 +495,42 @@ n_ffn_params = sum(
 )
 print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN={n_ffn_params})")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=18)
+# Inverse LLRD: highest LR at the bottom block (block_0), lowest at top.
+# PR #3722 evidence (closed): block_0 carries the largest gradient signal in
+# Transolver (opposite of BERT/RoBERTa), so it benefits from a *larger* LR
+# than the head. γ_inv = 1/0.85 ≈ 1.176 mirrors PR #3642's standard-LLRD
+# magnitude symmetrically. PR #3768 stacks this with the SwiGLU FFN merged
+# in PR #3680 to test if the levers compound.
+BASE_LR = cfg.lr
+GAMMA_INV = 1.0 / 0.85
+NUM_BLOCKS = len(model.blocks)
+
+param_groups: list[dict] = []
+for i, block in enumerate(model.blocks):
+    lr_mult = GAMMA_INV ** (NUM_BLOCKS - 1 - i)
+    param_groups.append({
+        "params": list(block.parameters()),
+        "lr": BASE_LR * lr_mult,
+        "name": f"block_{i}",
+        "lr_mult": lr_mult,
+    })
+
+block_param_ids = {id(p) for g in param_groups for p in g["params"]}
+other_params = [p for p in model.parameters() if id(p) not in block_param_ids]
+param_groups.append({
+    "params": other_params,
+    "lr": BASE_LR,
+    "name": "head_and_embed",
+    "lr_mult": 1.0,
+})
+
+optimizer = torch.optim.AdamW(param_groups, weight_decay=cfg.weight_decay)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
+
+print("Inverse-LLRD param groups (γ_inv = 1/0.85 ≈ 1.176):")
+for g in param_groups:
+    np_g = sum(p.numel() for p in g["params"])
+    print(f"  {g['name']:<18s} lr={g['lr']:.3e}  lr_mult={g['lr_mult']:.4f}  n_params={np_g}")
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -520,6 +554,7 @@ run.summary["model/ffn_param_count"] = n_ffn_params
 wandb.define_metric("global_step")
 wandb.define_metric("train/*", step_metric="global_step")
 wandb.define_metric("val/*", step_metric="global_step")
+wandb.define_metric("optim/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
@@ -544,6 +579,8 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    grad_norm_sum = {g["name"]: 0.0 for g in param_groups}
+    grad_norm_n = 0
 
     train_loop_t0 = time.time()
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -571,6 +608,18 @@ for epoch in range(MAX_EPOCHS):
         grad_norm = torch.nn.utils.clip_grad_norm_(
             model.parameters(), max_norm=float("inf")
         )
+
+        # Per-group gradient L2 norm (PR #3722 mechanistic diagnostic — does
+        # block_0 still dominate the gradient signal under SwiGLU's gated FFN?)
+        with torch.no_grad():
+            for g in param_groups:
+                sq = 0.0
+                for p in g["params"]:
+                    if p.grad is not None:
+                        sq += p.grad.detach().float().pow(2).sum().item()
+                grad_norm_sum[g["name"]] += sq ** 0.5
+        grad_norm_n += 1
+
         optimizer.step()
         global_step += 1
         wandb.log({
@@ -613,6 +662,12 @@ for epoch in range(MAX_EPOCHS):
         "gpu_mem_gb_peak": peak_gb,
         "global_step": global_step,
     }
+    for i, g in enumerate(optimizer.param_groups):
+        name = g.get("name", f"group_{i}")
+        log_metrics[f"optim/{name}/effective_lr"] = g["lr"]
+        log_metrics[f"train/{name}/grad_norm_per_step_mean"] = (
+            grad_norm_sum[name] / max(grad_norm_n, 1)
+        )
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
