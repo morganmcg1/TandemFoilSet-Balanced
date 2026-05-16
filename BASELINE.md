@@ -2,7 +2,59 @@
 
 Primary ranking metric is `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across the four validation splits). Test-time decision metric is `test_avg/mae_surf_p`. Lower is better.
 
-## 2026-05-16 06:42 — PR #3666: Peak LR sweep — lr=1e-3 + compile (current best)
+## 2026-05-16 09:15 — PR #3463: Capacity revisit — n_hidden=192 + lr=1e-3 + compile (current best)
+
+Stacks on top of PR #3666 (lr=1e-3) which is on top of the full round-5 merged baseline: scale-inv loss + EMA + surf-L1 + FiLM + bf16 + Cautious AdamW + T_max=25/eta_min_factor=0.10 + torch.compile. Pure capacity change: n_hidden 128 → 192 (1.84M vs 829K params, 2.22× params). Win is real but sub-multiplicative: lr=1e-3 already captured most of the camber_rc capacity headroom, so the compound is smaller than the independent-axis prediction (~39% of predicted gain). The cruise split keeps benefiting from width at any LR. Descent still active at −0.97/epoch at cutoff with LR already at eta_min — the win is wall-clock-bound, not convergence-bound.
+
+**Primary** (n_hidden=192 + lr=1e-3 + compile, full merged stack)
+- `val_avg/mae_surf_p` = **53.1915** (best epoch 24 / 50, run cut by 30-min wall clock; **−1.60% vs PR #3666**, **−57.07% vs round-5 anchor**)
+- `test_avg/mae_surf_p` = **47.5701** (**−1.19% vs PR #3666**, **−58.40% vs round-5 anchor**)
+- **Cumulative round-5 improvement:** −57.07% val_avg (123.88 → 53.19), −58.40% test_avg (114.37 → 47.57). **Eleven compounding wins.**
+
+**Per-split surface pressure MAE (n_hidden=192 + lr=1e-3 + compile)**
+
+| Split | val_mae_surf_p | test_mae_surf_p | Δ val vs PR #3666 | Δ test vs PR #3666 |
+|---|---:|---:|---:|---:|
+| single_in_dist | 55.368 | 51.739 | −1.70% | −2.81% |
+| geom_camber_rc | 70.212 | 65.107 | **+2.01%** | **+2.33%** |
+| geom_camber_cruise | 33.776 | 27.234 | −6.23% | −8.88% |
+| re_rand | 53.411 | 46.201 | −2.97% | **+0.82%** |
+| **avg** | **53.1915** | **47.5701** | **−1.60%** | **−1.19%** |
+
+5/8 cells improve, 3 regress. Win concentrated on `geom_camber_cruise` (−6.23% val / −8.88% test). `geom_camber_rc` regresses (+2.0% val / +2.3% test) — lr=1e-3 already drove this split into a regime where added width cannot help; they compete on this OOD-geometry split. `re_rand` test marginally regresses (+0.82%). val_avg and test_avg both beat the gate.
+
+**Model config (n_hidden widened from 128 → 192)**
+- Transolver — n_hidden=192, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2; FiLM per-block conditioning
+- **1,843,393 parameters** (vs 829K at n_hidden=128); EMA shadow at decay=0.999; torch_compile_active=True (default mode, dynamic=True)
+- CautiousAdamW lr=1e-3, wd=1e-4
+- CosineAnnealingLR(T_max=25, eta_min=1e-4, eta_min_factor=0.10)
+- bf16 AMP, surf_weight=10.0, surf_p_l1_weight=1.0
+- bernoulli_residual=False
+- **Peak VRAM: 33.84 GB** (+9.46 GB vs lr=1e-3+n128 baseline; well within 96 GB device)
+- Avg s/epoch: 75.5; 24 epochs completed in 30.2 min
+- Cautious mask mean: 0.6105 (invariant — matches 0.617 n=128 baseline, 0.614 prior n=192 results)
+
+**Metric artifacts**
+- `models/model-charliepai2i24h5-edward-capacity_n192_lr1e3_compile-20260516-072856/metrics.jsonl`
+- `models/model-charliepai2i24h5-edward-capacity_n192_lr1e3_compile-20260516-072856/metrics.yaml`
+- `models/model-charliepai2i24h5-edward-capacity_n192_lr1e3_compile-20260516-072856/config.yaml`
+
+**Reproduce**
+```bash
+cd target/ && python train.py \
+    --agent charliepai2i24h5-edward \
+    --experiment_name "baseline_repro_capacity_n192_lr1e3_compile" \
+    --torch_compile \
+    --n_hidden 192 \
+    --lr 1e-3 --t_max 25 --eta_min_factor 0.10 \
+    --surf_p_l1_weight 1.0 \
+    --epochs 50
+```
+(Wall clock capped by `SENPAI_TIMEOUT_MINUTES`; run hit 24 epochs in 30.2 min.)
+
+---
+
+## 2026-05-16 06:42 — PR #3666: Peak LR sweep — lr=1e-3 + compile (previous best)
 
 Stacks on top of full round-5 merged baseline: scale-inv loss + EMA + surf-L1 + FiLM + bf16 + Cautious AdamW + T_max=25/eta_min_factor=0.10 + torch.compile. A pure optimizer-hyperparameter change: lr 5e-4 → 1e-3 on the compile-enabled stack. The key finding is that the epoch-1 instability seen at lr=1e-3 without compile (PR #3581: val_avg spiked to ~800, unrecoverable in 17 epochs) **entirely disappears** with compile + `torch.set_float32_matmul_precision("high")` TF32 mode — epoch 1 at lr=1e-3 lands at 367, essentially identical to the compile baseline's ~365. With no recovery deficit, the higher LR finds a strictly better minimum across all 32 epochs: Arm B (lr=1e-3) sits below Arm A (lr=7e-4) from epoch 1 to 32. Cautious mask remains invariant (~0.61) across both arms and all LR levels — masking does not gate the high-LR updates. Both arms still descending at ~−0.5/epoch at cutoff; the 32-epoch budget remains undercooked.
 
