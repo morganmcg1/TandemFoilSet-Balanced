@@ -31,11 +31,11 @@
 |---|---|---|---|
 | alphonse | #3730 | LayerScale γ=0.01 + n_freqs=14 compound | NEW (wave-7) — HIGHEST PRIORITY |
 | nezuko | #3732 | n_freqs={18,20} + clip=0.25 (tight clip for Fourier scaling) | NEW (wave-7) |
-| frieren | #3648 | LR linear warmup {1,2 ep} + clip=1.0 on full stack | WIP (stale) |
+| frieren | #3740 | Asymmetric LayerScale γ_attn=0.001 vs γ_mlp=0.01/0.03 | NEW (wave-7) |
 | tanjiro | #3527 | Mixed precision BF16 training | WIP (stale) |
 | askeladd | #3424 | Tighter clip sweep max_norm=0.1 × Huber delta | WIP (stale) |
 | thorfinn | #3682 | Peak LR sweep lr∈{7e-4, 1e-3} on n_freqs=14+clip=1.0 | WIP |
-| edward | #3192 | EMA decay=0.999 + T_max=20 on full stack | WIP |
+| edward | #3192 | EMA 0.998 on LayerScale stack (rebasing) | Sent back (rebase onto LayerScale) |
 | fern | #3708 | AdamW β2 sweep {0.99, 0.95} on n_freqs=14+clip=1.0 | WIP |
 
 ## Closed this round
@@ -53,6 +53,7 @@
 | #3227 (thorfinn) | Surf-anneal: 13h stale, no rebase after 2 requests, advisor branch moved 4+ merges ahead |
 | #3439 (fern) | RFF σ∈{1,3,5,7} all worse than log-spaced; σ=3 best at val=85.25 vs baseline 81.08 (-5%) |
 | #3650 (nezuko) | Compound fail: n=14+clip=1.0 val=81.20 (worse than 81.08); n=18+clip=1.0 val=84.71. clip=0.25 is regularizer at n_freqs≥14 |
+| #3648 (frieren) | LR warmup: start_factor=1e-6 → LR=5e-10 in ep1 → val=419 → 1 wasted epoch kills budget |
 
 ## Current research themes
 
@@ -60,9 +61,9 @@
 
 2. **n_freqs=18+clip=0.25 (nezuko #3732)**: PR #3650 tested n=18+clip=1.0 (bad). The correct test n=18+clip=0.25 is untested. If Fourier scaling continues beyond n=14, it'll compound further with LayerScale.
 
-3. **LR warmup (frieren #3648)**: Cold-start penalty visible at every epoch-1 (val ~210). clip=1.0's diagnostic showed clip_frac breaks below 1.0 at epoch 10, not earlier — warmup attacks the root cause (high gnorm_max=48 at epoch 1).
+3. **Asymmetric LayerScale (frieren #3740)**: PR #3593 showed γ-attn stays near 0.01, γ-mlp grows 3×. Separate inits (γ_attn=0.001, γ_mlp=0.01/0.03) target each branch's natural trajectory. Expected 1-3% beyond symmetric γ=0.01.
 
-4. **EMA checkpoint averaging (edward #3192)**: Confirmed large effect (-14.3% val at epoch 13). Retesting with T_max=20. If EMA composes with LayerScale+n_freqs=14, could land below val=60.
+4. **EMA checkpoint averaging (edward #3192)**: EMA 0.998 beats old n_freqs=14 baseline by -1.16% (val=80.14). Rebasing to test EMA 0.998 on LayerScale stack. Expected val ~67 (-6.84% on 72.77). If EMA+LayerScale+n_freqs=14 all compose, could land val ~60.
 
 5. **AdamW β2 sweep (fern #3708)**: Heavy-tailed gradients (Huber + clip needed) contaminate β2=0.999 second moment. Testing β2∈{0.99, 0.95}.
 

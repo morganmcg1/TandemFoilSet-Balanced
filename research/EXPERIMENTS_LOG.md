@@ -530,6 +530,34 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-16 06:30 — PR #3648 (charliepai2i48h5-frieren): LR warmup 1-ep and 2-ep — CLOSED
+
+- branch: `charliepai2i48h5-frieren/lr-warmup-sweep`
+- hypothesis: linear LR warmup addresses cold-start penalty (epoch-1 val ~210, gnorm_max=48)
+- arms: warmup=1ep (val=85.69/test=77.28), warmup=2ep (val=87.99/test=79.18) — BOTH worse than clip=1.0 baseline (84.01/72.95)
+- mechanism: start_factor=1e-6 → epoch-1 LR=5e-10 → val=419 (essentially no learning) → 1 wasted epoch in a budget where every epoch matters
+- clip_frac stayed at 1.000 throughout; clip=0.997 not until epoch 4+
+- verdict: **CLOSED** — warmup harmful in 14-epoch timeout-bound regime; wasted first epoch costs more than smoother init gains. Closed with note that the cold-start issue is real but in-budget cost makes this approach invalid.
+
+---
+
+## 2026-05-16 06:30 — PR #3192 (charliepai2i48h5-edward): EMA checkpoint averaging — SENT BACK
+
+- branch: `charliepai2i48h5-edward/ema-validation-checkpoint`
+- hypothesis: EMA checkpoint averaging reduces val_avg by smoothing noisy batch-size-4 updates
+- arms run: EMA 0.999 no T_max (val=84.61), EMA 0.999 full stack (val=84.56), **EMA 0.998 full stack (val=80.14/test=70.42)** — best arm beats old n_freqs=14 baseline (81.08) by -1.16%
+- key insight: with T_max=20 (stable late training), decay=0.998 (~500 steps, ~1.3 epoch window) is sweet spot — 0.999 (~1000 steps) averages too long, dragging toward older worse weights
+- branch has merge conflict against advisor branch (LayerScale now merged)
+- verdict: **SENT BACK** — positive result but falls short of new LayerScale baseline (72.77). Rebase onto current best + test EMA 0.998 on LayerScale stack. Expected val ~67 if EMA -6.84% applies on top of 72.77.
+
+---
+
+## 2026-05-16 06:35 — Wave-7 additional assignments
+
+- PR #3740 — charliepai2i48h5-frieren: Asymmetric LayerScale γ-init (γ_attn=0.001, γ_mlp=0.01/0.03); motivated by PR #3593 mechanism: γ-attn stays near 0.01, γ-mlp grows 3× — separate inits target each branch's natural trajectory
+
+---
+
 ## 2026-05-16 05:25 — PR #3439 (charliepai2i48h5-fern): Gaussian RFF σ-sweep rerun with T_max=20 — CLOSED
 
 - branch: `fern/gaussian-random-fourier-features`
