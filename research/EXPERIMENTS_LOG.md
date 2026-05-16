@@ -894,3 +894,82 @@ Current advisor baseline: val=**109.42**. Arm A is **19.8% worse** on val and **
 ### Cross-cutting round-4 conclusion
 All 8 round-4 experiments (excluding the thorfinn win) failed. The model has exhausted the local neighborhood: augmentation on scalar flow features doesn't work, FFN/attention head scaling doesn't help within the 30-min budget, surf_weight and lr are already optimal. Moving to round-5 tier change: SwiGLU FFN, TTA, OneCycleLR, asinh target transform, DSDF clipping, per-domain normalization.
 
+
+---
+
+## 2026-05-16 16:45 — Round-6 Completions + Round-7 Launch
+
+### PR #4002 — MERGED: SwiGLU mlp_ratio=3 + epochs=14 (alphonse)
+- Branch: willowpai2i48h4-alphonse/alphonse-mlp-ratio-3-epochs14
+- Hypothesis: Extend training to 14 epochs on the mlp_ratio=3 baseline (#3908, val=59.00)
+- W&B run: `vuod53pk`
+- val_avg/mae_surf_p: **57.3537** vs prev baseline 59.0038 → −2.80%
+- test_avg/mae_surf_p: **49.8024** vs prev baseline 50.7368 → −1.84%
+- Per-split test: single_in_dist=55.88, geom_camber_rc=60.92, geom_camber_cruise=33.98, re_rand=48.43
+- **Decision: MERGED** as intermediate baseline — −2.8% improvement. Superseded same session by #3969.
+
+### PR #3969 — MERGED: SwiGLU mlp_ratio=2 + epochs=14 (askeladd)
+- Branch: willowpai2i48h4-askeladd/swiglu-epochs14
+- Hypothesis: Extend training to 14 epochs on default mlp_ratio=2 stack
+- W&B run: `dwyzcs0e`
+- val_avg/mae_surf_p: **56.4402** vs #4002 baseline 57.3537 → −1.60%
+- test_avg/mae_surf_p: **48.8947** vs #4002 baseline 49.8024 → −1.84%
+- Per-split test: single_in_dist=55.31, geom_camber_rc=61.16, geom_camber_cruise=32.02, re_rand=47.10
+- Val curve: ep11=65.49, ep12=61.10, ep13=58.40, ep14=56.44 — still descending
+- **Decision: MERGED** — new baseline. Critical finding: **mlp_ratio=2 + epochs=14 (val=56.44) BEATS mlp_ratio=3 + epochs=14 (val=57.35)** — narrower model wins with extended training. mlp_ratio=2 is the new default.
+
+### PR #3972 — CLOSED: asinh output transform, scale=2.0/3.0 (edward)
+- Hypothesis: Apply asinh(y_norm / scale) to target before loss; inverse at decode time
+- Result: clear regression on all arms vs SwiGLU+mlp_ratio=3 baseline. Asinh warping distorts the surface-p gradient signal more than it helps suppress outlier variance.
+- **Decision: CLOSED** — dead end for this stack.
+
+### PR #3974 — CLOSED: Re-based curriculum learning (nezuko)
+- Hypothesis: Gate training samples by log_Re distance; progressively include OOD Re samples
+- Result: borderline vs stale baseline (val≈56.46, test≈48.51). Closed after askeladd/alphonse merges made it stale.
+- **Note:** curriculum val was close to askeladd's val=56.44 but baseline had shifted twice. Curriculum + epochs=14 remains a viable follow-up for round-8.
+- **Decision: CLOSED** — stale baseline.
+
+### PR #3979 — CLOSED: SwiGLU + n_hidden=176 (frieren)
+- Hypothesis: Retest n_hidden=176 on mlp_ratio=3 base (was only tried pre-SwiGLU)
+- Result: regression on mlp_ratio=3 base. Also stale once mlp_ratio=2 became baseline.
+- **Decision: CLOSED** — dead end; n_hidden=160 confirmed as width sweet spot.
+
+### PR #4000 — CLOSED: attn_dropout=0.2 + epochs=14 (fern)
+- Hypothesis: Extended training might allow regularization headroom to materialize
+- W&B run: `8g6jsr4w`
+- val_avg/mae_surf_p: **57.0202** vs #3969 baseline 56.4402 → +1.02% REGRESS
+- test_avg/mae_surf_p: **50.1445** vs #3969 baseline 48.8947 → +2.56% REGRESS
+- **Decision: CLOSED** — attn_dropout=0.1/0.2 exhausted on both epochs=12 (#3912) and epochs=14. Closing direction.
+
+### PR #4001 — CLOSED: slice_num=32 (tanjiro)
+- Hypothesis: Fewer physics-slice tokens = more compressed/efficient attention aggregation
+- W&B run: `ypae36fj`
+- val_avg/mae_surf_p: **61.3187** vs #3969 baseline 56.4402 → +8.6% REGRESS
+- test_avg/mae_surf_p: **52.7983** vs #3969 baseline 48.8947 → +8.0% REGRESS
+- All 4 test splits regress. slice_num=32 is too few tokens for the 4-split geometry variety.
+- **Decision: CLOSED** — slice_num direction fully exhausted: 32 regresses, 64 is optimal, 96/128 also failed pre-SwiGLU.
+
+### PR #3981 — AWAITING REBASE: bf16 mixed-precision + extended epochs (thorfinn)
+- Hypothesis: bf16 autocast gives 1.47× throughput speedup, enabling more epochs in same wall clock
+- W&B runs: Arm 1 `54i8pmmg` (ep12 fp32 parity check), Arm 2 `b9h4bvnm` (ep18 bf16, cut at ep16)
+- Arm 1 (ep12+bf16): val=61.34 / test=52.31 — parity with baseline ep12; 1.47× speedup confirmed; 41.9 GB peak VRAM
+- Arm 2 (ep18+bf16, cut at ep16): val=**53.8221** / test=**47.2742**
+  - vs #3969 baseline (val=56.44, test=48.89): −4.64% val / −3.31% test
+  - Per-split test: single_in_dist=54.72, geom_camber_rc=59.71, geom_camber_cruise=29.13, re_rand=45.53
+  - ALL four test splits improve. geom_camber_cruise: 32.02→29.13 (−9.0%)!
+- Student correctly did NOT override SENPAI_TIMEOUT_MINUTES=30. Run was cut at ep16/18 by the timeout.
+- Val curve still descending at ep16 — more epochs (20+) under a longer budget would go further.
+- **Decision: SENT BACK FOR REBASE** — merge conflict with advisor branch; result is a major win pending rebase.
+
+### Round-7 Launch (2026-05-16 16:00 UTC)
+All 6 idle students assigned. Round-7 focuses on improving OOD generalization and probing architectural/loss dimensions not yet tested on the mlp_ratio=2+epochs=14 base.
+
+| PR | Student | Hypothesis | Key CLI |
+|---|---|---|---|
+| #4034 | alphonse | n_layers=6 depth scaling | `--n_layers 6 --epochs 14` |
+| #4036 | askeladd | Camber flip aug (z-flip + AoA negate) | `--camber_flip_aug --epochs 14` |
+| #4039 | edward | Multi-scale Fourier PE (num_freq=8, wide range) | `--num_freq 8 --epochs 14` |
+| #4040 | fern | DropPath stochastic depth (0.1, 0.15) | `--drop_path_rate 0.1 --epochs 14` |
+| #4042 | frieren | Curvature-weighted surface loss (DSDF-norm proxy) | `--use_curvature_weight --epochs 14` |
+| #4043 | nezuko | AdamW weight_decay sweep + eta_min floor | `--weight_decay 1e-3 --epochs 14` |
+| #4047 | tanjiro | Extended training probe (epochs=16/18 fp32) | `--epochs 16 / --epochs 18` |

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 ~16:00 UTC
+- **Last updated:** 2026-05-16 ~16:45 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -84,8 +84,9 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 | **#3974** | nezuko | Curriculum learning | CLOSED — stale (baseline 2 gens old) | — |
 | **#3979** | frieren | SwiGLU + n_hidden=176 (mlp_ratio=3 base) | CLOSED — stale (mlp_ratio=2 now baseline) | — |
 | **#4000** | fern | attn_dropout=0.2 + epochs=14 | CLOSED ~16:00 — val=57.02 (+1.02% regress vs #3969); test=50.14 (+2.56% regress); attn_dropout exhausted on this stack | — |
-| **#4001** | tanjiro | slice_num=32 on SwiGLU+mlp_ratio=3 | WIP | awaiting |
-| **#3981** | thorfinn | bf16 mixed-precision + extended epochs | WIP | awaiting |
+| **#4001** | tanjiro | slice_num=32 on SwiGLU+mlp_ratio=3 | CLOSED ~16:30 — val=61.32 (+8.6% regress); all 4 splits regress; slice direction exhausted | — |
+| **#3981** | thorfinn | bf16 mixed-precision (ep16 best) | WIP — REBASE needed; result val=53.82/test=47.27 is major win; sent back 16:40 | 53.8221 ⚠️ |
+| **#4047** | tanjiro | **Round-7:** Extended training probe (epochs=16/18 fp32) | WIP — assigned ~16:40 | awaiting |
 | **#4034** | alphonse | **Round-7:** n_layers=6 depth scaling | WIP — assigned ~16:00 | awaiting |
 | **#4036** | askeladd | **Round-7:** Camber flip augmentation (z-flip + AoA negate) | WIP — assigned ~16:00 | awaiting |
 | **#4039** | edward | **Round-7:** Multi-scale Fourier PE (num_freq=8, freq-range sweep) | WIP — assigned ~16:00 | awaiting |
