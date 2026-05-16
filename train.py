@@ -283,6 +283,12 @@ class Transolver(nn.Module):
         # Gates init at 0 so the injection starts as a no-op and recovers baseline.
         self.geom_gates = nn.Parameter(torch.zeros(n_layers))
 
+        # H41: domain-type indicator embedding
+        # 0 = single-foil (dims 18-23 all zero), 1 = tandem-foil (any non-zero)
+        self.domain_embed = nn.Embedding(2, n_hidden)
+        # Initialize at zero so the embedding is initially a no-op (recovers baseline)
+        nn.init.zeros_(self.domain_embed.weight)
+
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -301,6 +307,13 @@ class Transolver(nn.Module):
         pos_rff = self.rff(pos)
         x_rff = torch.cat([pos_rff, rest], dim=-1)
         fx = self.preprocess(x_rff) + self.placeholder[None, None, :]
+        # H41: add domain-type bias.
+        # is_tandem must be computed from RAW (pre-normalization) x because
+        # after normalization the single-foil "zero" maps to a non-zero
+        # constant per dim. Caller passes data["is_tandem"] (long, shape [B]).
+        is_tandem = data["is_tandem"]
+        domain_bias = self.domain_embed(is_tandem).unsqueeze(1)  # [B, 1, n_hidden]
+        fx = fx + domain_bias
         geom_ctx = x[:, 0, self.geom_ctx_start:self.geom_ctx_start + self.geom_ctx_dim]
         g = self.geom_proj(geom_ctx).unsqueeze(1)
         for i, block in enumerate(self.blocks):
@@ -342,7 +355,10 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            # H41: discriminate single vs tandem from RAW x (pre-normalization),
+            # since normalized "zero" maps to a non-zero constant per dim.
+            is_tandem = (x[:, 0, 18:24].abs() > 1e-6).any(dim=-1).long()
+            pred = model({"x": x_norm, "is_tandem": is_tandem})["preds"]
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -530,6 +546,7 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+print(f"Domain-type embedding: 2-class is_tandem indicator (zero-init, residual on preprocess output)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 if cfg.use_onecycle:
@@ -599,10 +616,25 @@ for epoch in range(MAX_EPOCHS):
             geom0 = geom[:, 0:1, :]
             diff = ((geom - geom0).abs() * mask.unsqueeze(-1).float()).max().item()
             assert diff < 1e-5, f"global features (dims 13-23) not per-sample constant (max diff {diff})"
+            # H41: verify is_tandem discriminator
+            tandem_dims = x[:, 0, 18:24]  # [B, 6] — gap, stagger, foil2_naca params
+            is_tandem_per_dim = (tandem_dims.abs() > 1e-6).any(dim=-1).long()  # [B]
+            is_tandem_dim22 = (x[:, 0, 22].abs() > 1e-6).long()  # [B]
+            n_single = (is_tandem_per_dim == 0).sum().item()
+            n_tandem = (is_tandem_per_dim == 1).sum().item()
+            print(f"Batch sample types: single={n_single}, tandem={n_tandem}")
+            print(f"Discriminator agreement (any-of-18:24 vs dim22): "
+                  f"{(is_tandem_per_dim == is_tandem_dim22).float().mean().item():.3f}")
+            print(f"x[0, 0, 18:24]: {tandem_dims[0].tolist()}")
+            if x.shape[0] > 1:
+                print(f"x[1, 0, 18:24]: {tandem_dims[1].tolist()}")
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        # H41: discriminate single vs tandem from RAW x (pre-normalization),
+        # since normalized "zero" maps to a non-zero constant per dim.
+        is_tandem = (x[:, 0, 18:24].abs() > 1e-6).any(dim=-1).long()
+        pred = model({"x": x_norm, "is_tandem": is_tandem})["preds"]
 
         # H11: signed-log1p target transform applied on the loss side only.
         # pred stays in linear (normalized) space for the metric/eval path;
@@ -678,6 +710,11 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    # H41: track domain embedding norm growth — confirms the model uses it
+    with torch.no_grad():
+        emb_norm = model.domain_embed.weight.norm(dim=-1)  # [2]
+        domain_emb_single = emb_norm[0].item()
+        domain_emb_tandem = emb_norm[1].item()
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -689,12 +726,15 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
+        "domain_embed/norm_single": domain_emb_single,
+        "domain_embed/norm_tandem": domain_emb_tandem,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
+    print(f"  domain_embed norms: single={domain_emb_single:.4f} tandem={domain_emb_tandem:.4f}")
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
