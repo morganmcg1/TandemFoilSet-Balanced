@@ -467,6 +467,7 @@ class Config:
     num_freq: int = 4  # Fourier positional-encoding frequencies (Tancik 2020); 4 won vs 8
     coord_noise_std: float = 0.01  # Gaussian noise std on normalized (x,z) coords during training
     mlp_ratio: int = 2  # FFN expansion ratio; SwiGLU inner = round_to_mult(hidden*mlp_ratio*2/3, 8)
+    n_layers: int = 5  # number of TransolverBlocks
 
 
 cfg = sp.parse(Config)
@@ -501,7 +502,7 @@ model_config = dict(
     fun_dim=ENCODED_X_DIM - 2,  # so fun_dim + space_dim == ENCODED_X_DIM
     out_dim=3,
     n_hidden=160,
-    n_layers=5,
+    n_layers=cfg.n_layers,
     n_head=4,
     slice_num=64,
     mlp_ratio=cfg.mlp_ratio,
