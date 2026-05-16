@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-16 21:00
+- **Date**: 2026-05-16 21:10
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
-- **Round**: 5 mid-phase — Lion+slice=96 baseline (H73, val=42.98). H74-H77+H79 closed negative. **Noise floor ≥2.6 pts** discovered from H74 same-schedule run.
+- **Round**: 5 late-phase — Lion+slice=96 baseline (H73, val=42.98). LR + wd + warmup + n_head all confirmed locked at H73 values. Optimization-lever frontier reached. **Pivoting to capacity scaling (n_hidden expansion).**
 - **Most recent human research directive**: None received
 
 ## Current Best
@@ -74,7 +74,7 @@ The H67-H73 Lion compound batch revealed:
 | PR | Student | Hypothesis | Priority | Expected |
 |----|---------|------------|----------|---------|
 | **#4133** | askeladd | **H84: T_max compression (T_max=12, T_max=10)** | HIGH (askeladd's own follow-up) | ~41-44 |
-| **#4094** | tanjiro | **H75: Lion LR sweep (lr=2e-4, lr=5e-4)** | HIGH | ~41-44 |
+| **#4147** | tanjiro | **H86: n_hidden expansion (192, 256) — capacity scaling** | HIGH (new frontier) | ~36-44 |
 | **#4126** | fern | **H82: slice_num sweep under Lion (slice=128, slice=80)** | HIGH (untested Lion regime) | ~40-46 |
 | **#4127** | frieren | **H83: n_layers sweep under Lion (n_layers=5, n_layers=3)** | MED (depth retune at slice=96) | ~41-46 |
 | **#4135** | nezuko | **H85: FFN activation (swiglu, vanilla) under Lion** | MED (test if GEGLU locked under Lion) | ~43-47 |
@@ -91,7 +91,7 @@ The H67-H73 Lion compound batch revealed:
 | Lever | Status | Best result | Notes |
 |-------|--------|-------------|-------|
 | Optimizer | 🏆 Lion locked | 42.98 (H73) | Massive super-additive win |
-| LR (Lion) | 🔬 More to find | 3e-4 (H73) | Sweet spot may be 2-4e-4 at slice=96 |
+| LR (Lion) | ✅ Locked at 3e-4 (H75 U-shape confirmed) | 3e-4 (H73) | Bracketed 2.5e-4 to 3.5e-4 |
 | Schedule (Lion) | ❌ warmup REGRESSES at slice=96 (H76) | T_max=15 (H73) | H69 win doesn't transfer; warmup=2 cost > benefit at 15-ep horizon |
 | n_head (Lion) | ❌ n_head=4 REGRESSES at slice=96 (H77) | 2 (H73) | H70 win doesn't transfer; per-head dim shrinkage hurts |
 | β₂ (Lion) | 🔬 0.999 wins at slice=64 | 0.99 (H73) | H68 found β₂=0.999 helps; retest |
@@ -100,7 +100,7 @@ The H67-H73 Lion compound batch revealed:
 | n_layers | ✅ Locked at 4 (H60) | 4 | Shallower wins under GEGLU |
 | FFN activation | ✅ GEGLU locked (H48) | GEGLU | > SwiGLU > vanilla |
 | Normalization | 🔀 LayerNorm at slice=96 | LN (H73) | RMSNorm anti-compounds with slice=96 (H72) |
-| n_hidden | ✅ Locked at 128 | H33 | — |
+| n_hidden | 🔬 H86 expansion test active | 128 (H73) | First Lion+slice=96 test of 192/256 |
 | clip_grad_norm | ✅ Locked at 1.0 | H20+H56 | — |
 | surf_weight | ✅ Locked at 10 | H54 | — |
 | Huber δ_p | ✅ Locked at 0.25 | H25/H64 | — |

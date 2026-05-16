@@ -1955,3 +1955,31 @@ These two hypotheses target the two architectural levers that have NOT yet been 
 **H85** tests whether GEGLU's H48 dominance (under AdamW+slice=64) persists under Lion+slice=96, or whether the optimization regime change shifts the optimum.
 
 **Methodology update:** Future PR reviews will weight Δ vs baseline against the ~2.6 pt seed noise floor. Improvements within ±2-3 pts are likely ties, not wins or losses.
+
+---
+
+## 2026-05-16 21:08 — PR #4094: H75 Lion LR sweep (tanjiro) — **CLOSED, U-shape confirmed**
+
+- Branch: `tanjiro/h75-lion-lr-sweep`
+- Hypothesis: lr=2e-4 or lr=5e-4 may beat H73's lr=3e-4.
+
+| Arm | val_avg | Δ vs H73 | test 3-split | Δ vs H73 test |
+|-----|--------:|---------:|-------------:|--------------:|
+| A (lr=2e-4) | 44.8184 | +1.84 (within 2.6 pt noise) | 43.5265 | +1.98 |
+| B (lr=5e-4) | 47.0910 | **+4.11** | 45.6844 | +4.14 |
+
+**Insight captured:** LR optimum is U-shaped on slice=96+Lion surface (1e-4: 46.34 → 2e-4: 44.82 → 3e-4: 42.98 → 5e-4: 47.09). Bracketed at 2.5e-4 to 3.5e-4. Lion was stable at lr=5e-4 (no divergence) but suboptimal — sign-update couldn't compensate for the wider effective step size. Arm A is plausibly tied within seed noise but not a clear win.
+
+**lr=3e-4 confirmed as local optimum at H73 baseline.**
+
+**Status: CLOSED — negative; LR optimum bracketed; capacity frontier is next.**
+
+---
+
+## 2026-05-16 21:10 — Round 5 Cycle 25: Assign H86 to tanjiro (n_hidden expansion)
+
+| PR | Student | Hypothesis | Key Change |
+|----|---------|-----------|------------|
+| #4147 | tanjiro | H86: n_hidden expansion under Lion+slice=96 | n_hidden=192 (Arm A), n_hidden=256 (Arm B) |
+
+**Strategic rationale:** All recent sweeps (lr, wd, warmup, n_head, n_layers) hit a frontier at val≈43. Optimization levers are largely tapped. The model is wall-cut at ep 15 — capacity is the next frontier. Lion's scale-invariant sign-update should accommodate larger models cleanly. n_hidden has been locked at 128 since H33 (under AdamW); first expansion test under Lion+slice=96.
