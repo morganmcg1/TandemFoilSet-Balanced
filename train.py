@@ -445,7 +445,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     loss_fn: str = "charbonnier"   # "mse" or "charbonnier"
     charbonnier_eps: float = 1e-3  # ε for Charbonnier sqrt(r² + ε²)
-    grad_clip_max_norm: float = 0.0  # 0.0 = no clipping, >0 = clip global L2 norm
+    grad_clip_max_norm: float = 0.5  # 0.0 = no clipping, >0 = clip global L2 norm
     pos_enc_mode: str = "raw"        # "raw" | "fourier_basic" | "fourier_rich"
     pos_enc_num_freqs: int = 8        # frequency bands when mode != raw
 
