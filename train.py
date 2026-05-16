@@ -345,6 +345,8 @@ def write_experiment_summary(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "pressure_weight": cfg.pressure_weight,
+        "surf_ux_weight": cfg.surf_ux_weight,
+        "surf_uy_weight": cfg.surf_uy_weight,
         "epochs_configured": cfg.epochs,
     }
 
@@ -454,6 +456,8 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 30.0
     pressure_weight: float = 1.0
+    surf_ux_weight: float = 1.0
+    surf_uy_weight: float = 1.0
     epochs: int = 80
     cosine_t_max_epochs: int = 80  # default unchanged from current behavior
     ema_decay: float = 0.999
@@ -569,7 +573,9 @@ for epoch in range(MAX_EPOCHS):
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            # Per-channel surface weights (pressure_weight already baked into sq_err channel 2).
+            surf_chan_w = sq_err.new_tensor([cfg.surf_ux_weight, cfg.surf_uy_weight, 1.0]).view(1, 1, 3)
+            surf_loss = (sq_err * surf_chan_w * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
