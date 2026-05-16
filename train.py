@@ -464,6 +464,7 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     use_onecycle: bool = False  # OneCycleLR (Smith&Topin) instead of CosineAnnealingLR
     onecycle_pct_start: float = 0.3  # fraction of training for rising LR phase
+    grad_clip: float = 0.0  # global L2 grad-norm clip max value (0 = no clipping)
 
 
 cfg = sp.parse(Config)
@@ -558,6 +559,11 @@ else:
     onecycle_mode = False
     print("Scheduler: CosineAnnealingLR(T_max=15)")
 
+print(
+    f"Gradient clipping max_norm: "
+    f"{cfg.grad_clip if cfg.grad_clip > 0 else 'disabled'}"
+)
+
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
 model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{experiment_stamp}"
@@ -587,6 +593,9 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    grad_norm_sum_t = torch.zeros((), device=device)
+    grad_norm_max_t = torch.zeros((), device=device)
+    grad_clip_fires_t = torch.zeros((), device=device)
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -640,6 +649,15 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        if cfg.grad_clip > 0:
+            pre_clip_norm_t = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), max_norm=cfg.grad_clip
+            )
+            grad_norm_sum_t = grad_norm_sum_t + pre_clip_norm_t
+            grad_norm_max_t = torch.maximum(grad_norm_max_t, pre_clip_norm_t)
+            grad_clip_fires_t = grad_clip_fires_t + (
+                pre_clip_norm_t > cfg.grad_clip
+            ).to(grad_clip_fires_t.dtype)
         optimizer.step()
         if onecycle_mode:
             scheduler.step()
@@ -678,6 +696,14 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    if cfg.grad_clip > 0:
+        grad_norm_mean = (grad_norm_sum_t / max(n_batches, 1)).item()
+        grad_norm_max = grad_norm_max_t.item()
+        grad_clip_fire_frac = (grad_clip_fires_t / max(n_batches, 1)).item()
+    else:
+        grad_norm_mean = 0.0
+        grad_norm_max = 0.0
+        grad_clip_fire_frac = 0.0
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -686,14 +712,22 @@ for epoch in range(MAX_EPOCHS):
         "lr": epoch_lr,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/grad_norm_mean": grad_norm_mean,
+        "train/grad_norm_max": grad_norm_max,
+        "train/grad_clip_fire_frac": grad_clip_fire_frac,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
     })
+    clip_summary = (
+        f"  grad_norm[mean={grad_norm_mean:.4f} max={grad_norm_max:.4f} "
+        f"fire={grad_clip_fire_frac:.2%}]"
+        if cfg.grad_clip > 0 else ""
+    )
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p={avg_surf_p:.4f}{tag}{clip_summary}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
