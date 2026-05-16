@@ -489,6 +489,39 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 
+class Lion(torch.optim.Optimizer):
+    """Lion optimizer (Chen et al. 2023, arXiv 2302.06675).
+
+    Sign-based update with decoupled weight decay; tracks one momentum buffer
+    (no second moment), so ~half the memory of AdamW. Paper recipe is 3-10×
+    smaller lr and 3-10× larger weight_decay vs AdamW.
+    """
+
+    def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None if closure is None else closure()
+        for group in self.param_groups:
+            lr = group["lr"]
+            beta1, beta2 = group["betas"]
+            wd = group["weight_decay"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                state = self.state[p]
+                if len(state) == 0:
+                    state["exp_avg"] = torch.zeros_like(p)
+                m = state["exp_avg"]
+                p.mul_(1 - lr * wd)
+                update = m.mul(beta1).add(p.grad, alpha=1 - beta1).sign_()
+                p.add_(update, alpha=-lr)
+                m.mul_(beta2).add_(p.grad, alpha=1 - beta2)
+        return loss
+
+
 @dataclass
 class Config:
     lr: float = 5e-4
@@ -507,6 +540,9 @@ class Config:
     loss_type: str = "mse"   # "mse" or "smooth_l1"
     loss_beta: float = 0.1   # SmoothL1 beta (normalized-space)
     cosine_t_max: int | None = None  # Cosine T_max in epochs; defaults to MAX_EPOCHS
+    optimizer_name: str = "adamw"  # "adamw" or "lion"
+    lion_beta1: float = 0.9
+    lion_beta2: float = 0.99
 
 
 def _residual_err(pred, target, loss_type, beta):
@@ -569,7 +605,16 @@ if cfg.n_fourier > 0:
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+if cfg.optimizer_name == "lion":
+    optimizer = Lion(model.parameters(), lr=cfg.lr,
+                     betas=(cfg.lion_beta1, cfg.lion_beta2),
+                     weight_decay=cfg.weight_decay)
+    print(f"Optimizer: Lion(lr={cfg.lr}, betas=({cfg.lion_beta1}, {cfg.lion_beta2}), wd={cfg.weight_decay})")
+elif cfg.optimizer_name == "adamw":
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    print(f"Optimizer: AdamW(lr={cfg.lr}, wd={cfg.weight_decay})")
+else:
+    raise ValueError(f"Unknown optimizer_name: {cfg.optimizer_name!r}")
 cosine_t_max = cfg.cosine_t_max if cfg.cosine_t_max is not None else MAX_EPOCHS
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cosine_t_max)
 print(f"Scheduler: CosineAnnealingLR(T_max={cosine_t_max})  [epochs cap = {MAX_EPOCHS}]")
