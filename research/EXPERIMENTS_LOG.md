@@ -1,5 +1,49 @@
 # SENPAI Research Results
 
+## 2026-05-16 14:05 — PR #3933: H: ReGLU activation (close GLU ablation family) ✗ CLOSED (val=67.92 +1.6σ; dead-gate pathology confirmed; GLU family DEFINITIVELY closed)
+
+- Branch: `willowpai2i48h1-edward/reglu_glu_ablation`
+- Student: willowpai2i48h1-edward
+
+### Results (W&B `wo264bx6`, seed=0, h=128/T_max=15/bf16 + ReLU gate)
+
+| Metric | SwiGLU #3680 | ReGLU (this) | Δ |
+|--------|:------------:|:------------:|:---:|
+| **val_avg/mae_surf_p** | **65.44** | **67.92** | **+2.48** |
+| **test_avg/mae_surf_p** | **62.04** | **63.29** | **+1.25** |
+
+### MAJOR finding: dead-gate pathology compounds with depth
+
+Edward's dead-gate diagnostic (fraction of fc_gate pre-activations ≤ 0 per layer):
+
+| Epoch | overall | layer 0 | layer 1 | layer 2 | layer 3 | layer 4 |
+|-------|--------:|--------:|--------:|--------:|--------:|--------:|
+| 5 | **0.64** | 0.51 | 0.59 | 0.66 | 0.71 | 0.73 |
+| 15 | **0.67** | 0.55 | 0.61 | 0.69 | 0.74 | 0.75 |
+
+**Monotone deepening + INCREASING over training.** ReLU's hard zero creates a non-recoverable dead region in the gate that compounds across the 5-layer stack. The network *increases* gate sparsity rather than rescuing dead units — confirming ReLU is the problem, not the gating mechanism.
+
+### Final GLU family characterization
+
+| Variant | Gate act | μ̂ val | σ̂ val | Mechanism |
+|---------|----------|------:|------:|-----------|
+| GELU baseline | — (no gate) | 90.77 | 1.54 | reference floor |
+| **ReGLU (#3933)** | ReLU | 67.92 | — | gating works, dead-gate pathology |
+| Bilinear (#3855) | identity | 66.88 | — | gating works, no magnitude modulation |
+| SwiGLU (#3765) | SiLU | 66.48 | 0.90 | smooth nonzero-at-zero gate |
+| GeGLU (#3904) | GELU | 65.99 | 0.54 | smooth nonzero-at-zero gate (most reliable) |
+
+**Mechanistic story (now closed):**
+1. **Gating provides ~94%** of GLU gain over GELU MLPs (Bilinear ablation, #3855).
+2. **Smoothness of gate activation provides ~6%**, ALL in the difference between hard-zero (ReGLU) and smooth-nonzero-at-zero (SwiGLU/GeGLU/Bilinear).
+3. **Choice of smooth activation (SiLU/GELU/identity)** is sub-σ noise (#3904 + #3855).
+
+### Decision
+
+GLU activation-choice question is **definitively closed**. Reassigned edward to **slice_num=128 on SwiGLU h=128** (PR #3998) — fresh attention-granularity axis, untested on the gated-FFN regime. slice_num=64 was inherited from h=192/GELU era and has never been scanned on SwiGLU h=128.
+
+---
+
 ## 2026-05-16 14:00 — PR #3886: H: DropPath (Stochastic Depth) p=0.1 on SwiGLU ✗ CLOSED (2-seed μ̂=73.63; +8.19 regression; closes activation-noise regularisation family)
 
 - Branch: `willowpai2i48h1-alphonse/droppath_01_swiglu`
