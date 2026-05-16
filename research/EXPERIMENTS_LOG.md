@@ -1,5 +1,91 @@
 # SENPAI Research Results
 
+## 2026-05-16 20:10 — PR #3995: H: Triple-stack (T_max=17 + β2=0.95 + GeGLU) ← MERGED (NEW PROGRAMME BEST)
+
+- Branch: `willowpai2i48h1-fern/adamw_beta2_095_swiglu`
+- Student: willowpai2i48h1-fern
+- W&B run: `insf46p8` (canonical run from first training cycle)
+
+### Results
+
+| Metric | This PR | Old baseline (PR #3994) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **60.4338** | 62.1023 | **−1.67** |
+| test_avg/mae_surf_p | **57.4381** | 59.5529 | **−2.13** |
+| val_single_in_dist | 69.659 | 71.858 | −2.20 |
+| val_geom_camber_rc | 72.671 | 74.828 | −2.16 |
+| val_geom_camber_cruise | 41.722 | 42.674 | −0.95 |
+| val_re_rand | 57.683 | 59.049 | −1.37 |
+
+### Analysis
+
+The triple-stack (T_max=17 + β2=0.95 + GeGLU) delivered the largest single-PR win of the round: −1.67 val / −2.13 test. Three orthogonal improvements stacked cleanly.
+
+**Decomposition (from ablation PR #4032 askeladd):**
+- T_max=17 alone: val=62.10 (merged PR #3994) — confirmed
+- T_max=17 + GeGLU alone (PR #4032, default β2=0.9): val=62.47 — only −0.59 from the SwiGLU μ̂
+- T_max=17 + GeGLU + β2=0.95 (this PR): val=60.43 — **−2.04 additional** from β2=0.95
+
+**Key finding:** Most of the triple-stack gain comes from β2=0.95, not from the activation swap. β2=0.95 enables tighter late-training convergence near the basin (slower squared-gradient EMA reduces variance, more stable per-step updates). GeGLU alone is near-marginal (+0.59). Together they synergise (sum > parts).
+
+---
+
+## 2026-05-16 20:05 — PR #3644: H: SWA over tail on SwiGLU (T_cosine=10 + 8-ep tail + SWA) ← CLOSED (regression, SWA mechanism validated)
+
+- Branch: `willowpai2i48h1-nezuko/cosine10_constant_tail_swa`
+- Student: willowpai2i48h1-nezuko
+- W&B run: `a5xejlbq` (SwiGLU-regime canonical result)
+
+### Results
+
+| Arm | val_avg | test_avg |
+|---|---|---|
+| pre_swa (T_cosine=10 endpoint) | 78.55 | — |
+| tail_best (epoch 16, best of constant-tail) | 74.35 | 72.81 |
+| **swa_tail** (7-snapshot SWA average) | **70.83** | **66.06** |
+| Baseline (PR #3994) | 62.10 | 59.55 |
+
+### Analysis
+
+**SWA mechanism confirmed real and large** (−3.52 val ~2σ, −6.76 test ~3.8σ vs tail_best). SWA wins on all 4 test splits; biggest gains on test_geom_cruise (−8.77) and test_re_rand (−7.59). Test gains > val gains → SWA preferentially fixes OOD generalization.
+
+**Why didn't it beat baseline:** T_cosine=10 yanked LR to 1e-4 (25× late-cosine LR) before model reached basin floor (pre_swa val=78.55, ~13pt above baseline). SWA averaged pre-basin weights — SWA-as-averaging-within-basin is what we need.
+
+**Follow-up (#4089):** Nezuko reassigned to SWA over final 4 cosine epochs of T_max=17 (no constant-LR kick-out). Running now.
+
+---
+
+## 2026-05-16 20:05 — PR #4028: H: T_max=17 SwiGLU seed=1 ← CLOSED (null, 3-seed canonical complete)
+
+- W&B run: `19zucl1x` | val=63.9575, test=60.9191
+
+## 2026-05-16 20:05 — PR #4032: H: T_max=17 + GeGLU (default β2) ← CLOSED (null + key ablation)
+
+- W&B run: `f8u4og6i` | val=62.4709, test=59.3796
+- **Key finding:** GeGLU alone gives only −0.59 improvement over SwiGLU T_max=17. β2=0.95 is the critical lever.
+
+## 2026-05-16 20:05 — PR #4050: H: T_max=17 SwiGLU seed=2 ← CLOSED (null, 3-seed canonical complete)
+
+- W&B run: `vh1fdm6u` | val=63.1155, test=60.0203
+- **T_max=17 SwiGLU 3-seed canonical:** seed=0 62.10, seed=1 63.96, seed=2 63.12 → μ̂=63.06 ± 0.93
+
+## 2026-05-16 20:05 — PR #3999: H: Gradient clipping clip_norm=1.0 ← CLOSED (regression)
+
+- W&B run: `dyx8lh1s` | val=65.7803, test=61.4631
+- Clipping at norm=1.0 is too aggressive; β2=0.95 is the superior method for gradient stabilization at this scale.
+
+## 2026-05-16 20:05 — PR #3998: H: slice_num=128 (2× attention) ← CLOSED (big regression)
+
+- W&B run: `tklk2d2f` | val=73.0191, test=69.9375
+- Doubling slice_num hurts significantly; slice_num=64 is optimal for h=128/5L.
+
+## 2026-05-16 20:05 — PR #3973: H: RMSNorm replacement of LayerNorm ← CLOSED (regression)
+
+- W&B run: `ve2ng8ha` | val=67.2827, test=61.8529
+- LayerNorm remains the canonical choice — mean-centering preserves physical signal (pressure offset, velocity bias between geometry classes).
+
+---
+
 ## 2026-05-16 16:45 — PR #3996: H: AdamW weight_decay 1e-4 → 1e-2 on SwiGLU h=128 ← CLOSED (null)
 
 - Branch: `willowpai2i48h1-alphonse/wd_1e2_swiglu`
