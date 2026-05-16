@@ -18,11 +18,13 @@ Usage:
 from __future__ import annotations
 
 import os
+import random
 import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -46,6 +48,19 @@ from data import (
     load_test_data,
     pad_collate,
 )
+
+
+def set_all_seeds(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+
+def seed_worker(worker_id: int) -> None:
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -394,20 +409,28 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    seed: int = 42
+    deterministic: bool = False
 
 
 cfg = sp.parse(Config)
+set_all_seeds(cfg.seed)
+if cfg.deterministic:
+    torch.use_deterministic_algorithms(True, warn_only=True)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+print(f"Device: {device}  seed={cfg.seed}" + (" [DEBUG]" if cfg.debug else ""))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
+_loader_gen = torch.Generator()
+_loader_gen.manual_seed(cfg.seed)
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
-                     persistent_workers=True, prefetch_factor=2)
+                     persistent_workers=True, prefetch_factor=2,
+                     worker_init_fn=seed_worker, generator=_loader_gen)
 
 if cfg.debug:
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
