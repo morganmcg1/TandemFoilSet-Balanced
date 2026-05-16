@@ -2,6 +2,33 @@
 
 Per-PR results log. Earliest at the bottom; latest at the top.
 
+## 2026-05-16 09:40 — PR #3852: H40 SWA tail-averaging K={3,5} (edward) — **assigned**
+
+- Branch: `charliepai2i24h4-edward/swa-tail-averaging`
+- Hypothesis: After completing standard 15-epoch training, average the model state dicts from the last K epochs to create a pseudo-ensemble. Different from EMA (H8v3 failed — β=0.999 never catches up to converged region under truncated OneCycleLR): SWA explicitly averages the final converged tail, not a running estimate. Addresses schedule-truncation variance without losing gradient steps. Izmailov et al. 2018 (UAI). K sweep {3, 5}. Predicted -0.5% to -3%.
+
+## 2026-05-16 09:40 — PR #3850: H39 BF16 mixed precision AMP (askeladd) — **assigned**
+
+- Branch: `charliepai2i24h4-askeladd/amp-bf16-mixed-precision`
+- Hypothesis: BF16 autocast (torch.amp) on forward+loss reduces matmul time by ~30-40%, unlocking 18+ realized epochs in the 30-min budget vs current ~12-13 epochs. Direct attack on the schedule-truncation structural bottleneck that closed H37, H25, H31, H27. BF16 (not FP16) avoids gradient scaler complexity, same dynamic range as FP32. Kalamkar et al. 2019; Wortsman et al. 2023. Predicted -2% to -6%.
+
+## 2026-05-16 09:35 — PR #3792: H37 OneCycleLR epochs=12 schedule-fit (edward) — **CLOSED**
+
+- Branch: `charliepai2i24h4-edward/onecycle-epochs12`
+- Result: val_avg=77.30 vs baseline 67.64 → **+14.3% regression**. test_avg=68.81 (+10.8%). Per-split: val_single +24.3%, val_rc +3.5%, val_cruise +21.5%, val_re +10.5%. best_epoch=11 (last epoch, still descending at -4.2 val units/epoch). end_LR=1.72e-5 (91.6% of schedule completed). Per-epoch time: 166s (vs advisor's 130s estimate, +27% node variance). Realized epochs: 10.8 (not 12 as planned).
+- Key insight: Compressing epochs to 12 reduced gradient steps by ~20%; this dominated the schedule-completion benefit. Per-epoch wall-time drifted +27% from different GPU node SKU, so schedule was STILL truncated (at epoch 10.8 vs planned 12). Schedule truncation cannot be fixed by epoch-count alone under variable wall-time — need step-count targets or schedule rearrangement.
+- Student analysis sharp: correct mechanism, wrong knob. The H33 pct_start direction (rearrange within realized budget without losing steps) is the right path.
+- **Closed**: structural negative. Filed insight: per-epoch wall-time variance from GPU node SKU is a confound for schedule-fitting hypotheses.
+
+## 2026-05-16 09:35 — PR #3686: H31 SAM ρ=0.05 OneCycleLR (askeladd) — **CLOSED**
+
+- Branch: `charliepai2i24h4-askeladd/sam-optimizer`
+- Result: Run 1 (epochs=15) killed at ep 2 (80 min budget). Run 2 (contingency, epochs=10) truncated at ep 6 with val_avg=124.68. Run 3 (contingency, epochs=5) completed val_avg=131.58, test_avg=120.50. All arms 84-95% worse than baseline.
+- SAM per-step time: 5.3 min/epoch (2.1× baseline, ~5.3 min/ep). With 30-min cap: only 5-6 SAM epochs fit. OneCycleLR schedules designed for 5-10 epochs cannot deliver the fine-tune tail that makes OneCycleLR's gain.
+- No SAM-specific instabilities (loss monotone, no NaN, scheduler sync correctly handled by student). Negative result reflects compute-budget collision, NOT a SAM property failure.
+- Student diagnostic excellent — correctly identified structural constraint, ran three contingency arms to confirm.
+- **Closed**: SAM non-viable under current 30-min cap. AMP (H39) assigned as next step to unlock longer effective training.
+
 ## 2026-05-16 09:00 — PR #3824: H38 input Gaussian noise injection sweep {0.01,0.03,0.10} (fern) — **assigned**
 
 - Branch: `charliepai2i24h4-fern/input-noise`
