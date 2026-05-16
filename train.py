@@ -403,6 +403,7 @@ class Config:
     cond_dim: int = 11         # FiLM conditioning dim; 0 disables FiLM
     clip_grad_norm: float = 0.0  # Gradient clip max_norm; 0 disables
     n_head: int = 4   # Transolver attention heads; head_dim = n_hidden // n_head
+    n_layers: int = 5   # Transolver attention blocks; default 5
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -441,7 +442,7 @@ model_config = dict(
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=128,
-    n_layers=5,
+    n_layers=cfg.n_layers,
     n_head=cfg.n_head,
     slice_num=64,
     mlp_ratio=2,
