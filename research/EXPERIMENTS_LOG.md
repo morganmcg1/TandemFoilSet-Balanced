@@ -704,3 +704,47 @@ Per-split (Arm B): val 44.58 / 54.52 / 23.73 / 39.91 → avg 40.69; test 38.09 /
 - **Key finding:** LR × schedule coupling confirmed directionally across three regimes (T_max=80: lr=2.5e-4 regressed +2.74%; T_max=30/18ep: within noise; T_max=40/33ep + compile: −8%). The confound between T_max and lr is acknowledged — edward's #4079 (pure T_max at lr=1.7e-4) will isolate T_max. Frieren assigned #4159 (T_max fine-sweep at lr=2.5e-4).
 
 - **Cumulative improvement:** 135.02 → 40.69 = **−69.8%**
+
+---
+
+## 2026-05-16 21:50 — PR #4078: Capacity scale-up (n192, n256) on 10-mech compile stack
+
+- **Branch:** charliepai2i48h2-alphonse/capacity-compile
+- **Hypothesis:** torch.compile freed 9 GB VRAM and gave 33 epochs; n192/n256 capacity should be viable now.
+- **Metrics committed:**
+  - `models/model-charliepai2i48h2-alphonse-capacity-compile-sanity-20260516-184730/metrics.jsonl`
+  - `models/model-charliepai2i48h2-alphonse-capacity-compile-n192-20260516-193613/metrics.jsonl`
+  - `models/model-charliepai2i48h2-alphonse-capacity-compile-n256-20260516-202747/metrics.jsonl`
+
+| Arm | n_hidden | Epochs | val_avg | test_avg | Epoch time | Δ vs baseline (44.24) |
+|-----|---------|--------|---------|---------|------------|----------------------|
+| Sanity (n128) | 128 | 25 | 45.13 | 39.17 | 54.6s | +1.99% |
+| Arm A (n192) | 192 | 23 | 45.47 | 38.56 | 79.4s | +2.77% |
+| Arm B (n256) | 256 | 18 | 50.42 | 43.83 | 103.1s | +13.9% |
+
+At epoch 18 apples-to-apples: n192 val=50.03 < n128 val=52.04 — per-epoch capacity benefit is real, but throughput reduction overwhelms it. T_max=30 miscalibrated for n192's ~22-epoch budget.
+
+- **Decision:** CLOSED no_improvement. Per-epoch capacity benefit confirmed. Follow-up #4167 tests n192 with T_max=22 (calibrated to n192 epoch budget) at lr=1.7e-4 on 12-mech stack.
+
+---
+
+## 2026-05-16 21:50 — PR #4079: T_max=33/40 calibration for 33-epoch compile horizon (pure T_max sweep)
+
+- **Branch:** edward/tmax-compile
+- **Hypothesis:** T_max=30 causes LR→0 at epoch 30, wasting epochs 31-33. T_max=33/40 calibrated to compile epoch count.
+- **Metrics committed:**
+  - `models/model-charliepai2i48h2-edward-tmax-compile-33-20260516-202201/metrics.jsonl`
+  - `models/model-charliepai2i48h2-edward-tmax-compile-40-20260516-193437/metrics.jsonl`
+
+| Arm | T_max | lr | Epochs | val_avg | test_avg | Δ vs baseline (44.24) |
+|-----|-------|-----|--------|---------|---------|----------------------|
+| Arm A (T_max=33) | 33 | 1.7e-4 | 33 | 42.79 | 36.66 | −3.30% |
+| **Arm B (T_max=40) — WINNER** | 40 | 1.7e-4 | 34 | **39.83** | **33.89** | **−9.97%** |
+
+Val still descending at epoch 34 with lr=1.25e-5. LR trajectory confirms hypothesis: T_max=40 leaves meaningful signal at timeout while T_max=30 reaches LR≈0 at epoch 30.
+
+- **Decision:** MERGED as strong win. New baseline val=39.8345, test=33.8873.
+
+- **Critical scientific finding:** Pure T_max sweep at lr=1.7e-4 shows T_max recalibration alone drives the full −10% gain. Frieren's prior result (#3953, val=40.69, T_max=40+lr=2.5e-4) is WORSE than lr=1.7e-4 result. The lr increase was counterproductive. Optimal config: T_max=40, lr=1.7e-4 (in-tree default).
+
+- **Cumulative improvement:** 135.02 → 39.83 = **−70.5%**
