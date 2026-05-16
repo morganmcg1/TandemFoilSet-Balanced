@@ -362,6 +362,8 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    lambda_re: float = 0.05  # weight for Re-scaling consistency penalty (p ∝ Re²)
+    re_delta_range: float = 0.05  # delta_re in [1-range, 1+range]
 
 
 cfg = sp.parse(Config)
@@ -429,6 +431,10 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
 clip_diag_logged = False
+re_diag_logged = False
+
+x_std_re = stats["x_std"][13]
+p_mean_over_std = (stats["y_mean"][2] / stats["y_std"][2]).item()
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -437,7 +443,7 @@ for epoch in range(MAX_EPOCHS):
 
     t0 = time.time()
     model.train()
-    epoch_vol = epoch_surf = 0.0
+    epoch_vol = epoch_surf = epoch_consistency = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -470,6 +476,15 @@ for epoch in range(MAX_EPOCHS):
             clip_diag_logged = True
         x_norm = x_norm.clamp(-3.0, 3.0)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
+
+        # Re-perturbed normalized input: shift normalized log(Re) by log(delta)/x_std[13],
+        # which is equivalent to multiplying physical Re by delta then re-normalizing.
+        B = x.shape[0]
+        delta_re = torch.rand(B, device=device) * (2.0 * cfg.re_delta_range) + (1.0 - cfg.re_delta_range)
+        log_delta_norm = (torch.log(delta_re) / x_std_re).unsqueeze(1)  # [B, 1]
+        x_re_norm = x_norm.clone()
+        x_re_norm[:, :, 13] = (x_re_norm[:, :, 13] + log_delta_norm).clamp(-3.0, 3.0)
+
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=torch.cuda.is_available()):
             pred = model({"x": x_norm})["preds"]
             sq_err = F.huber_loss(pred, y_norm, reduction='none', delta=cfg.huber_delta)
@@ -477,7 +492,38 @@ for epoch in range(MAX_EPOCHS):
             surf_mask = mask & is_surface
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
             surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-            loss = vol_loss + cfg.surf_weight * surf_loss
+            pred_re = model({"x": x_re_norm})["preds"]
+
+        # Re-scaling consistency on pressure channel, surface nodes only.
+        # In normalized space: p_perturbed_norm = pred_orig_norm * delta² + (y_mean/y_std)*(delta²-1).
+        pred_p = pred[:, :, 2].detach().float()
+        pred_re_p = pred_re[:, :, 2].float()
+        delta_sq = (delta_re ** 2).view(B, 1)
+        expected_re_p = pred_p * delta_sq + p_mean_over_std * (delta_sq - 1.0)
+        cons_err = F.huber_loss(pred_re_p, expected_re_p, delta=1.0, reduction='none')
+        surf_count = surf_mask.sum().clamp(min=1)
+        consistency_loss = (cons_err * surf_mask).sum() / surf_count
+
+        loss = vol_loss + cfg.surf_weight * surf_loss + cfg.lambda_re * consistency_loss
+
+        if not re_diag_logged:
+            print(
+                f"  re-cons diag (first batch): consistency_loss={consistency_loss.item():.4f}, "
+                f"delta_re=[{delta_re.min().item():.3f}, {delta_re.max().item():.3f}], "
+                f"lambda_re={cfg.lambda_re}, p_mean/p_std={p_mean_over_std:.4f}, "
+                f"surf_only=True"
+            )
+            append_metrics_jsonl(metrics_jsonl_path, {
+                "event": "re_cons_diag",
+                "consistency_loss_init": consistency_loss.item(),
+                "delta_re_min": delta_re.min().item(),
+                "delta_re_max": delta_re.max().item(),
+                "lambda_re": cfg.lambda_re,
+                "re_delta_range": cfg.re_delta_range,
+                "surf_only": True,
+                "p_mean_over_std": p_mean_over_std,
+            })
+            re_diag_logged = True
 
         optimizer.zero_grad()
         loss.backward()
@@ -485,11 +531,13 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_consistency += consistency_loss.item()
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_consistency /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -520,13 +568,14 @@ for epoch in range(MAX_EPOCHS):
         "peak_memory_gb": peak_gb,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/consistency_loss": epoch_consistency,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} cons={epoch_consistency:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
