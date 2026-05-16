@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-16 12:00Z — round 12 of `icml-appendix-charlie-pai2i-48h-r2`
+- 2026-05-16 12:45Z — round 12 of `icml-appendix-charlie-pai2i-48h-r2`
 - No active research directives from the human research team
 - **New baseline: val=56.0011** (PR #3822 cosine T_max=30 merged, −4.88% from 58.87)
 
@@ -35,7 +35,7 @@ cd target && python train.py --agent <student> \
 
 | PR | Student | Theme | Status | Baseline context |
 |----|---------|-------|--------|-----------------|
-| #3884 | alphonse | Batch size scaling on bf16: batch=6 and 8 vs baseline 4 | WIP | bf16 freed 9 GB; bigger batch tests signal-quality vs step-count tradeoff |
+| #3970 | alphonse | torch.compile throughput: default and reduce-overhead modes | WIP — NEW | #3884+#3750 confirmed throughput-bound; compile buys per-epoch time → more steps |
 | #3887 | edward | Cosine T_max refinement: bracket T_max=30 with T_max=25 and 40 | WIP | #3822 winner maps to the knee; "above 30" is student's own prediction |
 | #3949 | askeladd | Lion β1 momentum sweep: 0.95 and 0.85 vs current 0.90 | WIP — NEW | Fresh axis; β1 untested on 7-mech stack; Lion paper cites as most sensitive HP |
 | #3953 | frieren | LR × T_max coupling: lr=2.1e-4 and 2.5e-4 under T_max=30 | WIP — NEW | T_max=30 changed effective LR by 60%; optimal lr_init may have shifted upward |
@@ -46,7 +46,7 @@ cd target && python train.py --agent <student> \
 
 ## Key open questions (round 12 — new baseline 56.00)
 
-1. **Does bigger batch (6 or 8) beat batch=4?** (#3884 alphonse) — throughput-vs-signal tradeoff; bf16 freed 9 GB; 1.17pt noise floor found in #3750
+1. **Does torch.compile buy meaningful per-epoch speedup?** (#3970 alphonse) — #3884+#3750 confirmed throughput-bound; compile is the direct attack on the binding constraint
 2. **Is T_max=30 the optimal or is there headroom above/below?** (#3887 edward) — T_max=25 and 40 bracket the winner; student predicts "above 30"
 3. **Does Lion β1=0.95 or 0.85 beat 0.90?** (#3949 askeladd) — fresh optimizer-level axis; β1 sets gradient reactivity; never tested on 7-mech stack
 4. **Does lr_init shift under T_max=30?** (#3953 frieren) — T_max=30 cut effective avg-LR 60%; lr=2.1e-4/2.5e-4 tests if optimal lr_init moved up; lr=2.5e-4 directly re-tests nezuko's prior failure
@@ -87,6 +87,7 @@ Seven mechanisms targeting DIFFERENT points:
 | #3470 (askeladd EMA-decay) | Closed prematurely; reassigned as #3776 |
 | #3733 (edward warmup-cosine v2) | +4.2% regression (val=61.33 vs 58.87); warmup shifted curve right without compensating gain |
 | #3750 (alphonse capacity-bf16) | no_improvement: Arm A (n144) val=59.85 (+1.66%), Arm B (n_layers=6) val=64.57 (+9.7%); per-epoch time +14-20% drops epoch count 18→15-16; throughput-bound |
+| #3884 (alphonse batch-size-bf16) | no_improvement: Arm A (batch=6) val=69.68 (+24.4%); steps/epoch −33% (250 vs 374); per-epoch time flat (+3s); throughput fully saturated at batch=4 — step-count is binding |
 | #3776 (askeladd EMA-decay-bf16-v2) | Closed at 11:35Z without terminal results; force-push reset; likely rate-limit cascade failure preventing pod commits |
 | #3726 (frieren Lion-wd-sweep) | Closed at 11:33Z without terminal results; force-push reset; same rate-limit cascade issue |
 
@@ -98,7 +99,8 @@ Seven mechanisms targeting DIFFERENT points:
 - ~~Cosine T_max alignment~~ — MERGED (#3822)
 - ~~EMA decay re-tune on bf16/T_max=30 stack~~ — CLOSED #3776 (no results due to rate-limit; direction was convergence-horizon hypothesis; may revisit)
 - ~~Lion weight decay sweep~~ — CLOSED #3726 (no results due to rate-limit; may revisit on 7-mech stack)
-- **Batch size scaling** — IN PROGRESS as #3884 (alphonse)
+- ~~Batch size scaling~~ — CLOSED #3884 (batch=6 +24.4% regression; step-count binding; bf16 compute-saturated at batch=4)
+- **torch.compile throughput** — IN PROGRESS as #3970 (alphonse); direct attack on throughput-bound constraint
 - **T_max refinement** — IN PROGRESS as #3887 (edward)
 - **Lion β1 momentum sweep** — IN PROGRESS as #3949 (askeladd); 0.95/0.85 vs 0.90
 - **LR × T_max coupling** — IN PROGRESS as #3953 (frieren); lr=2.1/2.5e-4 under T_max=30

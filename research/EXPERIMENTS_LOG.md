@@ -468,3 +468,21 @@ test_avg (3-finite splits): ~140.33; full test NaN (pre-#3274)
 - **Key finding:** Per-epoch time +14-20% dropped epoch count 18→15-16, offsetting expressivity gain. Capacity expansion needs more wall-clock, not just memory headroom. Test metric mildly better than baseline (51.45 vs 51.63) despite val regression — suggests bigger model learns something useful but val checkpoint selection masked it. Reassigned alphonse to batch-size-bf16 (#3884).
 
 ---
+
+## 2026-05-16 12:40 — PR #3884: Batch size scaling on bf16 headroom
+- charliepai2i48h2-alphonse/batch-size-bf16
+- **Hypothesis:** bf16 freed 9 GB (32.97 vs 42.13 GB peak); batch=6 or 8 could buy smoother gradient estimates for Lion's sign-based update without memory overflow.
+- **Result:** Arm A (batch=6) regressed +24.4% on val (69.68 vs 56.00). Stop condition triggered; Arm B (batch=8) not run.
+
+| Metric | Arm A (batch=6) | Baseline (batch=4) | Δ |
+|--------|-----------------|---------------------|---|
+| val_avg/mae_surf_p | 69.6827 | 56.0011 | +24.43% |
+| test_avg/mae_surf_p | 60.5222 | 48.9470 | +23.65% |
+| Steps/epoch | 250 | 374 | −33.2% |
+| Per-epoch time | ~105s | ~102s | +3s |
+| Total steps (18ep) | 4,500 | 6,732 | −33.2% |
+| Peak GPU | 49.42 GB | 32.97 GB | +50% |
+
+- **Metrics:** `models/model-charliepai2i48h2-alphonse-batch-bs-6-20260516-112156/metrics.jsonl`
+- **Decision:** CLOSED no_improvement.
+- **Key finding:** Per-epoch time essentially unchanged at batch=6 (+3s) — bf16 is already compute-saturated at batch=4; bigger batch does NOT buy throughput. But steps/epoch dropped 33%: 4,500 vs 6,732 total optimization updates. With val still descending 5%/epoch at epoch 18, the lost steps dominate. Definitively confirms: **throughput is binding, not memory or signal quality.** Combined with #3750, the 7-mech stack at batch=4 is the right anchor. Next direction: `torch.compile` to buy per-epoch time savings that translate to more steps (assigned as #3970).
