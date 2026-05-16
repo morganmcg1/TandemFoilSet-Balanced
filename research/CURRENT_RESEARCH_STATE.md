@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 ~22:55 UTC
+- **Last updated:** 2026-05-16 ~23:15 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -92,7 +92,7 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 ### Round-7 still in-flight (assigned earlier, results pending)
 | # | Student | Hypothesis | State |
 |---|---|---|---|
-| **#4039** | edward | Multi-scale Fourier PE num_freq=8 (stacked retest on n_hidden=176) | WIP — **sent back 21:00** after Arm B win on prior baseline; retesting stacked |
+| **#4205** | edward | RMSNorm swap for LayerNorm on n_hidden=176+bf16+ep18 baseline (round-8) | WIP — assigned 23:15 after #4039 closed |
 | **#4043** | nezuko | AdamW weight_decay sweep + eta_min | WIP (redirected 20:08 to new baseline stack) |
 
 ### Round-7/8 results (resolved 19:30–20:35 UTC)
@@ -112,6 +112,7 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 | **#4143** | thorfinn | n_head=8 retest on new baseline | CLOSED ~21:50 (val=53.50 +2.6%, test=46.16 +2.3%, all 4 splits regress; +32% wall-clock from head_dim=22 < matmul threshold; #4178 EMA assigned) |
 | **#4150** | tanjiro | lr=7e-4 + warmup=1 + ep14 (30-min budget pivot) | CLOSED ~22:40 (val=64.87 +27%, test=56.37 +28%; ep1 val=199.6 confirms early-training instability from aggressive lr+no-warmup; #4190 nh144+ep18 assigned) |
 | **#4110** | frieren | Curvature loss retest sharpened (squared-DSDF) | CLOSED ~22:40 (ARM A val=57.13 +12.2% regress; ARM B control val=50.54 within noise; **diagnostic insight: DSDF-norm is distance-from-boundary proxy not curvature** → mesh-density bias; #4187 pressure-mag weight assigned) |
+| **#4039(v2)** | edward | Multi-scale PE stacked retest (nf=8 wide on n_hidden=176+bf16+ep18) | CLOSED ~23:10 (val=63.29 +24.3%, every split regress; **mechanistic insight: width absorbs PE benefit — spectral resolution and hidden capacity substitute, not complement**; nf=8-wide-range win at n_hidden=160 (val=51.47) recorded for appendix table; #4205 RMSNorm assigned) |
 
 ### Prior baseline progression
 | # | Student | Hypothesis | Outcome |
@@ -154,6 +155,7 @@ Normalized DSDF (dims 4-11) across 100 train files / 108M values:
 | **#4178** | thorfinn | EMA of weights for val/test eval (decay=0.999) | `--n_hidden 176 --use_bf16 --epochs 18 --use_ema --ema_decay 0.999` | WIP |
 | **#4187** | frieren | Pressure-magnitude weighted L1 (top-decile \|p_true\|) | `--use_pmag_weight --pmag_weight_alpha 1.0 --pmag_weight_quantile 0.90 --n_hidden 176 --use_bf16 --epochs 18`, T=45 | WIP (new) |
 | **#4190** | tanjiro | n_hidden=144 + bf16 + ep18 (capacity-vs-epochs at 30-min budget) | `--n_hidden 144 --use_bf16 --epochs 18` (no T override) | WIP (new) |
+| **#4205** | edward | RMSNorm swap for LayerNorm on n_hidden=176+bf16+ep18 baseline | `--use_rmsnorm --n_hidden 176 --use_bf16 --epochs 18` (no T override) | WIP (new) |
 
 **Note on env timeout (important):** Pod env caps vary. Alphonse and tanjiro pods enforce 30-min hard wall (per #4108, #4111 student flags). Fern and thorfinn pods run 39+ min fine. Future assignments to alphonse/tanjiro must be designed for ≤30-min wall. Instructions to these students should NOT include `SENPAI_TIMEOUT_MINUTES` override since isolation rules prohibit it. Nezuko, askeladd, frieren, edward: budget unknown — assume 30 min unless evidence otherwise.
 
@@ -171,6 +173,8 @@ Deferred to round-9 (backlog):
 - lr=5e-4 + warmup=1 + ep14 isolation (tanjiro #4150 follow-up #1 — isolates warmup-shortening from LR-increase)
 - lr=6e-4 + warmup=2 + ep13 milder LR bump (tanjiro #4150 follow-up #2)
 - pmag_weight quantile=0.80 / alpha=0.5 sweep (frieren #4187 follow-up if winner)
+- **Multi-scale PE confirmed-multi-seed ablation at n_hidden=160** for appendix table (edward #4039 followup: nf=8 freq_min_exp=-2..5 produced val=51.47/-4.34% vs n_hidden=160 baseline; record cleanly as part of paper but absorbed by width)
+- **RMSNorm stacking with width=192** if #4205 wins on baseline (compounding norm-mechanic with width)
 
 ## Potential next research directions (post-round-8)
 

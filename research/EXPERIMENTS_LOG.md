@@ -1,5 +1,75 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-16 23:15 — PR #4039 CLOSED + #4205 assigned — edward multi-scale PE doesn't stack with width; pivot to RMSNorm
+
+### #4039 edward Multi-scale Fourier PE stacked retest — **CLOSED** (val=63.29 +24.3%, every split regress; width absorbs PE benefit)
+
+- **Student:** willowpai2i48h4-edward (branch: `willowpai2i48h4-edward/edward-multi-scale-fourier-pe`)
+- **Hypothesis (v2):** Multi-scale Fourier PE (num_freq=8, freq_min_exp=-2, freq_max_exp=5) — Arm B winner from n_hidden=160 baseline — should stack with n_hidden=176 width since PE operates on input embeddings and width on hidden dim (orthogonal axes).
+
+#### Results
+
+| Setup | val_avg | test_avg | epochs | best_ep | runtime |
+|---|---:|---:|---:|---:|---:|
+| Baseline #4082 (nf=4, nh=176, bf16, ep18) | **50.9008** | **43.8989** | 18/18 | 18 | 2361 s (~39.4 min, 45-min cap) |
+| **#4039(v2): nf=8 wide + nh=176** | **63.2904** | **55.5211** | **14/18 (cut)** | **14** | **1843 s (~30.7 min, 30-min cap)** |
+| Δ vs baseline | **+24.3%** | **+26.5%** | | | |
+
+| Split | Baseline | #4039(v2) | Δ |
+|---|---:|---:|---:|
+| single_in_dist | 48.97 | 70.98 | **+45.0%** |
+| geom_camber_rc | 55.45 | 69.46 | **+25.3%** |
+| geom_camber_cruise | 28.27 | 31.21 | +10.4% |
+| re_rand | 42.91 | 50.44 | **+17.6%** |
+
+- **W&B runs:** `fieqyozr` (#4039 v2 stack)
+- **Prior v1 W&B runs (n_hidden=160 baseline, Arm B winner):** `t1seach2` (nf=8 wide, val=51.47), `t9mewkgq` (nf=8 default), `5k9mu16u` (nf=6 default)
+- **Schedule cut analysis:** ep14 trajectory was already +3.6% behind baseline ep14 (val=63.29 vs baseline ep14=61.07). Extrapolating cosine decay over the missing ep15→ep18 (baseline drops 10.2 units) → run would land ~53.1 val at ep18, still +4.3% worse than baseline. **Gap is not a budget artifact, it's the arm under-performing at every matched epoch.**
+
+#### Decision per criteria
+- **Merge** if val < 50.9008 AND test < 43.8989 → ❌ both miss by wide margin
+- **Send back** if val < 51.4683 but doesn't beat #4082 → ❌ val=63.29 >> 51.47
+- **Close** if val ≥ 51.4683 → ✅ multi-scale PE does NOT stack with width
+
+#### Mechanistic interpretation (excellent student writeup)
+
+The hypothesis predicted multi-scale PE and width were orthogonal — fine PE provides finer input features, width provides hidden expressivity. **They are not orthogonal here.** Mechanism:
+
+- At n_hidden=160 (prior result), the model was *input-bound* for geometric variation: sub-mesh-unit Fourier features (freq_min_exp=-2 → 0.25..32 range) unlocked geometric expressivity the model couldn't reach otherwise. Gave Arm B's +4.34% val / +5.22% test win.
+- At n_hidden=176, the **+18% hidden capacity encodes geometric variation natively**. Extra Fourier frequencies now contribute noise rather than signal — model has more channels chasing the same residual.
+- Biggest regression on `single_in_dist` (+45.0%) — the *easiest* split — is striking. Suggests extra input dims actively hurt fitting of clean training-distribution geometry, not just adding harmless noise.
+- **Non-additive interaction:** two changes individually beneficial on the lower-capacity baseline cannot both be applied to the higher-capacity one. Width has *absorbed* the spectral-resolution benefit.
+
+#### Appendix recording (for paper)
+- nf=8-wide-range PE at n_hidden=160: val 53.82 → 51.47 (−4.34%), test 47.27 → 44.81 (−5.22%). Predicted geom_camber_cruise advantage materialized (−7.6%).
+- Same change at n_hidden=176: val 50.90 → 63.29 (+24.3%), every split regresses.
+- Mechanism: spectral-resolution and hidden capacity *substitute* rather than complement.
+- Code infrastructure preserved as feature flag (`freq_min_exp` / `freq_max_exp` Config, opt-in via setting `freq_max_exp`).
+
+#### Suggested follow-ups for round-9 (deferred)
+- Multi-seed confirm of nf=8-wide-range at n_hidden=160 to tighten appendix table headline (single arm; mid-priority)
+- Do NOT try nf=10 / freq_min_exp=-3 at n_hidden=176 — same mechanism would apply
+
+### #4205 edward RMSNorm — **ASSIGNED** (replace LayerNorm with RMSNorm)
+
+- **Student:** willowpai2i48h4-edward (branch: `willowpai2i48h4-edward/rmsnorm-swap`)
+- **Hypothesis:** Swap LayerNorm → RMSNorm (Zhang & Sennrich 2019; used in LLaMA, T5, Chinchilla, Gemma). Three mechanisms could help on our stack:
+  1. **Speed:** RMSNorm is one-pass vs LayerNorm's two-pass (mean + variance). Reported 7-15% speedup on modern GPUs. Could fit ep18 in edward's 30-min cap (where #4039(v2) cut at ep14 from same wall-clock).
+  2. **Subtraction-free:** zero-mean already-normalized pressure regression targets make LayerNorm's mean subtraction redundant; RMSNorm's scale-only matches the problem geometry.
+  3. **bf16 stability:** Llama2/OLMo report RMSNorm gives slightly more stable bf16 training. We use bf16.
+- **Orthogonality:** structurally different from all in-flight regularization (frieren pmag-weight, thorfinn EMA, nezuko weight_decay, askeladd beta2). If wins, should compound with any of those.
+- **Run:**
+  ```bash
+  cd "target/" && python train.py \
+    --n_hidden 176 --use_bf16 --epochs 18 \
+    --use_rmsnorm \
+    --wandb_group willow-r8-rmsnorm \
+    --wandb_name edward-rmsnorm-nh176-bf16-ep18
+  ```
+- **Decision criteria:** Merge if val < 50.9008 AND test < 43.8989; close if val curve sits at or above baseline trajectory at matched epochs.
+
+---
+
 ## 2026-05-16 22:55 — PR #4106 sent back for ep20 retest — fern width=192 borderline
 
 ### #4106 fern n_hidden=192 + bf16 + ep18 — **SENT BACK** (val=50.9206 +0.04%; test=43.7652 −0.30%; curve still descending at cut)
