@@ -467,6 +467,7 @@ class Config:
     num_freq: int = 4  # Fourier positional-encoding frequencies (Tancik 2020); 4 won vs 8
     coord_noise_std: float = 0.01  # Gaussian noise std on normalized (x,z) coords during training
     mlp_ratio: int = 2  # FFN expansion ratio; SwiGLU inner = round_to_mult(hidden*mlp_ratio*2/3, 8)
+    use_curvature_weight: bool = False  # weight surf_loss by |DSDF| as a curvature proxy
 
 
 cfg = sp.parse(Config)
@@ -582,6 +583,61 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
+
+        vol_mask = mask & ~is_surface
+        surf_mask = mask & is_surface
+
+        # DSDF-norm curvature proxy: weight surface nodes by |grad(DSDF)| so that
+        # high-curvature regions (LE suction peak, TE pressure recovery) dominate
+        # surf_loss. Normalization gives sum(weights) = n_surf per sample on
+        # surface, so at uniform curvature surf_weights == 1 and surf_loss
+        # numerically reduces to the baseline expression.
+        if cfg.use_curvature_weight:
+            dsdf_norm = x_norm[..., 4:12].norm(dim=-1)                          # (B, N)
+            sw_raw = dsdf_norm * surf_mask.float()                              # zero off-surface
+            sw_sum = sw_raw.sum(dim=-1, keepdim=True).clamp(min=1e-6)
+            n_surf_per_sample = surf_mask.float().sum(dim=-1, keepdim=True)
+            surf_weights = sw_raw / sw_sum * n_surf_per_sample                  # (B, N)
+
+            if global_step == 0:
+                with torch.no_grad():
+                    surf_dsdf = dsdf_norm[surf_mask]
+                    if surf_dsdf.numel() > 0:
+                        d_max = surf_dsdf.max().item()
+                        d_mean = surf_dsdf.mean().item()
+                        d_min = surf_dsdf.min().item()
+                        d_std = surf_dsdf.std().item()
+                        d_p99 = torch.quantile(surf_dsdf, 0.99).item()
+                        d_p50 = torch.quantile(surf_dsdf, 0.50).item()
+                        ratio = d_max / max(d_mean, 1e-6)
+                        sw_surf = surf_weights[surf_mask]
+                        w_max = sw_surf.max().item()
+                        w_mean = sw_surf.mean().item()
+                        w_p99 = torch.quantile(sw_surf, 0.99).item()
+                        print(
+                            f"DSDF proxy diagnostic: dsdf_norm[surf]"
+                            f" min={d_min:.3f} p50={d_p50:.3f} mean={d_mean:.3f}"
+                            f" p99={d_p99:.3f} max={d_max:.3f} std={d_std:.3f}"
+                            f" max/mean={ratio:.2f}"
+                        )
+                        print(
+                            f"surf_weights[surf] mean={w_mean:.3f} p99={w_p99:.3f}"
+                            f" max={w_max:.3f}"
+                        )
+                        wandb.summary.update({
+                            "curvature/dsdf_min": d_min,
+                            "curvature/dsdf_p50": d_p50,
+                            "curvature/dsdf_mean": d_mean,
+                            "curvature/dsdf_p99": d_p99,
+                            "curvature/dsdf_max": d_max,
+                            "curvature/dsdf_std": d_std,
+                            "curvature/dsdf_max_over_mean": ratio,
+                            "curvature/surf_weight_p99_step0": w_p99,
+                            "curvature/surf_weight_max_step0": w_max,
+                        })
+        else:
+            surf_weights = None
+
         if cfg.coord_noise_std > 0:
             pad_mask = mask.unsqueeze(-1).to(x_norm.dtype)  # (B, N, 1); zero at padding
             noise = torch.randn_like(x_norm[..., :2]) * cfg.coord_noise_std * pad_mask
@@ -592,10 +648,20 @@ for epoch in range(MAX_EPOCHS):
         pred = model({"x": x_enc})["preds"]
         err = _pointwise_loss(pred, y_norm, cfg.loss_type)
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
         vol_loss = (err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        if cfg.use_curvature_weight:
+            # err * surf_weights.unsqueeze(-1) broadcasts the per-node weight
+            # across the 3 output channels — preserves the original surf_loss
+            # scale (channel-sum, surface-mean). At uniform DSDF: identical to
+            # baseline. Note: the PR snippet used err.mean(-1) * surf_weights
+            # which would have collapsed the scale by 3x; this is a tiny
+            # algebraic adjustment to keep effective surf_weight at 10.
+            surf_loss = (
+                (err * surf_weights.unsqueeze(-1) * surf_mask.unsqueeze(-1)).sum()
+                / surf_mask.sum().clamp(min=1)
+            )
+        else:
+            surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
