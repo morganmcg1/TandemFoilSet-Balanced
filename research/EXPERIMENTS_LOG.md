@@ -56,6 +56,77 @@ Per-split test: test_single_in_dist=71.67, test_geom_camber_rc=73.75, test_geom_
 
 ---
 
+## 2026-05-16 04:30 — PR #3596 tanjiro MERGED: T_max=21 → val=65.74 NEW SOTA
+
+- Branch: `willowpai2i24h3-tanjiro/lion-tmax-newbase`
+- Hypothesis: Set T_max=21 (matching the actual bf16 epoch budget + 2-epoch buffer) so the cosine schedule reaches ~1.2e-5 LR by the final epoch, vs the misconfigured T_max=50 which only used 38% of the cosine arc.
+
+### Terminal results
+
+| Arm | T_max | W&B run | val_avg/mae_surf_p | test_avg_nansafe | Best epoch | LR at ep19 |
+|---|---|---|---|---|---|---|
+| Baseline #3427 | 50 | `f6lnbssy` | 69.8562 | 65.8812 | 19 (final) | 7.16e-5 |
+| Arm 1 | 19 | `k2x40431` | 66.2528 | 62.0839 | 18 | 1.000e-5 (floor exact) |
+| **Arm 2 (winner)** | **21** | **`tew7xthq`** | **65.7375** | **61.7003** | **18** | 1.200e-5 |
+
+Per-split test (eval_nansafe.py): single_in_dist=61.9972, geom_camber_rc=69.7654, geom_camber_cruise=57.5355, re_rand=57.5030. Surface MAE: Ux=0.9697, Uy=0.4851, p=61.7003.
+
+### Analysis
+
+**Mechanism confirmed**: Setting T_max to match the bf16 epoch budget traverses the lower portion of the cosine arc (LR 7.2e-5 → 1.2e-5) that T_max=50 never reached. Both arms beat baseline.
+
+**Key finding — best epoch=18 not 19**: Epoch 19 (lowest LR) mildly regresses in both arms. The eta_min floor itself doesn't help; the benefit is the cosine traversing the LR range ~1.5e-5 to 2.7e-5 (epochs 16-18) that was inaccessible under T_max=50. Hitting the floor exactly (T_max=19, arm 1) over-decays slightly; T_max=21 (arm 2) stays at a more useful terminal LR.
+
+**Why T_max=21 > T_max=19**: The LR around epochs 17-18 (where best checkpoint lives) is ~40% higher in arm 2 than arm 1. The model benefits from slightly more aggressive updates in this late refinement window.
+
+**Per-epoch val trajectory (selective)**:
+- ep10: arm1=87.65, arm2=87.80 (close — schedules similar early)
+- ep17: arm1=67.67, arm2=67.00 (arm2 pulling ahead)
+- ep18: arm1=66.25 ← best, arm2=65.74 ← best (arm2 lower)
+- ep19: arm1=67.98 (worst, LR hit floor), arm2=66.63 (slight regress)
+
+### Decision: MERGED — new SOTA
+
+- val 65.74 beats 69.86 by −4.12 (−5.9%) ✓
+- test_nansafe 61.70 beats 65.88 by −4.18 (−6.3%) ✓
+- All 4 test splits improved ✓
+- Terminal SENPAI-RESULT with terminal=true, pending_arms=false ✓
+
+**New baseline: val=65.7375, test_nansafe=61.7003**
+
+---
+
+## 2026-05-16 04:30 — PR #3604 frieren CLOSED: warmup on new stack (both arms regressed)
+
+- Branch: `willowpai2i24h3-frieren/lion-warmup-newbase`
+- Hypothesis: Does warmup (1 or 2 epochs) complement clip=1.0 on the new SOTA stack?
+
+### Terminal results
+
+| Run | warmup | val_avg/mae_surf_p | Δ vs baseline | test_nansafe | Best epoch |
+|---|---|---|---|---|---|
+| Baseline | 0 | 69.8562 | — | 65.8812 | 19 |
+| lion-warmup2-stack (rzmszrhy) | 2 | 76.1187 | +6.26 | 70.4252 | 19 |
+| lion-warmup1-stack (ay7uz94m) | 1 | 81.4190 | +11.56 | 77.6660 | 18 |
+
+### Analysis
+
+**Mechanism clarified**: Lion's update is `LR·sign(momentum)`. Warmup's mechanism in SGD/AdamW is to prevent large early steps by starting at low LR. In Lion, the per-step displacement IS LR × 1 (sign is bounded). Warmup therefore literally freezes parameters near random initialization — epoch 1 val was 395 vs baseline's 227, confirming the model barely moves during warmup.
+
+**Clipping unchanged**: 99.75% of steps still clipped during warmup (baseline 99.7%). Clip and warmup are orthogonal but warmup still costs budget by keeping LR near zero for 1-2 epochs.
+
+**Baseline leads at every epoch**: No warmup arm ever caught up within 30 min.
+
+**Complete warmup picture** (all 4 arms across 2 baselines, all worse):
+- warmup1 old Lion (100.80), warmup2 old Lion (104.91), warmup2 new stack (76.12), warmup1 new stack (81.42)
+
+Direction is fully exhausted. **Drop warmup entirely for Lion.**
+
+### Decision: CLOSED — warmup + Lion direction exhausted
+Follow-up: frieren → lion-lr-sweep (PR #3675), testing lr={2e-4, 3e-4} on the new SOTA stack.
+
+---
+
 ## 2026-05-16 02:50 — PR #3518 edward CLOSED: Lion T_max=14 sweep (best val 83.45 on old baseline)
 
 - Branch: `willowpai2i24h3-edward/lion-tmax14`

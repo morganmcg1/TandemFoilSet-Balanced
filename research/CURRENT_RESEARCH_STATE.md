@@ -6,70 +6,72 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **As of:** 2026-05-16 02:55 UTC
+- **As of:** 2026-05-16 04:45 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r3`
 - **Research tag:** `willow-pai2i-24h-r3` (round 4 active)
 - **Most recent human research direction:** None received.
 
 ## Current focus
 
-**Round 4 running. New SOTA: alphonse's Lion+bf16+clip+floor stack (PR #3427, merged 01:30 UTC).**
+**Round 5 running. New SOTA: tanjiro's T_max=21 cosine fix (PR #3596, merged 04:30 UTC).**
 
-Round-4 SOTA: **alphonse's lion-bf16-clip-floor (PR #3427)**, val_avg/mae_surf_p=**69.86**, test_nansafe=**65.88** — a −25.75% improvement over the Lion-only baseline (94.08) and −35.0% over the Huber baseline (107.46).
+Round-5 SOTA: **tanjiro's lion-tmax21 (PR #3596)**, val_avg/mae_surf_p=**65.74**, test_nansafe=**61.70** — a −5.9% val / −6.3% test improvement over the previous SOTA (69.86/65.88).
 
-The three stacked levers in the merged baseline:
-1. **Lion optimizer** (PR #3387): sign-based update rule, orthogonal to Huber's loss-level capping
+The full current stack (5 levers stacked across 4 rounds):
+1. **Lion optimizer** (PR #3387): sign-based update, orthogonal to loss-level capping
 2. **bf16 autocast** (PR #3427): 19 epochs in 30 min (vs 14 fp32) — 5 extra optimizer steps
 3. **grad-clip(max_norm=1.0)** (PR #3427): engaged at 99.7% of steps — per-step Lion momentum normalizer
-4. **eta_min=1e-5** (PR #3427): standby floor, not yet engaging at T_max=50 + 19 epochs
+4. **eta_min=1e-5** (PR #3427): standby floor
+5. **T_max=21** (PR #3596): cosine schedule traverses lower-LR refinement region (LR→1.2e-5 at ep19 vs 7.2e-5 at T_max=50)
 
-Key signals:
-- Val curve **still descending at epoch 19** (best=final epoch) — material headroom remains
-- VRAM: **33 GB / 96 GB** — 63 GB unused headroom for bigger model
-- LR at ep19: **7.16e-5** — only 28% into cosine decay; eta_min floor not engaged
+Key signals from new SOTA:
+- Best epoch = **18** (epoch 19 mildly regresses — the eta_min floor itself doesn't help)
+- VRAM: **33 GB / 96 GB** — 63 GB unused headroom
+- LR at ep18 (best): ~1.4e-5 (lower half of cosine arc engaged for first time)
+- Val still descending at epoch 18 → there may be headroom from larger model or higher LR
 
 ## All students — current assignments
 
 | Student | PR | Slug | Hypothesis | Status |
 |---|---|---|---|---|
-| alphonse | #3590 | `lion-clip-sweep` | Clip values {0.25, 0.5, 2.0} vs current clip=1.0 | **WIP — training** |
-| nezuko | #3592 | `deeper-model` | n_layers=7 and n_hidden=160 on new stack (63 GB headroom) | **WIP — training** |
-| tanjiro | #3596 | `lion-tmax-newbase` | T_max=19 to engage eta_min=1e-5 within bf16 budget | **WIP — training** |
-| fern | #3598 | `p-weight-surf-loss` | Per-channel p weighting in surf_loss (2× and 4×) | **WIP — training** |
-| frieren | #3604 | `lion-warmup-newbase` | Warmup on new stacked baseline — does clip make warmup redundant? | **WIP — training** |
-| edward | #3640 | `ema-weights` | EMA decay {0.999, 0.9999} — leverage descending val curve | **WIP (just assigned)** |
-| askeladd | #3641 | `bs-scaling` | Batch size {8, 12} — utilize 63 GB VRAM headroom | **WIP (just assigned)** |
-| thorfinn | #3541 | `lion-lr-wd-sweep` | Lion lr/wd sweep on old Lion baseline (arm 2 running) | WIP — awaiting terminal |
+| alphonse | #3590 | `lion-clip-sweep` | Clip values {0.25, 0.5, 2.0} — is clip=1.0 optimal? | WIP — clip=0.25 done (79.78), clip=0.5 running, clip=2.0 missing |
+| nezuko | #3592 | `deeper-model` | n_layers=7 and n_hidden=160 on new stack | WIP — both arms finished (l7=78.31, h160=70.49), re-run running |
+| tanjiro | **MERGED #3596** | `lion-tmax-newbase` | T_max=21 → val=65.74 NEW SOTA | **MERGED** |
+| fern | #3598 | `p-weight-surf-loss` | Per-channel p weighting (2×, 4×) | WIP — p_weight=2.0 done (77.18 worse), p_weight=4.0 running |
+| frieren | #3675 | `lion-lr-sweep` | LR sweep {2e-4, 3e-4} on new T_max=21 SOTA stack | **WIP (just assigned)** |
+| edward | #3640 | `ema-weights` | EMA decay {0.999, 0.9999} — descending val curve lever | WIP — in progress |
+| askeladd | #3641 | `bs-scaling` | Batch size {8, 12} — utilize 63 GB VRAM headroom | WIP — in progress |
+| thorfinn | #3541 | `lion-lr-wd-sweep` | Lion lr/wd sweep on old Lion baseline (diagnostic) | WIP — awaiting terminal |
 
 ## Current baseline (BASELINE.md)
 
-- `val_avg/mae_surf_p` = **69.8562**
-- `test_avg_nansafe/mae_surf_p` = **65.8812**
-- W&B run: `f6lnbssy` (alphonse, group `bf16-stable`, PR #3427)
-- Stack: Lion + Huber δ=2.0 + bf16 + clip=1.0 + eta_min=1e-5
-- VRAM: 33 GB / 96 GB. Best epoch = final epoch 19. Val still descending at timeout.
+- `val_avg/mae_surf_p` = **65.7375**
+- `test_avg_nansafe/mae_surf_p` = **61.7003**
+- W&B run: `tew7xthq` (tanjiro, group `lion-tmax-newbase`, PR #3596)
+- Stack: Lion lr=1e-4, wd=1e-2 + Huber δ=2.0 + bf16 + clip=1.0 + eta_min=1e-5 + **T_max=21**
+- VRAM: 33 GB / 96 GB. Best epoch = **18** (epoch 19 mildly regresses). Val still descending at ep18.
 
 ## Key research signals — round 5
 
-### Round-5 new assignments (just opened)
+### Round-5 results so far
+
+| Priority | PR | Student | Hypothesis | Result | Decision |
+|---|---|---|---|---|---|
+| HIGH | **#3596** | **tanjiro** | **T_max=21** | **val=65.74 NEW SOTA** | **MERGED** |
+| LOW | #3604 | frieren | Warmup on new stack | val=76.12 (warmup2) — worse | CLOSED |
+| HIGH | #3590 | alphonse | Clip sweep (0.25, 0.5, 2.0) | clip=0.25: val=79.78 (in) | Awaiting arms 2+3 |
+| HIGH | #3592 | nezuko | Deeper model (L=7, n_hidden=160) | l7=78.31, h160=70.49 (both slightly worse) | Awaiting terminal |
+| MED | #3598 | fern | p_weight {2×, 4×} | p_weight=2.0: val=77.18 (worse) | Awaiting arm 2 |
+
+### In-flight experiments (training now)
 
 | Priority | PR | Student | Hypothesis | Expected val |
 |---|---|---|---|---|
-| HIGH | #3590 | alphonse | Clip sweep (0.25, 0.5, 2.0) — find optimal clip | 63–70 |
-| HIGH | #3592 | nezuko | Deeper model (L=7, n_hidden=160) — use 63 GB headroom | 60–67 |
-| HIGH | #3596 | tanjiro | T_max=19 fix — engage eta_min floor | 64–68 |
-| MED | #3598 | fern | Per-channel p weighting (2×, 4×) | 64–69 |
-| MED | #3604 | frieren | Warmup on new stack — clip vs warmup redundancy test | 67–70 |
-| MED | #3640 | edward | EMA decay sweep {0.999, 0.9999} — descending val = EMA headroom | 67–70 |
-| MED | #3641 | askeladd | Batch size {8, 12} — 63 GB VRAM headroom + Lion sign reliability | 65–70 |
-| LOW | #3541 | thorfinn | Lion lr/wd sweep (old baseline, diagnostic only) | 90–100 |
-
-### Closed round-4 experiments
-
-| PR | Student | Result | Decision |
-|---|---|---|---|
-| #3518 | edward | val=83.45 (old Lion T_max=14) | Closed — direction confirmed, superseded by tanjiro #3596 |
-| #3385 | askeladd | val=104.02 (warmup2+clip50, throughput-confounded) | Closed — clip=1.0 is correct regime; per-epoch trajectory suggests clip=50 loses on budget |
+| HIGH | #3590 | alphonse | Clip sweep (clip=0.5 running, clip=2.0 MISSING) | 63–68 |
+| MED | #3675 | frieren | LR sweep {2e-4, 3e-4} on T_max=21 SOTA | 62–67 |
+| MED | #3640 | edward | EMA decay {0.999, 0.9999} on SOTA | 63–66 |
+| MED | #3641 | askeladd | Batch size {8, 12} on SOTA | 63–67 |
+| LOW | #3541 | thorfinn | Lion lr/wd sweep (old baseline, diagnostic) | 90–100 |
 
 ## Key research signals — round 4
 
@@ -81,6 +83,13 @@ Key signals:
 - **Lion+bf16+clip+floor** (alphonse #3427): val=69.86
 
 The clip lever accounts for ~20 additional points beyond bf16 alone.
+
+### Eliminated approaches (round 5 additions)
+
+| Approach | Best val | Decision |
+|---|---|---|
+| LR warmup on new Lion+clip stack (frieren) | 76.12 (warmup2) | Closed — Lion is LR·sign(momentum), warmup freezes params near rand init |
+| LR warmup on old bare Lion (frieren #3515) | 100.80 (warmup1) | Closed prior round |
 
 ### Eliminated approaches (round 4)
 
@@ -106,12 +115,13 @@ The clip lever accounts for ~20 additional points beyond bf16 alone.
 | MED | #3541 | thorfinn | Lion lr/wd sweep on old Lion (awaiting arm 2) | 95–100 diagnostic |
 | LOW | #3385 | askeladd | warmup2+clip50 on new stack (rebase needed) | 67–72 |
 
-### Round-5 directions (speculative, contingent on in-flight results)
+### Round-6 directions (speculative, contingent on in-flight results)
 
-1. **Full stack**: optimal clip + T_max=19 + larger model (if all three beat baseline)
-2. **Bigger model**: if nezuko's deeper model helps, L=9 or n_hidden=192 next
-3. **Clip+LR interaction**: the optimal clip threshold likely depends on Lion's LR — if clip sweep shows a clear winner, the clip/lr ratio becomes a tunable lever
-4. **Longer schedule**: T_max and bf16 both hit the timeout constraint; if we can get >30 min (two chained runs, or a 60-min timeout), the descending val curve suggests >10 more points available
+1. **LR + T_max interaction**: if frieren's lr=2e-4 beats baseline, the optimal T_max will shift (larger LR decays faster in the same number of epochs). T_max should be re-tuned after LR change.
+2. **Clip + LR interaction**: alphonse's clip sweep (0.25, 0.5, 2.0) may show that the optimal clip depends on LR. If clip=0.5 wins at lr=1e-4, the sweet spot may shift at lr=2e-4.
+3. **Bigger model**: nezuko's h160 at 70.49 is only 0.63 worse than the old baseline — with the new SOTA at 65.74, retesting n_hidden=192 or n_layers=7 on the T_max=21 stack may be worthwhile if the optimization is now less noise-dominated (clip normalizer + T_max fix both reduce noise).
+4. **EMA as test-time lever**: edward's EMA experiment may compound with tanjiro's T_max fix — both target late-training refinement.
+5. **Full stack with all confirmed levers**: Once clip sweep, EMA, and LR sweep finish, the next synthesis is to stack the winning values of all three onto the T_max=21 baseline.
 
 ## Known infra bugs (unchanged)
 
