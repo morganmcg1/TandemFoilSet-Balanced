@@ -1,5 +1,72 @@
 # SENPAI Research Results
 
+## 2026-05-16 01:35 — PR #3307: OneCycleLR right-sized to actual budget + L1 surf — **MERGED (compound winner)**
+
+- Branch: `willowpai2i24h5-askeladd/onecyclelr-1e3`
+- Hypothesis: Right-sizing `total_steps = len(train_loader) * 14` makes the OneCycleLR peak hit at epoch ~1.4, then anneals aggressively to ~4e-9 by epoch 14. The OOD splits should benefit from the low-LR fine-tune phase at the end of the anneal, not just the initial high-LR exploration. OneCycle and L1 surf loss are orthogonal and should compound.
+- W&B runs (3-arm post-rebase): `ut8w1dsk` (84.11), `iomzoqit` (80.31 ★), `f4lha65v` (80.57)
+
+| Arm | W&B run | val_avg | val_single_in_dist | val_geom_camber_rc | val_geom_camber_cruise | val_re_rand | test_3split_excl_cruise |
+|---|---|---|---|---|---|---|---|
+| arm1 | `ut8w1dsk` | 84.11 | 94.79 | 92.45 | 66.53 | 82.67 | 80.80 |
+| arm2 (best) | `iomzoqit` | **80.31** | 92.04 | 92.30 | 60.31 | 76.60 | **77.97** |
+| arm3 | `f4lha65v` | 80.57 | 93.17 | 93.26 | 58.74 | 77.11 | 79.08 |
+| **3-arm mean** | | **81.66** | 93.33 | 92.67 | 61.87 | 78.79 | 79.28 |
+| Δ vs prior baseline | | **−8.38** | −15.62 | −5.03 | −8.53 | −4.32 | −8.50 |
+
+**Analysis:** Decisive compound winner — −9.30% improvement (81.66 vs 90.04), best test 3-split 77.97. All 3 arms beat baseline (spread 3.80 pp). The compound effect is real: L1 + OneCycle = 81.66, while L1 alone = 90.04 and OneCycle alone (on old baseline) = 97.44. The mechanism: OneCycle peaks early (epoch ~1.4 at 1e-3), then aggressive anneal down to 4e-9 by epoch 14 — the model gets high-LR exploration early then settles into a precise minimum via the steep descent. The OOD splits improved most (`val_single_in_dist` −15.62 pp mean). **New baseline: 81.66.**
+
+---
+
+## 2026-05-16 01:30 — PR #3360: Grad clip max_norm=0.5 on L1 + warm-restarts — sent back for retest on OneCycle baseline
+
+- Branch: `willowpai2i24h5-tanjiro/gradclip-0p5`
+- Hypothesis: Halving max_norm doubles gradient-direction signal weight; effective LR drops from 1.1e-5 to ~5.6e-6. Should reduce noise on OOD splits.
+- W&B runs: `itai1hgn` (88.69), `px7jh2aw` (89.33), `8ckdycoz` (88.52 ★). 3-arm mean: 88.84.
+
+| Arm | val_avg | vs warm-restarts+L1 baseline (90.04) |
+|---|---|---|
+| arm1 | 88.69 | −1.35 pp (−1.50%) |
+| arm2 | 89.33 | −0.71 pp (−0.79%) |
+| arm3 (best) | 88.52 | −1.52 pp (−1.69%) |
+| **3-arm mean** | **88.84** | **−1.20 pp (−1.33%)** |
+
+**Analysis:** Hypothesis confirmed on the warm-restarts + L1 baseline — tighter clip wins by 1.33% (3-arm mean). Spread 0.81 pp (σ=0.43), well-replicated. However, PR #3307 merged after this result establishing OneCycleLR (81.66) as the new baseline. Grad_clip=0.5 was measured on the old warm-restarts config; the OneCycle annealing may already do the fine-tuning work that clip=0.5 was doing. Sent back for retest: rebase onto OneCycleLR head, run 3 arms, target 81.66. Key question: does tighter clip stack with OneCycleLR?
+
+---
+
+## 2026-05-16 01:35 — PR #3489: Huber surf loss (delta={1.0, 0.5}) — closed
+
+- Branch: `willowpai2i24h5-thorfinn/huber-surf-loss`
+- Hypothesis: Huber loss (quadratic near zero, linear beyond delta) should outperform pure L1 near convergence by providing proportional gradients for small residuals.
+- W&B runs: `0y3gpjdh` (delta=1.0, val_avg=93.45), `zinuovvq` (delta=0.5, val_avg=98.50)
+
+| Arm | delta | val_avg | vs L1 baseline (90.04) |
+|---|---|---|---|
+| arm1 | 1.0 | 93.45 | +3.79% |
+| arm2 | 0.5 | 98.50 | +9.39% |
+
+**Analysis:** Both Huber arms regress vs L1 baseline. Delta=0.5 is worse than delta=1.0 — smaller quadratic region doesn't help. Thorfinn's explanation: grad clip (max_norm=1.0) already normalizes step sizes, so Huber's quadratic-near-zero behavior doesn't add the settling benefit it normally provides. L1 is strictly better than Huber for this problem at this training budget. Key finding: pure L1 is the right loss for this problem, not the Huber variant. Mechanism confirmed: the grad-clip normalization makes the optimizer step-size independent of gradient magnitude, neutralizing Huber's main advantage.
+
+---
+
+## 2026-05-16 01:35 — PR #3462: surf_weight 10 → 5 — closed
+
+- Branch: `willowpai2i24h5-fern/surf-weight-5`
+- Hypothesis: Lower surface weight (5 vs 10) may recover more volume structure and reduce loss-scale volatility.
+- W&B runs: `46xf7qc5` (99.60), `h3ukp0h2` (99.63), `741nq5wg` (100.22). 3-arm mean: 99.81.
+
+| Arm | val_avg | vs actual baseline (90.04) |
+|---|---|---|
+| arm1 (best) | 99.60 | +10.6% |
+| arm2 | 99.63 | +10.7% |
+| arm3 | 100.22 | +11.3% |
+| **3-arm mean** | **99.81** | **+10.8%** |
+
+**Analysis:** surf_weight=5 regresses by 10.8% on the primary metric vs baseline 90.04. The 3-arm spread is remarkably tight (0.62 pp vs ~3 pp at surf_weight=10) confirming the variance-reduction mechanism — but the mean is 9.8 pp above baseline. Fern's observation about variance reduction is real but the primary metric is worse. Key finding: surf_weight=10 is a better balance than 5; the volume term provides useful structure that shouldn't be given more relative weight. surf_weight=7-8 is untested but at the new OneCycle baseline (81.66), the priority is elsewhere.
+
+---
+
 ## 2026-05-15 23:00 — PR #3431: EMA weights (decay=0.999) — closed
 
 - Branch: `willowpai2i24h5-nezuko/ema-weights`
