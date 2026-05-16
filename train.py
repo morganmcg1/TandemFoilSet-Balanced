@@ -232,6 +232,53 @@ class TransolverBlock(nn.Module):
         return fx
 
 
+class Lion(torch.optim.Optimizer):
+    """Lion optimizer (Chen et al. 2023, "Symbolic Discovery of Optimization Algorithms").
+
+    Reference: https://arxiv.org/abs/2302.06675
+
+    Sign-based update with momentum interpolation; every parameter update has
+    magnitude ``lr`` regardless of gradient scale, which helps at small batch
+    sizes where AdamW's ``sqrt(v_t)`` denominator is itself noisy. Memory
+    footprint is lower than AdamW (no second-moment buffer).
+    """
+
+    def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
+        if lr <= 0.0:
+            raise ValueError(f"Invalid learning rate: {lr}")
+        if not 0.0 <= betas[0] < 1.0 or not 0.0 <= betas[1] < 1.0:
+            raise ValueError(f"Invalid betas: {betas}")
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+        for group in self.param_groups:
+            lr = group["lr"]
+            wd = group["weight_decay"]
+            beta1, beta2 = group["betas"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                grad = p.grad
+                if wd != 0.0:
+                    p.data.mul_(1.0 - lr * wd)
+                state = self.state[p]
+                if len(state) == 0:
+                    state["m"] = torch.zeros_like(p)
+                m = state["m"]
+                # .mul()/.add() are OUT-OF-PLACE on purpose; m must remain
+                # untouched until the m.mul_().add_() line below.
+                update = m.mul(beta1).add(grad, alpha=1.0 - beta1).sign_()
+                p.add_(update, alpha=-lr)
+                m.mul_(beta2).add_(grad, alpha=1.0 - beta2)
+        return loss
+
+
 class Lookahead(torch.optim.Optimizer):
     """Wraps a base optimizer with k-step lookahead (Zhang et al. 2019).
 
@@ -521,6 +568,7 @@ class Config:
     deterministic: bool = False
     use_swiglu: bool = False
     use_geglu: bool = False
+    use_lion: bool = False
     lookahead_k: int = 5
     lookahead_alpha: float = 0.5
 
@@ -580,10 +628,21 @@ n_ffn_params = sum(
 )
 print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN={n_ffn_params})")
 
-base_optimizer = torch.optim.AdamW(
-    model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.95)
-)
-optimizer = Lookahead(base_optimizer, k=cfg.lookahead_k, alpha=cfg.lookahead_alpha)
+if cfg.use_lion:
+    # Lion lr is ~3-10x smaller than AdamW's because sign-based updates have
+    # constant magnitude (lr/3 here, matching the PR #4123 recipe).
+    base_optimizer = Lion(
+        model.parameters(), lr=cfg.lr / 3.0, weight_decay=cfg.weight_decay,
+        betas=(0.9, 0.99),
+    )
+else:
+    base_optimizer = torch.optim.AdamW(
+        model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.95)
+    )
+if cfg.lookahead_k > 0:
+    optimizer = Lookahead(base_optimizer, k=cfg.lookahead_k, alpha=cfg.lookahead_alpha)
+else:
+    optimizer = base_optimizer
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(base_optimizer, T_max=17)
 
 run = wandb.init(
@@ -623,15 +682,26 @@ best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
 
-# Wiring sanity: confirm AdamW betas reached every param group.
-_betas_per_group = [tuple(g["betas"]) for g in optimizer.param_groups]
-print(f"AdamW betas per group: {_betas_per_group}")
-print(f"Lookahead wrap: k={cfg.lookahead_k}, alpha={cfg.lookahead_alpha}")
+# Wiring sanity: confirm base optimizer betas/lr reached every param group.
+_betas_per_group = [tuple(g["betas"]) for g in base_optimizer.param_groups]
+_lr_per_group = [g["lr"] for g in base_optimizer.param_groups]
+_wd_per_group = [g["weight_decay"] for g in base_optimizer.param_groups]
+_base_name = "lion" if cfg.use_lion else "adamw"
+_lookahead_on = cfg.lookahead_k > 0
+_optim_name = f"lookahead-{_base_name}" if _lookahead_on else _base_name
+print(f"Base optimizer: {_base_name}  betas={_betas_per_group}  lr={_lr_per_group}  wd={_wd_per_group}")
+print(f"Lookahead wrap: {'ON' if _lookahead_on else 'OFF'}"
+      + (f" (k={cfg.lookahead_k}, alpha={cfg.lookahead_alpha})" if _lookahead_on else ""))
 run.summary["optim/betas"] = list(_betas_per_group[0])
 run.summary["optim/n_param_groups"] = len(_betas_per_group)
-run.summary["optimizer"] = "lookahead-adamw"
+run.summary["optim/lr_initial"] = _lr_per_group[0]
+run.summary["optim/weight_decay"] = _wd_per_group[0]
+run.summary["optimizer"] = _optim_name
+run.summary["base_optimizer"] = _base_name
+run.summary["use_lion"] = cfg.use_lion
 run.summary["lookahead_k"] = cfg.lookahead_k
 run.summary["lookahead_alpha"] = cfg.lookahead_alpha
+run.summary["lookahead_on"] = _lookahead_on
 
 # Rolling buffer for per-step train losses to compute volatility (window=100).
 _train_loss_window: deque[float] = deque(maxlen=100)
@@ -681,7 +751,7 @@ for epoch in range(MAX_EPOCHS):
             "train/grad_norm": grad_norm.item(),
             "global_step": global_step,
         }
-        if optimizer.last_sync_diff_norm is not None:
+        if _lookahead_on and optimizer.last_sync_diff_norm is not None:
             _log_dict["train/lookahead_sync_diff_norm"] = optimizer.last_sync_diff_norm
         wandb.log(_log_dict)
 
