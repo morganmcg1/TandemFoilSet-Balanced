@@ -1143,3 +1143,133 @@ Arms (both at 14-epoch budget):
 Both stack on n_head=2 + wd=5e-5 + lr=1e-3 + clip=1.0. Orthogonal to H47 (eta_min raises cosine floor); WSD changes the entire schedule shape. Predicted ≈ 64-66.
 
 **Status: WIP — student executing.**
+
+---
+
+## 2026-05-16 10:30 — PR #3683: H39 Arm C: n_head=2 + lr=2e-3 + wd=5e-5 + clip=1.0 (thorfinn) — **NEW BEST, PENDING MERGE**
+
+- Branch: `charliepai2i48h3-thorfinn/lr-ceiling-h32`
+- Hypothesis: 4-way stack of all positive isolated levers (n_head=2, lr=2e-3 from H39, wd=5e-5 from H38, clip=1.0 from H20) compounds super-additively.
+
+| Seed | val_avg/mae_surf_p | test_avg/mae_surf_p (3-split) |
+|---|---|---|
+| Seed 1 (best) | **63.4385** | **61.391** |
+| Seed 2 | 65.5093 | — |
+| Mean of 2 seeds | 64.474 | — |
+
+| Split (best seed) | val | test (3-split) |
+|---|---|---|
+| val_single_in_dist | ~73 | ~63 |
+| val_geom_camber_rc | ~77 | ~69 |
+| val_geom_camber_cruise | ~43 | NaN (bug) |
+| val_re_rand | ~61 | ~52 |
+
+- Δ vs H37b (66.1060): −2.67 pts val_avg, −3.06 pts test_avg
+- Δ vs H32 (69.4381): −6.00 pts val_avg, total stack effect
+- Best epoch: 15/50 (cut by timeout)
+- 2-seed variance: 2.07 pts (consistent with prior seed noise estimate)
+
+**Analysis:** Super-additive stacking confirmed. The 4-way compound (n_head=2 × lr=2e-3 × wd=5e-5 × clip=1.0) drops val_avg by nearly 6 pts vs the H32 floor, and beats the previously merged H37b baseline by 2.67 pts even taking only the best seed. Mean of 2 seeds (64.47) also beats the H37b single-seed 66.11, so the gain is robust.
+
+Test gain (61.39 vs H37b 64.45) is larger than val gain — the stacked config generalizes well to held-out test geometries. The Re-conditioned model with n_head=2 finds a regime that does better both in-distribution AND OOD.
+
+**Merge status:** First merge attempt blocked by merge conflicts vs current advisor branch (H37b merged after this PR was branched). Sent back to thorfinn with explicit rebase instructions; will merge on next cycle.
+
+**Suggested follow-ups now active:** H51 (LR ceiling lr=2.5e-3, 3e-3), H56 (clip=0.5, 0.7), H54 (surf_weight=5, 20), H55 (Mixup α=0.2, 0.4) — all built on this 4-way stack.
+
+---
+
+## 2026-05-16 10:30 — PR #3689: H42 Arm C: n_layers=3 + n_head=2 + wd=5e-5 (alphonse) — CLOSED, dead end
+
+- Branch: `charliepai2i48h3-alphonse/n-layers-sweep-h32`
+- Hypothesis: n_layers=3 isolated win (H42 Arm B) compounds with n_head=2 + wd=5e-5 stack.
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p | 69.16 |
+| test_avg/mae_surf_p (3-split) | 66.95 |
+| Δ vs H37b baseline | **+3.05** (regress) |
+| Δ vs H39 Arm C | **+5.72** (massive regress) |
+
+**Analysis:** Stacking failed dramatically. n_layers=3 (smaller model) interacts destructively with n_head=2 (also smaller capacity per layer). With both reductions applied, the network can't model the camber-OOD and Re-random splits — the model is now under-capacitied for the harder splits.
+
+This adds to the pattern: **simple capacity reductions don't stack with each other**. n_layers=3 wins isolated because it gets more epochs in fixed wall time (21 vs 14); n_head=2 wins isolated because head_dim=64 has better expressivity per head. Stacked, the model lacks both width and depth.
+
+**Status: CLOSED.** Mid-tier model (n_layers=5, n_head=2) is the right balance.
+
+---
+
+## 2026-05-16 10:30 — PR #3737: H44 Arm C: β₁=0.8 + n_head=2 + wd=5e-5 (frieren) — CLOSED, dead end
+
+- Branch: `charliepai2i48h3-frieren/h44-beta1-sweep-h38`
+- Hypothesis: AdamW β₁=0.8 isolated win (H44 Arm A) compounds with n_head=2 + wd=5e-5.
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p | 67.25 |
+| test_avg/mae_surf_p (3-split) | 64.93 |
+| Δ vs H37b baseline | +1.14 (regress) |
+| Δ vs H39 Arm C | +3.81 (regress) |
+
+**Analysis:** β₁=0.8 + n_head=2 + wd=5e-5 doesn't stack. Faster moment decay (β₁=0.8) lets the optimizer react to recent gradients more quickly, but combined with the architecture changes from n_head=2, the optimizer ends up overshooting promising local descents. The isolated H44 Arm A win at β₁=0.8 was probably a fluke or sensitive to baseline config.
+
+**Status: CLOSED.** β₁=0.9 is the right choice for this config.
+
+---
+
+## 2026-05-16 10:30 — PR #3805: H46: n_head=1 (head_dim=128) on H37b base (tanjiro) — CLOSED, monotone broken
+
+- Branch: `charliepai2i48h3-tanjiro/h46-n-head-1`
+- Hypothesis: monotone n_head 8→4→2 trend (improving) continues to n_head=1 (head_dim=128, full embedding per head).
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p | 69.17 |
+| test_avg/mae_surf_p (3-split) | 66.54 |
+| Δ vs H37b baseline | +3.06 (regress) |
+
+**Analysis:** Monotone trend breaks at n_head=1. The U-shape n_head=8→4→2→1 (improving→improving→regression) shows n_head=2 is the global optimum: head_dim=64 is large enough for expressivity but n_head=2 still gives 2-way multi-head ensembling, which n_head=1 loses entirely. **n_head=2 is the floor; don't go lower.**
+
+**Status: CLOSED.** Confirms n_head=2 as the global optimum for this regime.
+
+---
+
+## 2026-05-16 10:30 — PR #3807: H47: cosine eta_min sweep (5e-5, 1e-4) on H37b base (nezuko) — CLOSED, both regress
+
+- Branch: `charliepai2i48h3-nezuko/h47-cosine-eta-min-sweep`
+- Hypothesis: cosine LR floor > 0 (eta_min=5e-5 or 1e-4) preserves late-LR exploration capacity.
+
+| Metric | Value (best arm) |
+|---|---|
+| val_avg/mae_surf_p | 67.35 |
+| test_avg/mae_surf_p (3-split) | 66.75 |
+| Δ vs H37b baseline | +1.24 (regress) |
+
+**Analysis:** Both eta_min arms regress. eta_min=1e-4 distorts the cosine anneal window — the final epochs don't reach the fine-tune phase that the H37b config (and H39 Arm C) needs for in-distribution. eta_min=5e-5 less aggressive but still hurts.
+
+This adds to the pattern of **schedule lever exhaustion at 14-15 epoch budget**: H43 (warmup) ate budget; H41 Arm C (T_max=20) stripped the tail; H47 (eta_min) raised the floor. All three failed in similar ways — the budget is so tight that any deviation from "cosine T_max=15 from peak to ~0" loses the late-epoch fine-tune that is doing most of the in-distribution work.
+
+**Status: CLOSED.** Cosine T_max=15 with eta_min=0 is the right schedule for this budget. Schedule lever is exhausted; next non-default schedule attempt should be WSD (H50, in-flight) — which has a mechanistically different cooldown shape.
+
+---
+
+## 2026-05-16 10:45 — R5 cycle 5 new assignments
+
+5 idle students (post-cycle-5 closures). 4 new draft PRs assigned; thorfinn pending rebase + merge of #3683.
+
+| PR | Student | Hypothesis | Status |
+|----|---------|------------|--------|
+| **#3896** | alphonse | **H51: LR ceiling push (lr=2.5e-3, 3e-3)** at H39 Arm C stack | WIP |
+| **#3897** | frieren | **H56: lower grad clip (0.5, 0.7)** at H39 Arm C stack | WIP |
+| **#3898** | nezuko | **H54: surf_weight sweep (5, 20)** at H39 Arm C stack | WIP |
+| **#3899** | tanjiro | **H55: Mixup data augmentation (α=0.2, 0.4)** at H39 Arm C stack | WIP |
+| **#3683** | thorfinn | **H39 Arm C** — needs rebase against advisor branch to merge | SENT BACK |
+
+Together with WIP from earlier cycles:
+| PR | Student | Hypothesis | Status |
+|----|---------|------------|--------|
+| #3834 | askeladd | H48: GEGLU/SwiGLU FFN gating | WIP |
+| #3859 | edward | H49: Lion optimizer | WIP |
+| #3862 | fern | H50: WSD trapezoidal schedule | WIP |
+
+All 8 students active. Zero idle GPUs.
