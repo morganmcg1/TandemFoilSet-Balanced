@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 06:25
+- **Date:** 2026-05-16 07:42
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
@@ -10,7 +10,8 @@
 - **val_avg/mae_surf_p: 72.77** | **test_avg/mae_surf_p: 65.12**
 - Per-split test surf_p: single=78.83, rc=75.82, cruise=43.86, re_rand=61.97
 - **Cumulative improvement: -43.5% val from round-5 start (~128.69)**
-- **Note: LayerScale + n_freqs=14 combination is untested and is the HIGHEST PRIORITY (PR #3730, alphonse)**
+- **HIGHEST PRIORITY: LayerScale + n_freqs=14 compound (alphonse #3730)**
+- **UPCOMING HIGH VALUE: BF16 + LayerScale composition (tanjiro #3527 rebasing)**
 
 ## Improvement history
 
@@ -29,14 +30,14 @@
 
 | Student | PR | Hypothesis | Status |
 |---|---|---|---|
-| alphonse | #3730 | LayerScale γ=0.01 + n_freqs=14 compound | NEW (wave-7) — HIGHEST PRIORITY |
-| nezuko | #3732 | n_freqs={18,20} + clip=0.25 (tight clip for Fourier scaling) | NEW (wave-7) |
-| frieren | #3740 | Asymmetric LayerScale γ_attn=0.001 vs γ_mlp=0.01/0.03 | NEW (wave-7) |
-| tanjiro | #3527 | Mixed precision BF16 training | WIP (stale) |
-| askeladd | #3424 | Tighter clip sweep max_norm=0.1 × Huber delta | WIP (stale) |
-| thorfinn | #3682 | Peak LR sweep lr∈{7e-4, 1e-3} on n_freqs=14+clip=1.0 | WIP |
-| edward | #3192 | EMA 0.998 on LayerScale stack (rebasing) | Sent back (rebase onto LayerScale) |
-| fern | #3708 | AdamW β2 sweep {0.99, 0.95} on n_freqs=14+clip=1.0 | WIP |
+| alphonse | #3730 | LayerScale γ=0.01 + n_freqs=14 compound | Wave-7 — HIGHEST PRIORITY |
+| nezuko | #3732 | n_freqs={18,20} + clip=0.25 (tight clip for Fourier scaling) | Wave-7 |
+| frieren | #3740 | Asymmetric LayerScale γ_attn=0.001 vs γ_mlp=0.01/0.03 | Wave-7 |
+| edward | #3192 | EMA 0.998 on LayerScale stack | Sent back (rebase in progress) |
+| askeladd | #3424 | Tighter clip sweep max_norm=0.1 × Huber delta | WIP (stale — picking up after API rate-limit recovery) |
+| tanjiro | #3527 | BF16 + LayerScale composition | Sent back (rebase onto LayerScale — arm-1 BF16 tied val=72.75; compose BF16+LayerScale expected ~65-70) |
+| fern | #3782 | AdamW eps sweep {1e-6, 1e-7} on LayerScale stack | NEW (wave-8) |
+| thorfinn | #3784 | Peak LR sweep {7e-4, 1e-3} on LayerScale stack | NEW (wave-8) |
 
 ## Closed this round
 
@@ -50,47 +51,50 @@
 | #3420 (alphonse) | Log-space loss: anti-aligned with MAE |
 | #3419 (tanjiro) | n_hidden=160: 4.6× per-epoch slowdown, only 10-11ep |
 | #3509 (alphonse) | DropPath: underfit regime, 5-block net, convergence-speed penalty |
-| #3227 (thorfinn) | Surf-anneal: 13h stale, no rebase after 2 requests, advisor branch moved 4+ merges ahead |
-| #3439 (fern) | RFF σ∈{1,3,5,7} all worse than log-spaced; σ=3 best at val=85.25 vs baseline 81.08 (-5%) |
-| #3650 (nezuko) | Compound fail: n=14+clip=1.0 val=81.20 (worse than 81.08); n=18+clip=1.0 val=84.71. clip=0.25 is regularizer at n_freqs≥14 |
-| #3648 (frieren) | LR warmup: start_factor=1e-6 → LR=5e-10 in ep1 → val=419 → 1 wasted epoch kills budget |
+| #3227 (thorfinn) | Surf-anneal: 13h stale, no rebase after 2 requests |
+| #3439 (fern) | RFF σ∈{1,3,5,7} all worse than log-spaced; σ=3 best at val=85.25 |
+| #3650 (nezuko) | clip=1.0 at n_freqs≥14 removes regularization; n=18+clip=1.0 bad |
+| #3648 (frieren) | LR warmup: start_factor=1e-6 kills epoch 1 in timeout-bound regime |
+| #3708 (fern) | AdamW β2 sweep falsified: both 0.99/0.95 much worse; default β2=0.999 optimal |
+| #3682 (thorfinn) | LR sweep on wrong stack (n14+clip=1.0 vs current LayerScale best); arm-2 (lr=1e-3) promising but retesting on LayerScale |
 
 ## Current research themes
 
-1. **LayerScale + n_freqs=14 compound (alphonse #3730) — HIGHEST PRIORITY**: LayerScale γ=0.01 won by -10.2% (val=72.77) on n_freqs=10. n_freqs=14 won by -4.2% (val=81.08). Never combined. Expected val ~65-70 if composition holds. NOTE: Use clip=0.25 — PR #3650 confirmed clip=1.0 doesn't help at n_freqs≥14.
+1. **LayerScale + n_freqs=14 compound (alphonse #3730) — HIGHEST PRIORITY**: LayerScale γ=0.01 won by -10.2% (val=72.77) on n_freqs=10. n_freqs=14 won by -4.2% (val=81.08). Never combined. Expected val ~65-70 if composition holds. Use clip=0.25.
 
-2. **n_freqs=18+clip=0.25 (nezuko #3732)**: PR #3650 tested n=18+clip=1.0 (bad). The correct test n=18+clip=0.25 is untested. If Fourier scaling continues beyond n=14, it'll compound further with LayerScale.
+2. **BF16 + LayerScale composition (tanjiro #3527 rebasing)**: BF16 alone ties LayerScale at val=72.75 (+4 epochs/1.30× speed). Composition BF16+LayerScale expected val 65-70. Needs rebase.
 
-3. **Asymmetric LayerScale (frieren #3740)**: PR #3593 showed γ-attn stays near 0.01, γ-mlp grows 3×. Separate inits (γ_attn=0.001, γ_mlp=0.01/0.03) target each branch's natural trajectory. Expected 1-3% beyond symmetric γ=0.01.
+3. **n_freqs=18,20 + clip=0.25 (nezuko #3732)**: Fourier scaling not saturated at n=14. n=18+clip=0.25 never tested (only n=18+clip=1.0 which failed badly). If scaling continues, further LayerScale compound.
 
-4. **EMA checkpoint averaging (edward #3192)**: EMA 0.998 beats old n_freqs=14 baseline by -1.16% (val=80.14). Rebasing to test EMA 0.998 on LayerScale stack. Expected val ~67 (-6.84% on 72.77). If EMA+LayerScale+n_freqs=14 all compose, could land val ~60.
+4. **Asymmetric LayerScale (frieren #3740)**: γ-attn stays near 0.01, γ-mlp grows 3×. Separate inits (γ_attn=0.001, γ_mlp=0.01/0.03) target natural trajectory. Expected 1-3% beyond symmetric γ=0.01.
 
-5. **AdamW β2 sweep (fern #3708)**: Heavy-tailed gradients (Huber + clip needed) contaminate β2=0.999 second moment. Testing β2∈{0.99, 0.95}.
+5. **EMA 0.998 on LayerScale stack (edward #3192)**: EMA 0.998 earlier beat old n14 baseline by -1.16%. On LayerScale stack expected val ~67. Triple compound (LayerScale + n14 + EMA) could reach sub-60.
 
-6. **Peak LR sweep (thorfinn #3682)**: Testing lr=7e-4 and lr=1e-3 on n_freqs=14+clip=1.0 stack.
+6. **Peak LR sweep on LayerScale (thorfinn #3784)**: lr=1e-3 showed healthy gradient stats in PR #3682 but on wrong stack. Retesting on current best: LayerScale gating may tolerate higher base LR as γ damps attn branch updates.
 
-7. **BF16 speed (tanjiro #3527)**: 2× speedup would unlock more epochs for all experiments.
+7. **AdamW eps sweep on LayerScale (fern #3782)**: eps ∈ {1e-6, 1e-7} on LayerScale stack. Near-zero γ-attn channels have small v_t → tiny eps amplifies their updates. Raising eps damps → more uniform per-param effective LR.
 
-8. **Tighter clip + Huber delta (askeladd #3424)**: Exploring clip=0.1.
+8. **Tighter clip sweep (askeladd #3424)**: clip=0.1 + Huber delta sweep. Currently stale after API rate-limit recovery.
 
 ## Key insights accumulated
 
-- **Fourier scaling not saturated at n=14**: n_freqs: 6→10 (+9.5%), 10→14 (+4.2%). n=12 mixed; n=14 all splits improve. n=18+clip=0.25 untested.
-- **clip=0.25 is regularization at n_freqs≥14**: PR #3650 confirmed — clip=1.0 removes implicit regularization at high n_freqs (cruise blows up +5-16%). Always use clip=0.25 when n_freqs≥12.
-- **clip=1.0 win at n=10 was likely split-noise**: margin was -0.69% (PR #3529); same order as variation in PR #3650 arm-1 (+0.15%). Not a real structural win.
-- **LayerScale γ=0.01 is the biggest win**: -10.2% val from per-channel selective residual gating. Mechanism: most γ-attn channels near zero, a few 8×; γ-mlp grows 3×. OOD splits improve most (rc -10.7%, cruise -12.1%, re_rand -11.4%).
-- **EMA confirmed effective**: -14.3% val gain from EMA alone at epoch 13 (decay=0.999).
+- **Fourier scaling not saturated at n=14**: n_freqs: 6→10 (+9.5%), 10→14 (+4.2%). n=18+clip=0.25 untested.
+- **clip=0.25 is regularization at n_freqs≥14**: PR #3650 confirmed — clip=1.0 removes implicit regularization at high n_freqs. Always use clip=0.25 when n_freqs≥12.
+- **LayerScale γ=0.01 is the biggest single win**: -10.2% val from per-channel selective residual gating. OOD splits improve most.
+- **BF16 virtual tie with LayerScale (independent paths to same performance)**: BF16 extra epochs ≈ LayerScale gating benefit. Both likely compose.
+- **AdamW β2<0.999 is harmful**: clip already detoxifies heavy-tail gradients before v_t; lower β2 introduces denominator instability. Default optimal.
+- **lr=1e-3 not divergent**: clip_frac drops to 0.97s, grad_norm_mean trends lower; potentially beneficial on current stack.
+- **EMA 0.998 effective**: -1.16% vs prior stack; composition with LayerScale untested.
 - **γ=0.1 high variance**: run-to-run spread of 7 points; γ=0.01 cleaner dynamics.
 
 ## Potential next research directions
 
-- **LayerScale + n_freqs=14 + EMA** — triple compound if all compose; could land sub-60 val
-- **LayerScale γ-init ∈ {0.003, 0.005}** — even smaller init may increase channel selectivity (γ-attn stays near zero anyway)
-- **Asymmetric LayerScale** — separate init for attn vs mlp branches (γ-mlp needs bigger; γ-attn barely moves)
-- **n_freqs=20** — if n=18 still saturates with clip=0.25
-- **LR warmup + everything** — may improve cold-start convergence
-- **Lookahead optimizer** — wrap AdamW
-- **SAM** — flat minima optimization
+- **LayerScale + n_freqs=14 + EMA** — triple compound; could land sub-60 val
+- **LayerScale + BF16 + n_freqs=14** — triple compound if BF16 confirmed to compose
+- **LayerScale γ-init ∈ {0.003, 0.005}** — even smaller init may increase channel selectivity
+- **n_freqs=20** — if n=18 doesn't saturate with clip=0.25
+- **Lookahead optimizer** — wrap AdamW (no hyperparameter changes to the inner optimizer needed)
+- **SAM** — flat minima; theoretically motivated for OOD generalization
 
 ## Ideas dossier
 - Full hypothesis catalogue: `research/RESEARCH_IDEAS_2026-05-15.md` (13 ranked entries)

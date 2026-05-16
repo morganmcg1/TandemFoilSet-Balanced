@@ -582,3 +582,75 @@ _New entries appended as each PR is reviewed._
 
 - PR #3708 — charliepai2i48h5-fern: AdamW β2 sweep {0.99, 0.95} vs default 0.999 on n_freqs=14+clip=1.0 stack
 - Rationale: β2=0.999 has effective half-life ~700 steps; with heavy-tailed gradients (confirmed by Huber+clip needs and gnorm_max=48 at epoch 1), second-moment estimate is contaminated for too long. Lower β2 (0.99: half-life ~70; 0.95: ~14) accelerates the variance estimate update. Last untouched optimizer hyperparameter.
+
+---
+
+## 2026-05-16 07:30 — PR #3708 (charliepai2i48h5-fern): AdamW β2 sweep — CLOSED
+
+- branch: `charliepai2i48h5-fern/adam-beta2-sweep`
+- hypothesis: lowering β2 below 0.999 reduces contamination of second-moment estimator from heavy-tail gradients; hypothesis: faster variance decay → more adaptive per-param LR
+- arms:
+
+  | arm | β2 | val_avg/mae_surf_p | test_avg/mae_surf_p | vs current best |
+  |---|---|---|---|---|
+  | arm-1 | 0.99 | 84.73 | 74.26 | +16.4% val / +14.1% test ✗ |
+  | arm-2 | 0.95 | 84.95 | 75.92 | +16.7% val / +16.6% test ✗ |
+  | baseline (PR #3593) | 0.999 | **72.77** | **65.12** | — |
+
+- stack: n_freqs=14 + Huber-0.3 + T_max=20 + clip=1.0 (note: clip=1.0, not clip=0.25 from current best)
+- per-split test surf_p arm-1 (β2=0.99): single=88.96, rc=83.69, cruise=50.49, re_rand=73.89
+- artifacts: `models/model-fourier-n14-clip10-beta2-099-20260516-053002/metrics.jsonl`, `models/model-fourier-n14-clip10-beta2-095-20260516-062337/metrics.jsonl`
+- epoch-1 val: arm-1=202.50, arm-2=246.17 — lower β2 is WORSE at epoch 1 (opposite to hypothesis)
+- clip_frac stable ~1.000 throughout; grad_norm_mean 13→5; clip already bounds the heavy-tail gradient signal so v_t isn't actually contaminated
+- key insight: gradient clipping detoxifies the tail before v_t accumulates it; lower β2 introduces denominator instability instead. Monotone ordering 0.95<0.99<0.999 → default β2=0.999 is optimal.
+- verdict: **CLOSED** — hypothesis falsified. No follow-up on β2. New assignment: AdamW eps sweep on LayerScale stack (PR #3782).
+
+---
+
+## 2026-05-16 07:30 — PR #3682 (charliepai2i48h5-thorfinn): Peak LR sweep lr∈{7e-4,1e-3} — CLOSED
+
+- branch: `charliepai2i48h5-thorfinn/peak-lr-sweep`
+- hypothesis: higher peak LR accelerates convergence under clip=1.0; lr=1e-3 was untested on n_freqs=14 stack
+- arms:
+
+  | arm | lr | epochs | val_avg/mae_surf_p | test_avg/mae_surf_p | vs current best |
+  |---|---|---|---|---|---|
+  | arm-1 | 7e-4 | 12 | 84.13 | 75.01 | +15.6% / +15.2% ✗ |
+  | arm-2 | 1e-3 | 14 | 81.43 | 70.60 | +11.9% / +8.4% ✗ |
+  | baseline (PR #3593) | 5e-4 | 13 | **72.77** | **65.12** | — |
+
+- stack: n_freqs=14 + Huber-0.3 + T_max=20 + clip=1.0 (NOT the current best clip=0.25 LayerScale stack)
+- per-split test surf_p arm-2 (lr=1e-3): single=82.80, rc=83.87, cruise=47.39, re_rand=68.33
+- arm-1 had anomalous epoch-4 slowdown (286s vs 130s typical) — cost 2 epochs; at matched epochs arm-1 actually descends faster per-epoch than arm-2
+- arm-2 (lr=1e-3) beats arm-2's cited baseline (n_freqs=14+clip=1.0 val=81.08) on test by -1.3% — promising direction but tested on wrong stack
+- key insight: lr=1e-3 is not divergent under clip; clip_frac drops to 0.979 and grad_norm_mean trends to 3.57 (vs 4.8 for arm-1) — optimizer reaching smoother landscape faster under higher LR
+- verdict: **CLOSED** — both arms far from current best (72.77); scope was against old n14+clip=1.0 baseline. Positive signal for lr=1e-3 direction warrants retesting on LayerScale stack. Thorfinn reassigned to lr sweep on LayerScale stack (PR #3784).
+
+---
+
+## 2026-05-16 07:30 — PR #3527 (charliepai2i48h5-tanjiro): BF16 mixed precision — SENT BACK
+
+- branch: `tanjiro/mixed-precision-bf16`
+- hypothesis: BF16 autocast reduces memory + increases speed → more epochs in 30-min budget → direct metric improvement
+- arms:
+
+  | arm | config | epochs | sec/ep | val | test | vs current best |
+  |---|---|---|---|---|---|---|
+  | arm-1 (n128) | BF16 + full stack | 18 | 102.1s | **72.75** | **65.05** | -0.03% / -0.11% ≈ TIE |
+  | arm-2 (n160) | BF16 + n_hidden=160 | 16 | 115.9s | 75.83 | 69.01 | under-converged |
+  | baseline (PR #3593) | FP32 + LayerScale | 13 | 132.6s | **72.77** | **65.12** | — |
+
+- arm-1 stack: n_freqs=10 + Huber-0.3 + T_max=20 + clip=0.25 + **BF16** (NO LayerScale — pre-LayerScale scope)
+- BF16 speedup: 1.30× (102.1 vs 132.6 s/epoch) + 21% less peak memory (33.4 vs 42.4 GB)
+- all 4 test splits uniform 10–13% improvement vs FP32 no-LayerScale baseline (PR #3333)
+- arm-1 val=72.75 ≈ current best (LayerScale) at 72.77 — two independent mechanisms reach same level, suggests composition may yield significant gain
+- implementation: forward pass in `torch.amp.autocast(dtype=torch.bfloat16)`; eval in FP32; no GradScaler needed (BF16 has same exponent range as FP32)
+- merge conflict with LayerScale (train.py modified by both)
+- verdict: **SENT BACK** — result is excellent (virtual tie vs LayerScale) but PR needs rebase onto current best. Next test: BF16 + LayerScale composition — expected val ~65-70 if additive, potentially first result below 65. Expected ~18 epochs in budget.
+
+---
+
+## 2026-05-16 07:40 — Wave-8 assignments
+
+- PR #3782 — charliepai2i48h5-fern: AdamW eps sweep {1e-6, 1e-7} on LayerScale stack (default eps=1e-8; theory: small v_t channels with tiny eps get amplified updates, raising eps damps them → more uniform per-param effective LR; especially relevant for near-zero LayerScale γ-attn channels)
+- PR #3784 — charliepai2i48h5-thorfinn: Peak LR sweep {7e-4, 1e-3} on LayerScale stack (redo on current best stack; lr=1e-3 showed healthy gradient stats in PR #3682 but wrong baseline; LayerScale's per-channel gating may tolerate higher base LR)
