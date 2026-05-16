@@ -848,3 +848,46 @@ All 5 mechanisms are CONFIRMED REAL on the old stack. All 5 students re-assigned
 | #3794 | fern | n-head-2-on-swiglu | n_head=2 + SwiGLU: larger per-head dim + gated MLP |
 | #3795 | tanjiro | swiglu-all-mlps (preprocess+readout too) | Extend gating to I/O MLPs |
 | #3796 | askeladd | vel-scale-fine-swiglu (0.25, 0.375) | Is vel-asinh scale < 0.5 better? |
+
+## 2026-05-16 09:24 — PR #3794: Architecture: n_head=2 on SwiGLU baseline — fern
+
+- Branch: `willowpai2i48h2-fern/n-head-2-on-swiglu`
+- W&B run: `0hy5wlxj` (group `n-head-on-swiglu`, run `n-head-2-swiglu`, best epoch 15/17)
+- **Hypothesis**: n_head=2 (per-head dim 64 vs 32) + SwiGLU: does wider per-head attention compound with gating?
+
+| Metric | n_head=2 | SwiGLU baseline | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **64.3427** | 66.6130 | **−3.41%** |
+| test_3split/mae_surf_p | **63.6663** | 65.4628 | **−2.74%** |
+| epoch_time_s | **124.20** | ~145 | **−14% wall-clock** |
+| best_epoch | 15 | 13 | +2 (more epochs in budget) |
+
+Per-split val:
+| Split | n_head=2 | baseline | Δ |
+|---|---|---|---|
+| val_single_in_dist | 77.068 | 78.885 | −2.30% |
+| val_geom_camber_rc | 75.996 | 78.184 | −2.80% |
+| val_geom_camber_cruise | 43.741 | 45.513 | −3.89% |
+| val_re_rand | **60.565** | 63.870 | **−5.17%** |
+
+**Analysis**: Confirmed compounding win. Every split improves 2-5%. Largest gain on `val_re_rand` (−5.17%) — wider per-head attention (dim 64) captures longer-range token relationships critical for Re-OOD generalization. n_head=2 is also 14% faster per epoch, delivering 2 extra training epochs in the 30-min budget. Key insight: magnitude is smaller than the old-stack signal (−4.2% → −3.4%) because asinh+EMA+SwiGLU have already partially absorbed the per-head capacity benefit, but the marginal gain is still real and consistent across all splits. **MERGED — new baseline val=64.3427.**
+
+## 2026-05-16 09:28 — PR #3770: Mixup augmentation — frieren (FALSIFIED)
+
+- Branch: `willowpai2i48h2-frieren/mixup-augmentation`
+- W&B runs: `i4z5i5u8` (α=0.2), `win2xdfi` (α=0.1)
+- **Hypothesis**: Mixup on input+target would smooth the input-output mapping and improve OOD generalization
+
+| Arm | val_avg/mae_surf_p | Δ vs baseline (81.97) |
+|---|---|---|
+| Arm A (α=0.2) | 114.4131 | **+39.6%** |
+| Arm B (α=0.1) | 105.2997 | **+28.5%** |
+
+**Analysis**: Catastrophic regression across every split. Direction-monotone: stronger mixing → worse generalization. Root cause: linearly interpolating input coordinates produces non-physical meshes; interpolating geometry parameters (NACA codes, AoA) produces non-physical airfoils. The target field `y = (Ux, Uy, p)` is a non-linear functional of geometry+Re, so the interpolated target doesn't match what the interpolated input would physically produce. The model converged (training loss decreased monotonically) but to a minimum optimized for unphysical training pairs. Standard Mixup is fundamentally incompatible with geometry-conditional CFD surrogates. **CLOSED — falsified.** Follow-up: geometry-preserving augmentations (Re-jitter, symmetric mesh reflections) remain open.
+
+## 2026-05-16 09:35 — Round-7 assignments (2 PRs, both on new n_head=2+SwiGLU baseline val=64.34)
+
+| PR | Student | Hypothesis | Key test |
+|---|---|---|---|
+| #3854 | fern | slice-num-sweep-nhead2 (32, 128) | Is slice_num=64 optimal for dim_head=64? |
+| #3858 | frieren | attn-dropout-nhead2 (attn_drop=0.1) | Does attention dropout improve OOD generalization? |
