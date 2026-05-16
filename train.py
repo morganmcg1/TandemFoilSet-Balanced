@@ -468,7 +468,7 @@ class Config:
     lr: float = 5e-4
     weight_decay: float = 1e-4
     batch_size: int = 4
-    surf_weight: float = 10.0
+    surf_weight: float = 5.0
     p_channel_weight: float = 3.0
     epochs: int = 50
     cosine_tmax: int = 14  # match observed wall-clock ceiling (~13-14 epochs)
@@ -632,6 +632,8 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/surf_to_vol_ratio": epoch_surf / (epoch_vol + 1e-8),
+        "train/weighted_surf_to_vol_ratio": (cfg.surf_weight * epoch_surf) / (epoch_vol + 1e-8),
         "train/lr": current_lr,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
