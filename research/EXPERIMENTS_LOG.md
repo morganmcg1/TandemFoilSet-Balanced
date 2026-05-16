@@ -720,3 +720,146 @@ finite tests are usable.
 
 - **Closed at 15:50** — bottom-tier in cohort ranking (147.85 vs frontier 109.99). The
   depth lever returns when bf16 (#3282) unblocks proper epoch counts.
+
+---
+
+## 2026-05-16 06:27 — PR #3640 edward: EMA weights (decay=0.999, 0.9999)
+
+- Branch: `willowpai2i24h3-edward/ema-weights`
+- Hypothesis: EMA of model weights (decay=0.999) provides free improvement on a descending val curve by averaging over stochastic optimizer noise.
+- W&B runs: `6co3bkwm` (ema-d999), `wnowoo0e` (ema-d9999)
+
+### Terminal results
+
+| Metric | Baseline (PR #3427) | EMA d=0.999 (arm1) | EMA d=0.9999 (arm2) |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | 69.8562 | **64.5125** | 261.0692 |
+| **test_avg_nansafe/mae_surf_p** | 65.8812 | **60.2569** | 251.3673 |
+| val_single_in_dist | 78.48 | 71.36 | — |
+| val_geom_camber_rc | 86.87 | 79.20 | — |
+| val_geom_camber_cruise | 45.33 | 44.93 | — |
+| val_re_rand | 68.74 | 62.56 | — |
+| Best epoch | 19 | 18 | 18 |
+
+Per-split test (nansafe): single=62.48, rc=68.24, cruise=55.29, re_rand=55.02 → avg=60.26.
+
+EMA vs base trajectory (d=0.999): EMA overtakes base model at epoch 11 (89.01 vs 91.98). Gap widens to 7.09 by epoch 18. EMA smooths epoch-13 base spike from 95.33 → 83.27 (EMA 79.02). **−5.34 val / −5.62 test vs baseline.**
+
+### Analysis
+
+- EMA d=0.999 wins by wide margin: val 69.86 → 64.51 (−7.6%), test 65.88 → 60.26 (−8.5%)
+- EMA d=0.9999 fails: half-life ≈ 6,931 steps vs run length ≈ 2,700 steps — EMA never escapes random init (val=261)
+- fp32 EMA buffers required: bf16 precision (~7.8e-3) is insufficient to accumulate (1-0.999)=1e-3 updates
+- 100-step EMA warmup (direct copy) prevents random init contamination at start
+- Mechanism: EMA smooths gradient noise in the descending-curve regime; per-epoch base val has spikes EMA eliminates
+- VRAM cost: +21 MB (fp32 copy of 2.7M param model)
+- Note: run compared against OLD baseline (T_max=50 stack, PR #3427). New SOTA is T_max=21 (val=65.74). Edward was sent back for rebase to compare against current stack.
+
+### Advisor action
+
+- **Sent back for rebase (#3640)** — merge conflicts with tanjiro's T_max=21 (#3596). Must rerun on T_max=21 stack. EMA mechanism is sound and highly likely to beat new SOTA (65.74) given it beat old baseline by 7.6%.
+
+---
+
+## 2026-05-16 05:40 — PR #3598 fern: Per-channel p weighting in surf_loss (2×, 4×)
+
+- Branch: `willowpai2i24h3-fern/p-weight-surf-loss`
+- Hypothesis: Upweighting pressure channel in surf_loss would improve mae_surf_p
+- W&B runs: `pi6o2vo9` (p-weight-2x), `etzwak51` (p-weight-4x)
+
+### Terminal results
+
+| Run | p_weight | val_avg/mae_surf_p | Δ vs baseline | test_avg_nansafe/mae_surf_p |
+|---|---|---:|---:|---:|
+| baseline | 1.0 | 69.8562 | — | 65.8812 |
+| arm1 | 2.0 | 77.1788 | +7.32 | 71.3864 |
+| arm2 | 4.0 | 79.9448 | +10.09 | 73.9686 |
+
+All THREE channels (Ux, Uy, p) degraded monotonically with p_weight increase. Monotonic dose-response confirms causality. Cruise-only split showed minor gain (50.80→49.72) but overwhelmed by losses on other splits.
+
+### Analysis
+
+- Hypothesis falsified: z-scoring already gives p a balanced gradient share in surf_loss
+- Upweighting p disrupts shared encoder representation — not a tradeoff, a pure regression
+- vol_loss p imbalance remains unexplored (vol p MAE = 60-100 vs Ux/Uy = 1-4 in normalized space)
+
+### Advisor action
+
+- **Closed (#3598)** — dead end. Next: test vol_loss p-weight (fern's own suggestion, assigned as #3747).
+
+---
+
+## 2026-05-16 05:30 — PR #3592 nezuko: Deeper Transolver (L=7, H=160)
+
+- Branch: `willowpai2i24h3-nezuko/deeper-model`
+- Hypothesis: More capacity (L=7 or H=160) would improve metrics given 63 GB VRAM headroom
+- W&B runs: `6jqqvzgg` (L=7), `ese2fcr2` (H=160)
+
+### Terminal results
+
+| Run | Config | s/epoch | Epochs | val_avg/mae_surf_p | test_avg_nansafe |
+|---|---|---|---|---:|---:|
+| baseline | L=5 H=128 | 98 | 19 | 69.8562 | 65.8812 |
+| arm1 | L=7 H=128 | 136 | 14 | 78.3060 | 72.1082 |
+| arm2 | L=5 H=160 | 110 | 17 | 70.4932 | 65.1431 |
+
+### Analysis
+
+- L=7 clearly worse: +81% epoch time → only 14 epochs. Depth/budget tradeoff is bad.
+- H=160 close: 17 epochs at 110 s/ep but T_max=50 (LR still at ~7e-5 at ep17, never reaching productive low-LR zone)
+- Both runs hit timeout as final epoch — val still descending
+- VRAM was not the constraint: 45 GB (L=7) and 38 GB (H=160) peak
+
+### Advisor action
+
+- **Closed (#3592)** — experiment confounded by T_max budget mismatch. H=160 reassigned with calibrated T_max=16 (new PR #3745 to nezuko).
+
+---
+
+## 2026-05-16 ~07:00 — PR #3641 askeladd: Batch size scaling (bs=8, bs=12)
+
+- Branch: `willowpai2i24h3-askeladd/bs-scaling`
+- Hypothesis: Larger batch size (bs=8, 12) would give cleaner Lion gradient signs using 63 GB VRAM headroom
+- W&B: bs8 found (val=86.34), bs12 never launched
+
+### Results
+
+| Config | Epochs in 30 min | val_avg/mae_surf_p | Δ vs baseline |
+|---|---|---:|---:|
+| bs=4 (baseline) | 19 | 69.8562 | — |
+| bs=8 | ~10-12 | 86.34 | +16.48 |
+
+### Analysis
+
+- Hypothesis falsified: fewer optimizer steps from larger batch dominate. bs=8 never reaches the productive low-LR region (only 10-12 epochs vs 19).
+- bs=12 was never launched — no need given bs=8 result.
+- The constraint is wall-clock epochs, not gradient noise.
+
+### Advisor action
+
+- **Closed (#3641)** — dead end. bs scaling makes things worse in a 30-min budget.
+
+---
+
+## 2026-05-16 ~07:00 — PR #3541 thorfinn: Lion lr/wd sweep (paper-recommended range)
+
+- Branch: `willowpai2i24h3-thorfinn/lion-lr-wd-sweep`
+- Hypothesis: Lion paper recommends lr=3-10× smaller and wd=3-10× larger than AdamW; test lr=3e-5/wd=3e-2 and lr=1e-5/wd=1e-1
+- W&B: all 3 runs same config (lr=3e-5, wd=3e-2), val=98.95; arm2 never launched
+
+### Results
+
+| Config | val_avg/mae_surf_p | vs baseline |
+|---|---:|---:|
+| baseline (lr=1e-4, wd=1e-2) | 69.8562 | — |
+| arm1 (lr=3e-5, wd=3e-2) | 98.95 | +29.09 |
+
+### Analysis
+
+- Diagnostic complete: lower LR is clearly worse. Paper recommendation does not apply to this task.
+- Sweep diversity collapsed: student ran arm1 three times instead of arm1 + arm2.
+- The new SOTA at lr=1e-4 (65.74) already demonstrates lr=1e-4 >> paper-recommended range.
+
+### Advisor action
+
+- **Closed (#3541)** — dead end and obsolete. Assigned wd sweep on current SOTA stack (new PR #3751 to thorfinn).
