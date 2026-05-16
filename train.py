@@ -19,11 +19,13 @@ from __future__ import annotations
 
 import copy
 import os
+import random
 import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -426,8 +428,6 @@ MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
 if cfg.seed != 0:
-    import random
-    import numpy as np
     torch.manual_seed(cfg.seed)
     torch.cuda.manual_seed_all(cfg.seed)
     np.random.seed(cfg.seed)
