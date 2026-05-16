@@ -445,6 +445,7 @@ class Config:
     loss_type: str = "l1"  # mse | l1 | huber — l1 won 12.9% over huber, locking it in
     num_freq: int = 4  # Fourier positional-encoding frequencies (Tancik 2020); 4 won vs 8
     coord_noise_std: float = 0.01  # Gaussian noise std on normalized (x,z) coords during training
+    eta_min: float = 0.0  # cosine annealing floor LR (0 = decay to zero)
 
 
 cfg = sp.parse(Config)
@@ -494,11 +495,13 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 
 warmup_epochs = 2
+eta_min_ratio = cfg.eta_min / cfg.lr if cfg.lr > 0 else 0.0
 def lr_lambda(epoch):
     if epoch < warmup_epochs:
         return 0.1 + 0.9 * (epoch + 1) / warmup_epochs  # 0.1 -> 1.0 over warmup
     progress = (epoch - warmup_epochs) / max(MAX_EPOCHS - warmup_epochs, 1)
-    return 0.5 * (1 + math.cos(math.pi * progress))  # cosine to 0 after warmup
+    cosine = 0.5 * (1 + math.cos(math.pi * progress))  # 1.0 -> 0.0 over post-warmup
+    return eta_min_ratio + (1.0 - eta_min_ratio) * cosine  # floor at eta_min/lr
 scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
 GRAD_CLIP_MAX_NORM = 1.0
