@@ -402,6 +402,7 @@ class Config:
     huber_delta_p: float = 0.25   # Huber delta for pressure channel p (per-channel)
     cond_dim: int = 11         # FiLM conditioning dim; 0 disables FiLM
     clip_grad_norm: float = 0.0  # Gradient clip max_norm; 0 disables
+    clip_grad_value: float = 0.0  # Element-wise gradient clip (per-parameter |g| <= clip_value); 0 disables
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -520,6 +521,14 @@ for epoch in range(MAX_EPOCHS):
                 model.parameters(), max_norm=cfg.clip_grad_norm
             )
             epoch_grad_norm_pre += float(pre_clip_norm)
+        elif cfg.clip_grad_value > 0:
+            # Element-wise clip: bounds each parameter gradient component independently
+            # Track pre-clip global norm for diagnostics (before in-place clip)
+            pre_clip_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), max_norm=float("inf")  # just compute norm, no clipping
+            )
+            epoch_grad_norm_pre += float(pre_clip_norm)
+            torch.nn.utils.clip_grad_value_(model.parameters(), clip_value=cfg.clip_grad_value)
         optimizer.step()
 
         epoch_vol += vol_loss.item()
@@ -562,6 +571,7 @@ for epoch in range(MAX_EPOCHS):
         "train/surf_loss": epoch_surf,
         "train/grad_norm_pre_clip": epoch_grad_norm_pre,
         "clip_grad_norm": cfg.clip_grad_norm,
+        "clip_grad_value": cfg.clip_grad_value,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
