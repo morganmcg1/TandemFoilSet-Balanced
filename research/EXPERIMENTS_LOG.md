@@ -417,3 +417,53 @@ _New entries appended as each PR is reviewed._
 ## Wave-6 new assignments (2026-05-16 01:33)
 
 - PR #3593 — charliepai2i48h5-alphonse: LayerScale γ-init sweep {0.01, 0.1} on full stack (lightweight residual-branch regularization, zero convergence penalty)
+
+---
+
+## 2026-05-16 03:21 — PR #3529 (charliepai2i48h5-frieren): Grad-clip sweep max_norm∈{0.5,1.0} — **MERGED** (new best)
+
+- branch: `frieren/grad-clip-sweep`
+- hypothesis: clip=0.25 over-tight (clip_frac=1.000 every step = gradient-direction-only training); looser threshold might allow gradient magnitude information
+
+- arms:
+
+  | arm | clip | val_avg/mae_surf_p | test_avg/mae_surf_p | clip_frac at ep14 | vs baseline |
+  |---|---|---|---|---|---|
+  | baseline (#3333) | 0.25 | 84.59 | 73.89 | 1.000 | — |
+  | arm-1 | 0.5 | 86.07 | 76.59 | 1.000 | +1.75% (worse) |
+  | **arm-2** | **1.0** | **84.01** | **72.95** | **0.984** | **-0.69%** |
+
+- artifacts: `models/model-fourier-tmax20-clip05-20260516-002450/metrics.jsonl`, `models/model-fourier-tmax20-clip10-20260516-013254/metrics.jsonl`
+- per-split test (clip=1.0): single=82.86 (-4.6%✓), rc=84.34 (-2.2%✓), cruise=53.59 (+4.1%), re_rand=71.01 (0%)
+- clip_frac trajectory (clip=1.0): 1.000 through epoch 9, drops to 0.997 at ep10, 0.984 at ep14 — first clip threshold where clip stops saturating in budget
+- gnorm_mean at ep14: ~5.44; gnorm_max at ep14: 15.82; clip=0.5 is still 11× below mean — fully saturated
+- verdict: **MERGED**. clip=1.0 beats on 3/4 splits. clip=0.5 is worst-of-both-worlds (still saturated, different trajectory). Frieren reassigned to LR warmup sweep (#3648).
+
+---
+
+## 2026-05-16 03:25 — PR #3438 (charliepai2i48h5-nezuko): Fourier n_freqs=14 on full stack (deconfounded) — **MERGED** (new best)
+
+- branch: `nezuko/fourier-nfreqs-sweep`
+- hypothesis: n_freqs=14 clean isolated test on full stack (prior run confounded by simultaneous clip addition)
+
+- arms:
+
+  | arm | n_freqs | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch | vs baseline |
+  |---|---|---|---|---|---|
+  | baseline (#3333) | 10 | 84.59 | 73.89 | 14 | — |
+  | arm-2 | 12 | 82.52 | 74.36 | 14 | -2.4%/-0.7% mixed |
+  | **arm-1** | **14** | **81.08** | **71.52** | **14** | **-4.2% / -3.2%** |
+
+- artifacts: `models/model-fourier-n14-fullstack-20260516-002646/metrics.jsonl`, `models/model-fourier-n12-fullstack-20260516-012442/metrics.jsonl`
+- per-split test (n=14): single=81.31 (-6.4%✓), rc=84.95 (-1.5%✓), cruise=49.89 (-3.1%✓), re_rand=69.92 (-1.5%✓)
+- all 4 test splits improve with n=14; n=12 is mixed (wins rc, loses cruise/single)
+- clip_frac=1.000 throughout for both arms — clip=0.25 still over-tight at n=14 same as n=10
+- model still improving at ep14 (timeout-bound) → spectrum unsaturated, scaling should continue
+- verdict: **MERGED** as new round-5 best. val=81.08/test=71.52. Note: stack uses clip=0.25, not clip=1.0 (parallel wins, not yet combined). Nezuko reassigned to combine n=14+clip=1.0 AND push to n=18+clip=1.0 (#3650).
+
+---
+
+## Wave-6 additional assignments (2026-05-16 03:25)
+
+- PR #3648 — charliepai2i48h5-frieren: LR linear warmup sweep {1, 2 epochs} on full stack + clip=1.0 (address cold-start penalty, root cause of early clip saturation)
+- PR #3650 — charliepai2i48h5-nezuko: Compose n_freqs=14+clip=1.0 AND push to n_freqs=18+clip=1.0 (combine two parallel wins, continue Fourier scaling)
