@@ -16,6 +16,37 @@ This file logs each reviewed PR. Newest entries at the top.
 
 ## Entries
 
+## 2026-05-16 09:30 — PR #3820: Residual learning over linear baseline (nezuko) — CLOSED
+- student: willowpai2i24h2-nezuko
+- branch: `willowpai2i24h2-nezuko/residual-linear-baseline`
+- hypothesis: residualize y with per-sample DC offset from offline Ridge fit on condition features; model predicts residual, baseline added back at eval
+- W&B run: `kuh94xyr` (single arm)
+
+| Metric | Baseline (SWA) | Arm A (SWA) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **76.6091** | 80.4049 | +3.80 (worse) |
+| `test_avg/mae_surf_p` | **68.1999** | 71.7043 | +3.50 (worse) |
+
+**Per-split (SWA val | test):** single 95.99|84.99 (+8.03|+7.42 worse), camber_rc 89.54|78.95 (flat | −1.50 better), camber_cruise 59.46|52.66 (+3.87|+4.74 worse), re_rand 76.63|70.22 (+3.15|+3.36 worse).
+
+**Critical diagnostic table from student** (the load-bearing artifact for this idea family):
+
+| Channel | Per-sample R² | Node-level variance reduction |
+|---|---|---|
+| Ux | 0.93 | 47.1% |
+| Uy | 0.39 | 0.2% |
+| **p** | **0.5265** | **3.7%** |
+
+**Mechanism collapse (student's analysis):** Per-sample DC R² of 0.53 looks promising but is computed on per-sample-mean p, which only carries ~7% of total node-level p variance. Surface pressure variance is dominated by *intra-sample* structure (geometry, boundary layer, wake interactions), not between-sample DC level. Subtracting a 47% noisy DC residual to capture 3.7% of node-level variance is a net loss — the model now has to *un-subtract* the noisy baseline at inference while the loss landscape has been perturbed and FiLM-Re's per-Re signal is split.
+
+The diagnostic signature confirms this: `single_in_dist` regressed worst (+7.42 test), which is the in-distribution sanity-check split. A generalisation failure would show OOD regression instead; this is the "noisy DC offset" pattern.
+
+**Decision:** CLOSED. Idea 2 closed in the per-sample-DC form. The panel-method per-node baseline variant (which the original PR explicitly deferred for complexity) remains plausibly viable for future cycles — that's the variant that would target intra-sample variance which is where the actual y variance lives.
+
+**Reassignment:** nezuko → PR #3856 (multiscale mesh pooling staged probe — Idea 5, last unexplored cycle-15 idea family). Uses saf feature to identify near-foil vs background zones; subsamples background tokens. Probe answers: does explicit background subsampling help, or has the slice mechanism already collapsed background efficiently?
+
+---
+
 ## 2026-05-16 08:35 — PR #3670: surf_weight sweep {5,15,20} (askeladd) — CLOSED
 - student: willowpai2i24h2-askeladd
 - branch: `willowpai2i24h2-askeladd/surf-weight-sweep-film-re`
