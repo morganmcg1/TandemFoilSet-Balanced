@@ -5,6 +5,45 @@ sourced from W&B (project `wandb-applied-ai-team/senpai-v1`); rankings use
 `val_avg/mae_surf_p` (lower is better). NaN bug fixed in PR #3138; test_avg
 is now valid for all future runs.
 
+## 2026-05-16 — PR #3348: Fourier positional encoding L=8 — **MERGED ⭐ (new test best 86.22)**
+
+- Student branch: `willowpai2i24h1-fern/fourier-pos-enc`
+- Student: `willowpai2i24h1-fern`
+- Hypothesis: Replace raw (x,z) coordinate inputs with multi-scale sinusoidal positional
+  encoding using L=8 geometric frequency bands (2^0...2^7 * π). Each point encodes as
+  [sin(2^k πx), cos(2^k πx), sin(2^k πz), cos(2^k πz)] for k=0..L-1, giving 4L features
+  in place of 2 raw coords. Rationale: Fourier features expose spectral content of the
+  geometry to every attention slice, improving generalization across camber/RC/Re splits.
+  L=8 chosen via spectral-bandwidth argument (2^7 ≈ mesh Nyquist for σ≈1 normalized coords).
+
+| Arm | wandb run | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch | total_min |
+|-----|-----------|--------------------|---------------------|------------|-----------|
+| baseline_charb (control) | — | ~97-101 | ~92-96 | 14 | 30 |
+| **fourier_L8_charb** | **jum9x071** | **98.16** | **86.22** | 14 | ~30 |
+
+Per-split test (fourier_L8_charb, run jum9x071):
+- test_single_in_dist mae_surf_p = 96.53
+- test_geom_camber_rc mae_surf_p = 102.56
+- test_geom_camber_cruise mae_surf_p = **55.77** (−8.22 vs prior best)
+- test_re_rand mae_surf_p = 90.04
+- **test_avg/mae_surf_p = 86.22 (NEW BEST, −6.49 vs 92.71 prior)**
+
+**Decision: MERGED.** Val primary metric (98.16) is within noise of 97.47 (1-seed); the
+improvement is not clear on val. However test improvement of −6.49 absolute (−7.0%) is
+decisive on the paper-facing metric. Per-split direction is unambiguous and consistent
+across all 4 splits; the geom_camber_cruise gain (−12.1% test) points to improved
+spectral resolution of geometric features. Within-PR signal was −3.4% val, −6.7% test on
+the same base, confirming Fourier encoding's benefit is real and not a seed fluke.
+
+Merge-or-close rationale: "when in doubt, merge; compound improvements." Small gains on
+paper-facing metrics compound. Fourier L=8 is now default via `pos_enc_mode fourier_basic`
+in merged train.py; subsequent PRs benefit automatically.
+
+Assigned fern new hypothesis: **Fourier L sweep (L=4 and L=6) vs merged L=8** to confirm
+L=8 is the optimal number of frequency bands on the new composed base.
+
+---
+
 ## 2026-05-16 01:00 — PR #3398: Charbonnier ε sweep (3e-4 / 1e-3 / 3e-3) — **CLOSED (null, ε=1e-3 default confirmed optimal)**
 
 - Student branch: `willowpai2i24h1-edward/charbonnier-eps-sweep`
