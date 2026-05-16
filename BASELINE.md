@@ -2,7 +2,68 @@
 
 Primary ranking metric is `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across the four validation splits). Test-time decision metric is `test_avg/mae_surf_p`. Lower is better.
 
-## 2026-05-16 00:00 — PR #3466: Bernoulli pressure residual (current best)
+## 2026-05-16 02:15 — PR #3465: Cosine schedule T_max alignment (current best)
+
+Stacks on top of PR #3466 Bernoulli residual + PR #3315 Cautious AdamW + PR #3373 bf16 + PR #3265 FiLM + PR #3337 surf-L1 + PR #3281 EMA + PR #3266 scale-invariant loss + NaN fix. Changes `CosineAnnealingLR` from `T_max=50` (default, predated bf16 epoch unlock) to `T_max=25` to match the actual training epoch budget with bf16 (~17–19 epochs). Also sets `eta_min_factor=0.10` (min LR = `0.1 × 5e-4 = 5e-5`) so the cosine curve still has gradient signal at its floor — whereas the previous default `eta_min=0` caused the LR to zero out before the run hit wall clock. **This is a pure schedule fix: the cosine curve now actually decays through a useful range within the wall-clock window instead of lingering at near-zero LR for half its scheduled life.** Mechanism is orthogonal to all 7 previously-merged axes (optimizer, precision, conditioning, loss, target reformulation, EMA averaging).
+
+> **Note on tested code state:** Validated at commit `3a3104a` — the post-Bernoulli-residual tip of the merged advisor branch. The full 8-mechanism compound result: scale-inv + EMA + surf-L1 + FiLM + bf16 + Cautious AdamW + Bernoulli residual + T_max=25/eta_min_factor=0.10. **Arm A (T_max=19, eta_min_factor=0.05)** also beats prior baseline at val_avg=80.12, confirming that any T_max alignment shorter than 50 improves — but Arm B's longer window with a maintained LR floor wins.
+
+**Primary** (Arm B: T_max=25, eta_min_factor=0.10, full merged stack)
+- `val_avg/mae_surf_p` = **75.4040** (best epoch 17 / 50, run cut by 30-min wall clock; **−12.42% vs PR #3466**, **−39.15% vs round-5 anchor PR #3266**)
+- `test_avg/mae_surf_p` = **65.8592** (**−15.04% vs PR #3466**, **−42.45% vs round-5 anchor**)
+
+**Per-split surface pressure MAE (Arm B — T_max=25, eta_min_factor=0.10)**
+
+| Split | val_mae_surf_p | test_mae_surf_p |
+|---|---:|---:|
+| single_in_dist | 84.8767 | 73.8438 |
+| geom_camber_rc | 85.9009 | 77.2500 |
+| geom_camber_cruise | 57.6499 | 46.6446 |
+| re_rand | 73.1886 | 65.6982 |
+| **avg** | **75.4040** | **65.8592** |
+
+**Per-split deltas vs PR #3466 Bernoulli baseline (86.09 val):**
+- `single_in_dist` val: 102.04 → 84.88 (−16.8%), test: 93.07 → 73.84 (−20.7%)
+- `geom_camber_rc` val: 100.12 → 85.90 (−14.2%), test: 90.18 → 77.25 (−14.3%)
+- `geom_camber_cruise` val: 62.99 → 57.65 (−8.5%), test: 52.40 → 46.64 (−11.0%)
+- `re_rand` val: 79.23 → 73.19 (−7.6%), test: 74.37 → 65.70 (−11.7%)
+All 8 cells improved — no regressions. Biggest gain on `single_in_dist` and `geom_camber_rc`.
+
+**Arm A (T_max=19, eta_min_factor=0.05):** val_avg=80.1207 (−6.95% vs #3466) — also beats prior baseline but Arm B wins.
+
+**Why Arm B won over Arm A:** T_max=19 set decay tail at exactly the wall-clock epoch count, causing LR to reach `eta_min` right at the cutoff — the last 2–3 epochs had near-zero gradient signal. T_max=25 extends the cosine curve slightly beyond the budget, so LR at epoch 17 was still 1.79e-4 (vs a near-zero for T_max=19 with `eta_min=0`). Combined with `eta_min_factor=0.10` maintaining a non-zero floor, Arm B keeps gradient signal alive at cutoff.
+
+**Cautious mask dynamics:** `train/cautious_mask_mean` flat at 0.617 across all 17 epochs — schedule realignment did not perturb the cautious gating equilibrium.
+
+**Model config (architecture unchanged; schedule-only change)**
+- Transolver — n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2; FiLM per-block conditioning
+- 829,015 raw params; EMA shadow copy at decay=0.999
+- Optimizer: CautiousAdamW lr=5e-4, wd=1e-4
+- bf16 mixed precision (peak VRAM ~35.46 GB)
+- batch_size=4, surf_weight=10.0, surf_p_l1_weight=1.0
+- **CosineAnnealingLR(T_max=25, eta_min=5e-5)** — the key change
+- Loss: per-sample scale-invariant MSE + surf_p_l1_weight=1.0 * surf_p_l1 (on Bernoulli residual target)
+
+**Metric artifacts (Arm B)**
+- `models/model-charliepai2i24h5-thorfinn-tmax25_em10-20260515-232319/metrics.jsonl`
+- `models/model-charliepai2i24h5-thorfinn-tmax25_em10-20260515-232319/metrics.yaml`
+- `models/model-charliepai2i24h5-thorfinn-tmax25_em10-20260515-232319/config.yaml`
+
+**Reproduce**
+```bash
+cd target/
+python train.py --agent charliepai2i24h5-thorfinn \
+    --experiment_name "charliepai2i24h5-thorfinn/tmax25_em10" \
+    --t_max 25 --eta_min_factor 0.10 \
+    --surf_p_l1_weight 1.0 --bernoulli_residual freestream \
+    --epochs 50
+```
+
+**Cumulative round-5 improvement:** **−39.15% val_avg** (123.88 → 75.40) and **−42.45% test_avg** (114.37 → 65.86) vs the pre-round-5 floor. **Eight compounding wins in sequence**: scale-inv → EMA → surf-L1 → FiLM → bf16 → Cautious AdamW → Bernoulli residual → T_max schedule alignment.
+
+---
+
+## 2026-05-16 00:00 — PR #3466: Bernoulli pressure residual (previous best)
 
 Stacks on top of PR #3315 Cautious AdamW + PR #3373 bf16 + PR #3265 FiLM + PR #3337 surf-L1 + PR #3281 EMA + PR #3266 scale-invariant loss + NaN fix. Reformulates the prediction target: instead of predicting raw `p`, predict the **viscous residual** `p − p_B` where `p_B = 0.5 · V_∞²` is the free-stream Bernoulli reference (per-sample scalar, `V_∞ = exp(log_Re) · 1.5e-5` m/s using the kinematic viscosity of air and L=1m chord). At inference, the model output is added back to the per-sample `p_B` to recover physical pressure. The student's empirical pre-pass confirmed the target std *increases* 1.71× under this transformation (raw p_std=679 → residual_std=1160), counter to the original "removes dynamic range" intuition; the win comes from a different mechanism — removing the analytic `V_∞²/2` component lets the network spend all its capacity on the spatial structure (viscous BL, separation, vortex shedding) rather than on first re-learning the freestream constant.
 
