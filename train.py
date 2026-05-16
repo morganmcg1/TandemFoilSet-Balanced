@@ -457,6 +457,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    n_layers: int = 5
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -517,7 +518,7 @@ model_config = dict(
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=128,
-    n_layers=5,
+    n_layers=cfg.n_layers,
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
@@ -529,7 +530,9 @@ model_config = dict(
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
+n_params_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+print(f"n_layers={cfg.n_layers}, total params={n_params:,} (trainable={n_params_trainable:,})")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 if cfg.use_onecycle:
