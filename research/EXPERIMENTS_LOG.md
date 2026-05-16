@@ -909,3 +909,48 @@ The R4 Δ of −0.10% sits squarely in the tie band AND the test direction rever
 - Fourier code in branch is preserved as template for future positional-feature experiments (SDF, etc.)
 - Fourier-as-default is off the table for this track
 
+
+---
+
+## 2026-05-16 07:35 — PR #3365 [CLOSED]: Bigger batch size (bs=6/8) on bf16
+
+- **Student branch:** `charliepai2i48h4-askeladd/bf16-bigger-batch`
+- **Hypothesis:** bf16 freed 9.2 GB VRAM → enables bs=6 or bs=8. Larger batch → cleaner gradients → better cosine-schedule annealing → lower MAE.
+- **Stack:** bf16-only (pre-EMA, pre-FiLM, pre-cosine; note: older stack)
+
+### Results
+
+| Arm | `batch_size` | epochs | sec/epoch | peak VRAM | `val_avg/mae_surf_p` | best epoch | `test_avg/mae_surf_p` |
+|-----|-------------|--------|-----------|-----------|----------------------|-----------|----------------------|
+| A (baseline) | 4 | 19 | 98.1 s | 32.95 GB | **95.69** | 18 | **97.18** |
+| B (bs=6) | 6 | 18 | 102.4 s | 49.40 GB | 101.37 | 17 | 98.39 |
+| C (bs=8) | 8 | 18 | 104.5 s | 65.86 GB | 114.49 | 14 | 115.38 |
+
+| Split | Arm A (bs=4) | Arm B (bs=6) | Arm C (bs=8) |
+|-------|---:|---:|---:|
+| `test_single_in_dist` | 112.40 | 107.60 | 132.33 |
+| `test_geom_camber_rc` | 93.73 | 95.56 | 113.62 |
+| `test_re_rand` | 85.43 | 92.01 | 100.18 |
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-askeladd-bf16-bs-baseline-20260516-052349/metrics.jsonl`
+- `models/model-charliepai2i48h4-askeladd-bs-6-bf16-20260516-062911/metrics.jsonl`
+- `models/model-charliepai2i48h4-askeladd-bs-8-bf16-20260516-033344/metrics.jsonl`
+
+### Analysis & conclusions
+
+**Hypothesis falsified: bs=4 < bs=6 < bs=8 monotonically (larger batch = worse MAE under iso-wall-clock).**
+
+Mechanism: GPU is **compute-bound at bs=4**, not memory-bound or dataloader-bound. sec/epoch barely changes (98→102→104 s for 2× batch). So bigger batches only reduce SGD steps per wall-clock (7100→4500→3400), with no compensating per-step quality gain (LR not scaled with batch). The pre-body "doubling batch ≡ √2 LR" argument assumed iso-step count; it inverts under iso-wall-clock.
+
+The bf16-freed VRAM is available but not usable profitably via batch scaling without matching LR scaling.
+
+**Important note on stack staleness:** This experiment ran on bf16-only (baseline 101.519 from PR #3290). Current track best is 89.784 (two-shot FiLM full stack). The batch-size axis would need retesting on the full stack to be actionable, but the mechanism (GPU compute-bound) is stack-independent.
+
+**Seed variance observation:** Arm A (95.69) materially outperformed the prior-merge bf16 baseline (101.519) — same config, different seeds. Cross-commit variance ±5-6 MAE on bf16-only. Within-session paired Δs (A vs B vs C) are still trustworthy.
+
+### Decision: CLOSED (hypothesis falsified, monotonic regression)
+
+---
+

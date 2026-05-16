@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 05:35 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-16 07:40 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
 
@@ -18,6 +18,7 @@ Key in-flight composition tests:
 - **Three-shot FiLM (frieren #3681):** preprocess injection as third FiLM site, assigned, expected −1-3%.
 - **Slice-num sweep (edward #3684):** test slice_num=32/64/96 on full stack; just assigned.
 - **n_layers=4 (fern #3758):** depth axis ablation; 4 layers faster per epoch → more fine-tune epochs in 30-min budget. Motivated by edward #3595 depth-vs-epochs finding.
+- **SDF input features (askeladd #3777):** per-node signed distance to nearest surface as explicit geometric input. Motivated by Fourier R4 residual signal on multi-foil geometry splits. Orthogonal to FiLM.
 
 **LR axis closed:** 5e-4 is optimal for bf16+T_max=15.
 **n_layers axis:** n_layers=6 regresses (+2.47%, #3595). n_layers=4 now in test (#3758). n_layers=5 remains current best.
@@ -46,13 +47,14 @@ Key in-flight composition tests:
 | #3443 | lr ∈ {2.5e-4, 3.5e-4} on bf16+T_max=15 | +0.78-2.60% regression | LR axis closed: 5e-4 is magnitude optimum |
 | #3595 | n_layers=6 vs 5 on full FiLM stack | +2.47% regression | Depth costs wall-clock epochs; 6 layers net-negative under 30-min budget |
 | #3117 | Fourier scale=2 (R2-R4) | −0.10% at R4 (tie) | FiLM absorbed Fourier's spatial-frequency signal; test direction +0.86% |
+| #3365 | batch_size=6/8 on bf16 | bs=4 best (monotonic regression) | GPU compute-bound; bigger batch cuts SGD steps without reducing sec/epoch |
 
 ## Active experiments
 
 | Student | PR | Hypothesis | Stack | Status |
 |---------|----|-----------|----|----|
 | thorfinn | #3390 | bf16+T_max=15/20 compose verify | bf16+T_max | Stale_wip — training |
-| askeladd | #3365 | batch_size=6/8 on bf16 | bf16 | Stale_wip — training |
+| askeladd | #3777 | SDF input features — distance-to-surface | bf16+T_max=15+EMA+2xFiLM | Just assigned |
 | tanjiro | #3511 | grad_clip=1.0 on two-shot FiLM stack (rebase) | bf16+T_max+EMA+2xFiLM | Sent back to rebase |
 | nezuko | #3492 | n_hidden=192 vs 128 | bf16+T_max=15+EMA | Stale_wip — training |
 | alphonse | #3594 | Schedule-Free AdamW (R2 on two-shot FiLM, post −20.75% R1) | bf16+T_max=15+EMA+2xFiLM | Sent back for verify+rebase |
@@ -68,7 +70,7 @@ Key in-flight composition tests:
 4. **n_layers=4 (fern #3758):** Faster epochs → more fine-tune at lr≈0. Depth axis closing.
 5. **Slice-num sweep (edward #3684):** Richer attention modes (96) vs faster fine-tune (32). Unknown direction.
 6. **Model width (nezuko #3492):** n_hidden=192 on EMA stack (pre-FiLM); confirms if width is bottleneck.
-7. **Batch size (askeladd #3365):** bs=6/8; if wins, compose with full stack.
+7. **SDF input features (askeladd #3777):** per-node distance-to-surface; expected −1-3% on geom_camber splits specifically.
 
 ## LR axis (closed)
 
@@ -87,6 +89,7 @@ Fourier features subsumed by FiLM. The spatial-frequency signal FiLM provides vi
 ## Potential next hypotheses (not yet assigned)
 
 1. **Per-block independent FiLM** — give each of the 5 blocks its own conditioner instead of shared; more expressive, ~5K more params/block. Three-shot FiLM result may inform priority.
+2a. **Batch size + LR scaling** — askeladd #3365 falsified flat-LR bigger batch. LR-scaled retry (lr × sqrt(B/4)) could still win; defer until SDF result is in.
 2. **Lion optimizer** — gradient-sign updates directly; tanjiro's finding suggests normalized GD helps, Lion is the extreme case. SF-AdamW result may make this redundant.
 3. **Sobolev loss** — gradient supervision near surface (dU/dx, dp/dx). Physically motivated, untested. Complex to implement.
 4. **SDF input features** — signed distance to surface. Orthogonal to FiLM. May help geometry-variant splits (geom_camber splits benefited from Fourier at half-magnitude).
