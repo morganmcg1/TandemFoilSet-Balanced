@@ -678,3 +678,73 @@ python train.py \
 # surf_weight=10
 ```
 
+
+---
+
+## 2026-05-16 21:18 — PR #4038: SF-AdamW LR sweep — NEW BEST (replaces Lion)
+
+**val_avg/mae_surf_p: 54.769** (Δ −13.5% vs just-merged Lion baseline 63.336; Δ −16.5% vs SF-AdamW 65.618)
+
+SF-AdamW + lr=2e-3 is now the canonical stack, replacing Lion+cosine. The default lr=5e-4 was inherited from AdamW and was critically mistuned for SF's constant-LR regime — 4× higher LR (2e-3) wins decisively. 
+
+### Val surface pressure MAE (lower is better)
+
+| Split | val/mae_surf_p |
+|---|---:|
+| `val_single_in_dist`      | 60.429 |
+| `val_geom_camber_rc`      | 68.478 |
+| `val_geom_camber_cruise`  | 34.597 |
+| `val_re_rand`             | 55.572 |
+| **val_avg**               | **54.769** |
+
+### Test surface pressure MAE (3 finite splits; cruise NaN pre-existing)
+
+| Split | test/mae_surf_p |
+|---|---:|
+| `test_single_in_dist`   | 52.496 |
+| `test_geom_camber_rc`   | 63.210 |
+| `test_re_rand`          | 44.914 |
+| `test_avg (3 finite)` | **53.540** |
+
+### Paired sweep summary
+
+| Arm | lr | val_avg | Δ vs A | Test Δ |
+|---|---:|---:|---:|---:|
+| A (control) | 5e-4 | 62.958 | — | — |
+| B | 1e-3 | 58.424 | −7.20% | −8.31% |
+| **C (winner)** | **2e-3** | **54.769** | **−13.01%** | **−12.57%** |
+| D | 5e-3 | 55.951 | −11.13% | −12.09% |
+
+Non-monotone: C wins, D is second. All arms beat control. C wins on every single val and test split.
+
+### Metric artifacts
+
+- Winner (lr=2e-3): `models/model-charliepai2i48h4-askeladd-sf-lr-r1-armc-lr2e-3-20260516-180222/metrics.jsonl`
+- Control (lr=5e-4): `models/model-charliepai2i48h4-askeladd-sf-lr-r1-arma-lr5e-4-20260516-192309/metrics.jsonl`
+
+### Reproduce
+
+```bash
+cd target/
+python train.py \
+  --amp_dtype bf16 \
+  --use_ema --ema_decay 0.999 \
+  --film_cond --two_shot_film \
+  --grad_clip_norm 1.0 \
+  --use_schedule_free --lr 2e-3
+```
+
+### Current best config (carry forward to all new experiments)
+
+```python
+# Loss: Huber (smooth_l1_loss, beta=1.0)
+# AMP: --amp_dtype bf16
+# Scheduler: NONE (--use_schedule_free replaces cosine)
+# EMA: --use_ema --ema_decay 0.999
+# FiLM: --film_cond --two_shot_film
+# Optimizer: SF-AdamW lr=2e-3, weight_decay=1e-4, warmup_steps=500, betas=(0.9,0.999)
+# Gradient clip: --grad_clip_norm 1.0
+# Model: n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2
+# surf_weight=10
+```
+
