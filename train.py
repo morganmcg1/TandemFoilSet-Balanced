@@ -256,6 +256,13 @@ class Lookahead(torch.optim.Optimizer):
         self.step_count = 0
         self.last_sync_diff_norm: float | None = None
         self.slow_state = {}
+        # Fast weights captured at each sync, right before being blended into slow.
+        # Used to surface a meaningful "fast arm" when every epoch ends on a sync
+        # (otherwise p.data at end-of-epoch == slow and the distinction collapses).
+        self.last_fast_state: dict = {}
+        # Running mean of slow_state snapshots taken via ``update_swa``.
+        self.swa_slow_state: dict = {}
+        self.swa_count = 0
         for group in base_optimizer.param_groups:
             for p in group["params"]:
                 self.slow_state[p] = p.data.clone().detach()
@@ -276,6 +283,10 @@ class Lookahead(torch.optim.Optimizer):
             for group in self.base.param_groups:
                 for p in group["params"]:
                     slow = self.slow_state[p]
+                    if p in self.last_fast_state:
+                        self.last_fast_state[p].copy_(p.data)
+                    else:
+                        self.last_fast_state[p] = p.data.clone()
                     diff = p.data - slow
                     s = diff.pow(2).sum()
                     sq_sum = s if sq_sum is None else sq_sum + s
@@ -284,6 +295,21 @@ class Lookahead(torch.optim.Optimizer):
             if sq_sum is not None:
                 self.last_sync_diff_norm = float(sq_sum.sqrt().item())
         return loss
+
+    @torch.no_grad()
+    def update_swa(self) -> None:
+        """Accumulate the current ``slow_state`` into the running mean ``swa_slow_state``.
+
+        Call once per snapshot epoch. After ``n`` calls, ``swa_slow_state`` is
+        the equal-weight average of the last ``n`` slow-weight snapshots.
+        """
+        k = self.swa_count
+        for p, slow in self.slow_state.items():
+            if p not in self.swa_slow_state:
+                self.swa_slow_state[p] = torch.zeros_like(slow)
+            sws = self.swa_slow_state[p]
+            sws.mul_(k / (k + 1)).add_(slow, alpha=1.0 / (k + 1))
+        self.swa_count += 1
 
 
 class Transolver(nn.Module):
@@ -523,6 +549,8 @@ class Config:
     use_geglu: bool = False
     lookahead_k: int = 5
     lookahead_alpha: float = 0.5
+    cosine_t_max: int = 17
+    lookahead_swa_tail: int = 4  # SWA window: average slow_state over the last N epochs
 
 
 cfg = sp.parse(Config)
@@ -584,7 +612,8 @@ base_optimizer = torch.optim.AdamW(
     model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.95)
 )
 optimizer = Lookahead(base_optimizer, k=cfg.lookahead_k, alpha=cfg.lookahead_alpha)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(base_optimizer, T_max=17)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(base_optimizer, T_max=cfg.cosine_t_max)
+SWA_WINDOW_START = cfg.cosine_t_max - cfg.lookahead_swa_tail  # zero-indexed first epoch in window
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -621,6 +650,7 @@ with open(model_dir / "config.yaml", "w") as f:
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 global_step = 0
+epochs_completed = 0
 train_start = time.time()
 
 # Wiring sanity: confirm AdamW betas reached every param group.
@@ -629,9 +659,11 @@ print(f"AdamW betas per group: {_betas_per_group}")
 print(f"Lookahead wrap: k={cfg.lookahead_k}, alpha={cfg.lookahead_alpha}")
 run.summary["optim/betas"] = list(_betas_per_group[0])
 run.summary["optim/n_param_groups"] = len(_betas_per_group)
-run.summary["optimizer"] = "lookahead-adamw"
+run.summary["optimizer"] = f"lookahead-adamw + swa-slow-tail{cfg.lookahead_swa_tail}"
 run.summary["lookahead_k"] = cfg.lookahead_k
 run.summary["lookahead_alpha"] = cfg.lookahead_alpha
+run.summary["n_swa_tail"] = cfg.lookahead_swa_tail
+run.summary["cosine_t_max"] = cfg.cosine_t_max
 
 # Rolling buffer for per-step train losses to compute volatility (window=100).
 _train_loss_window: deque[float] = deque(maxlen=100)
@@ -751,16 +783,52 @@ for epoch in range(MAX_EPOCHS):
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
-total_time = (time.time() - train_start) / 60.0
-print(f"\nTraining done in {total_time:.1f} min")
+    # SWA-of-slow tail snapshot. The val above already used p.data, which after
+    # the last train step of the epoch equals slow_state whenever the step
+    # count is a multiple of k. With 1499 train samples / batch=4 = 375 steps
+    # per epoch and k=5, the alignment holds and avg_surf_p IS the slow-state
+    # val. We record it explicitly under slow_state/* keys for the diagnostic.
+    if epoch >= SWA_WINDOW_START:
+        optimizer.update_swa()
+        snap_idx = optimizer.swa_count - 1
+        sync_aligned = (global_step % cfg.lookahead_k) == 0
+        wandb.summary[f"slow_state/epoch{epoch+1}/val_avg/mae_surf_p"] = avg_surf_p
+        wandb.summary[f"slow_state/epoch{epoch+1}/sync_aligned"] = sync_aligned
+        wandb.log({
+            "swa_slow/snapshot_idx": snap_idx,
+            "swa_slow/epoch_collected": epoch + 1,
+            "swa_slow/sync_aligned": int(sync_aligned),
+            "global_step": global_step,
+        })
+        print(
+            f"    [SWA snapshot {snap_idx}/{cfg.lookahead_swa_tail - 1}]"
+            f" slow_val_avg/mae_surf_p={avg_surf_p:.4f}"
+            f" sync_aligned={sync_aligned} global_step={global_step}"
+        )
+    epochs_completed = epoch + 1
 
-# --- Test evaluation + artifact upload ---
+total_time = (time.time() - train_start) / 60.0
+print(f"\nTraining done in {total_time:.1f} min ({epochs_completed} epochs completed)")
+wandb.summary["epochs_completed"] = epochs_completed
+wandb.summary["total_train_minutes"] = total_time
+
+# Pre-load test splits once for both best-val and 3-arm eval below.
+test_datasets = None
+test_loaders = None
+if not cfg.skip_test:
+    print("\nLoading test splits...")
+    test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
+    test_loaders = {
+        name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+        for name, ds in test_datasets.items()
+    }
+
+# --- Existing best-val test eval + artifact upload (preserved for continuity) ---
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
     wandb.summary.update({
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
-        "total_train_minutes": total_time,
     })
 
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
@@ -769,18 +837,13 @@ if best_metrics:
     test_metrics = None
     test_avg = None
     if not cfg.skip_test:
-        print("\nEvaluating on held-out test splits...")
-        test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
-        test_loaders = {
-            name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
-            for name, ds in test_datasets.items()
-        }
+        print("\nEvaluating best-val checkpoint on held-out test splits...")
         test_metrics = {
             name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
-        print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
+        print(f"\n  TEST (best-val ckpt)  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
         for name in TEST_SPLIT_NAMES:
             print_split_metrics(name, test_metrics[name])
 
@@ -806,6 +869,137 @@ if best_metrics:
         model_config=model_config,
     )
 else:
-    print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping artifact upload.")
+    print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping best-val artifact upload.")
+
+
+# --- 3-arm evaluation at final epoch: fast / slow / swa_slow ---
+print(
+    f"\n=== 3-arm evaluation at epoch {epochs_completed}"
+    f" (lookahead_fast / lookahead_slow / swa_slow_tail{optimizer.swa_count}) ==="
+)
+
+arm_specs = []
+if optimizer.last_fast_state:
+    arm_specs.append((
+        f"lookahead_fast_epoch{epochs_completed}",
+        optimizer.last_fast_state,
+        "fast trajectory captured right before final Lookahead sync",
+    ))
+arm_specs.append((
+    f"lookahead_slow_epoch{epochs_completed}",
+    optimizer.slow_state,
+    "slow trajectory (blended with α=0.5 at each sync)",
+))
+if optimizer.swa_count > 0:
+    arm_specs.append((
+        f"swa_slow_tail{optimizer.swa_count}",
+        optimizer.swa_slow_state,
+        f"running mean of slow_state over last {optimizer.swa_count} epochs",
+    ))
+
+arm_results: dict[str, dict] = {}
+for arm_name, params_dict, desc in arm_specs:
+    print(f"\n  [{arm_name}] {desc}")
+
+    with torch.no_grad():
+        for p in model.parameters():
+            p.data.copy_(params_dict[p])
+    model.eval()
+
+    arm_val_metrics = {
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        for name, loader in val_loaders.items()
+    }
+    arm_val_avg = aggregate_splits(arm_val_metrics)
+    arm_val_avg_p = arm_val_avg["avg/mae_surf_p"]
+    print(f"    val_avg/mae_surf_p = {arm_val_avg_p:.4f}")
+    for name in VAL_SPLIT_NAMES:
+        print_split_metrics(name, arm_val_metrics[name])
+
+    arm_test_metrics = None
+    arm_test_avg = None
+    if not cfg.skip_test:
+        arm_test_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            for name, loader in test_loaders.items()
+        }
+        arm_test_avg = aggregate_splits(arm_test_metrics)
+        print(f"    test_avg/mae_surf_p = {arm_test_avg['avg/mae_surf_p']:.4f}")
+        for name in TEST_SPLIT_NAMES:
+            print_split_metrics(name, arm_test_metrics[name])
+
+    arm_results[arm_name] = {
+        "val_metrics": arm_val_metrics,
+        "val_avg": arm_val_avg,
+        "test_metrics": arm_test_metrics,
+        "test_avg": arm_test_avg,
+    }
+
+    wandb.summary[f"{arm_name}/val_avg/mae_surf_p"] = arm_val_avg_p
+    for split_name, m in arm_val_metrics.items():
+        for k, v in m.items():
+            wandb.summary[f"{arm_name}/{split_name}/{k}"] = v
+    if arm_test_avg is not None:
+        wandb.summary[f"{arm_name}/test_avg/mae_surf_p"] = arm_test_avg["avg/mae_surf_p"]
+        for split_name, m in arm_test_metrics.items():
+            for k, v in m.items():
+                wandb.summary[f"{arm_name}/{split_name}/{k}"] = v
+
+
+# --- Save SWA-of-slow as its own model artifact (so it can be merged if it wins) ---
+if optimizer.swa_count > 0:
+    print("\nSaving swa-slow-tail checkpoint as separate model artifact...")
+    swa_arm_name = f"swa_slow_tail{optimizer.swa_count}"
+    swa_path = model_dir / "checkpoint_swa_slow.pt"
+
+    with torch.no_grad():
+        for p in model.parameters():
+            p.data.copy_(optimizer.swa_slow_state[p])
+    torch.save(model.state_dict(), swa_path)
+
+    swa_val_avg_p = arm_results[swa_arm_name]["val_avg"]["avg/mae_surf_p"]
+    swa_test_avg = arm_results[swa_arm_name]["test_avg"]
+    swa_metadata: dict = {
+        "arm": swa_arm_name,
+        "swa_count": optimizer.swa_count,
+        "lookahead_swa_tail": cfg.lookahead_swa_tail,
+        "lookahead_k": cfg.lookahead_k,
+        "lookahead_alpha": cfg.lookahead_alpha,
+        "cosine_t_max": cfg.cosine_t_max,
+        "epochs_completed": epochs_completed,
+        "val_avg/mae_surf_p": swa_val_avg_p,
+        "git_commit": _git_commit_short(),
+        "n_params": n_params,
+        "model_config": model_config,
+        "run_id": run.id,
+        "run_name": run.name,
+        "agent": cfg.agent,
+    }
+    if swa_test_avg is not None:
+        swa_metadata["test_avg/mae_surf_p"] = swa_test_avg["avg/mae_surf_p"]
+        for split_name, m in arm_results[swa_arm_name]["test_metrics"].items():
+            swa_metadata[f"test/{split_name}/mae_surf_p"] = m["mae_surf_p"]
+
+    if cfg.wandb_name:
+        artifact_base = _sanitize_artifact_token(cfg.wandb_name)
+    elif cfg.agent:
+        artifact_base = _sanitize_artifact_token(cfg.agent)
+    else:
+        artifact_base = "tandemfoil"
+    swa_artifact = wandb.Artifact(
+        name=f"model-{artifact_base}-{run.id}-swa-slow",
+        type="model",
+        description=(
+            f"SWA running-mean of Lookahead slow weights over last "
+            f"{optimizer.swa_count} epochs — val_avg/mae_surf_p={swa_val_avg_p:.4f}"
+        ),
+        metadata=swa_metadata,
+    )
+    swa_artifact.add_file(str(swa_path), name="checkpoint.pt")
+    config_yaml = model_dir / "config.yaml"
+    if config_yaml.exists():
+        swa_artifact.add_file(str(config_yaml), name="config.yaml")
+    run.log_artifact(swa_artifact, aliases=[swa_arm_name, "swa-slow"])
+    print(f"Logged artifact for {swa_arm_name} (val_avg/mae_surf_p={swa_val_avg_p:.4f})")
 
 wandb.finish()
