@@ -583,6 +583,10 @@ class Config:
     # the variable padded mesh size (74K-242K nodes) without recompilation.
     torch_compile: bool = False
     torch_compile_mode: str = "default"  # default | reduce-overhead | max-autotune
+    # Transolver PhysicsAttention slice_num — number of soft "physics regions"
+    # spatial tokens are projected to before slice-level attention. 64 is the
+    # merged-stack default; PR #3739 sweeps 96, 128.
+    slice_num: int = 64
 
 
 cfg = sp.parse(Config)
@@ -667,7 +671,7 @@ model_config = dict(
     n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=64,
+    slice_num=cfg.slice_num,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
