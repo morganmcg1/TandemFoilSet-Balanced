@@ -253,19 +253,41 @@ class Transolver(nn.Module):
 
 
 class TransolverFiLM(Transolver):
-    """Transolver with single-point FiLM conditioning on log(Re) (dim 13)."""
+    """Transolver with FiLM conditioning on log(Re) (dim 13).
 
-    def __init__(self, *args, film_mid: int = 64, **kwargs):
+    Block-0-input gate (``self.film``) modulates the hidden state once at
+    depth=0. Per-block gates (``self.film_per_block``) modulate the hidden
+    state after each non-final Transolver block. The final block's output
+    is in prediction space [B, N, out_dim] (not hidden space), so it is
+    not gated. All FiLM heads zero-init → training starts identical to the
+    unmodulated baseline.
+    """
+
+    def __init__(self, *args, film_mid: int = 64, film_pre_block: bool = False, **kwargs):
         super().__init__(*args, **kwargs)
         self.film = FiLM(cond_dim=1, hidden_dim=self.n_hidden, mid_dim=film_mid)
+        self.film_pre_block = film_pre_block
+        # Pre-block: 5 heads gating hidden state before each block (all in [B,N,n_hidden]).
+        # Post-block: 4 heads gating block 0..3 outputs (block 4 is in prediction space).
+        n_film_heads = len(self.blocks) if film_pre_block else len(self.blocks) - 1
+        self.film_per_block = nn.ModuleList([
+            FiLM(cond_dim=1, hidden_dim=self.n_hidden, mid_dim=film_mid)
+            for _ in range(n_film_heads)
+        ])
 
     def forward(self, data, **kwargs):
         x = data["x"]
         re_cond = x[..., 13:14]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         fx = self.film(re_cond, fx)
-        for block in self.blocks:
-            fx = block(fx)
+        for i, block in enumerate(self.blocks):
+            if self.film_pre_block:
+                fx = self.film_per_block[i](re_cond, fx)
+                fx = block(fx)
+            else:
+                fx = block(fx)
+                if i < len(self.film_per_block):
+                    fx = self.film_per_block[i](re_cond, fx)
         return {"preds": fx}
 
 
@@ -480,6 +502,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     fourier_n_freqs: int = 16
     fourier_sigma: float = 1.0
+    film_pre_block: bool = False  # apply per-block FiLM heads BEFORE each block instead of after
 
 
 cfg = sp.parse(Config)
@@ -524,7 +547,7 @@ model_config = dict(
     output_dims=[1, 1, 1],
 )
 
-model = TransolverFiLM(**model_config).to(device)
+model = TransolverFiLM(film_pre_block=cfg.film_pre_block, **model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: TransolverFiLM ({n_params/1e6:.2f}M params)")
 
