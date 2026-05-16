@@ -159,13 +159,15 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx, scale=None, shift=None):
+    def forward(self, fx, scale=None, shift=None, scale_mlp=None, shift_mlp=None):
         h = self.ln_1(fx)
         if scale is not None:
             h = h * scale.unsqueeze(1) + shift.unsqueeze(1)
         fx = self.attn(h) + fx
         h2 = self.ln_2(fx)
-        if self.two_shot_film and scale is not None:
+        if scale_mlp is not None:
+            h2 = h2 * scale_mlp.unsqueeze(1) + shift_mlp.unsqueeze(1)
+        elif self.two_shot_film and scale is not None:
             h2 = h2 * scale.unsqueeze(1) + shift.unsqueeze(1)
         fx = self.mlp(h2) + fx
         if self.last_layer:
@@ -176,26 +178,65 @@ class TransolverBlock(nn.Module):
 class FiLMConditioner(nn.Module):
     """Maps per-sample condition scalars to per-layer (scale, shift) for hidden_dim.
 
+    Modes:
+      - shared (default): single MLP body+head produces all blocks' (γ, β).
+        Returns (scale, shift) each shape [B, n_layers, hidden_dim].
+      - per_block_heads + n_shots_per_block=1: shared body, per-block output head
+        producing one (γ, β) per block. Returns same shape as shared.
+      - per_block_heads + n_shots_per_block=2: shared body, per-block output head
+        producing TWO independent (γ, β) pairs per block — one for the attention
+        sub-layer, one for the MLP sub-layer. Returns (scale, shift) each shape
+        [B, n_layers, 2, hidden_dim], with index [:, :, 0] = attn, [:, :, 1] = mlp.
+
     Zero-init the final linear so scale=1, shift=0 at start (identity init).
     """
 
-    def __init__(self, cond_dim: int, hidden_dim: int, n_layers: int, mlp_hidden: int = 128):
+    def __init__(self, cond_dim: int, hidden_dim: int, n_layers: int, mlp_hidden: int = 128,
+                 per_block_heads: bool = False, n_shots_per_block: int = 1):
         super().__init__()
         self.n_layers = n_layers
         self.hidden_dim = hidden_dim
-        self.net = nn.Sequential(
-            nn.Linear(cond_dim, mlp_hidden), nn.SiLU(),
-            nn.Linear(mlp_hidden, mlp_hidden), nn.SiLU(),
-            nn.Linear(mlp_hidden, 2 * hidden_dim * n_layers),
-        )
-        nn.init.zeros_(self.net[-1].weight)
-        nn.init.zeros_(self.net[-1].bias)
+        self.per_block_heads = per_block_heads
+        self.n_shots_per_block = n_shots_per_block
+        if per_block_heads:
+            self.body = nn.Sequential(
+                nn.Linear(cond_dim, mlp_hidden), nn.SiLU(),
+                nn.Linear(mlp_hidden, mlp_hidden), nn.SiLU(),
+            )
+            head_out = 2 * hidden_dim * n_shots_per_block
+            self.heads = nn.ModuleList([
+                nn.Linear(mlp_hidden, head_out) for _ in range(n_layers)
+            ])
+            for h in self.heads:
+                nn.init.zeros_(h.weight)
+                nn.init.zeros_(h.bias)
+        else:
+            self.net = nn.Sequential(
+                nn.Linear(cond_dim, mlp_hidden), nn.SiLU(),
+                nn.Linear(mlp_hidden, mlp_hidden), nn.SiLU(),
+                nn.Linear(mlp_hidden, 2 * hidden_dim * n_layers),
+            )
+            nn.init.zeros_(self.net[-1].weight)
+            nn.init.zeros_(self.net[-1].bias)
 
     def forward(self, cond):
-        out = self.net(cond)
-        out = out.reshape(out.size(0), self.n_layers, 2, self.hidden_dim)
-        scale = 1.0 + out[:, :, 0]
-        shift = out[:, :, 1]
+        B = cond.size(0)
+        if self.per_block_heads:
+            body_out = self.body(cond)
+            outs = torch.stack([h(body_out) for h in self.heads], dim=1)
+            if self.n_shots_per_block == 1:
+                out = outs.reshape(B, self.n_layers, 2, self.hidden_dim)
+                scale = 1.0 + out[:, :, 0]
+                shift = out[:, :, 1]
+            else:
+                out = outs.reshape(B, self.n_layers, self.n_shots_per_block, 2, self.hidden_dim)
+                scale = 1.0 + out[:, :, :, 0]
+                shift = out[:, :, :, 1]
+        else:
+            out = self.net(cond)
+            out = out.reshape(B, self.n_layers, 2, self.hidden_dim)
+            scale = 1.0 + out[:, :, 0]
+            shift = out[:, :, 1]
         return scale, shift
 
 
@@ -208,7 +249,8 @@ class Transolver(nn.Module):
                  film_cond: bool = False, film_cond_dim: int = 11,
                  film_cond_slice: tuple[int, int] = (13, 24),
                  film_mlp_hidden: int = 128,
-                 two_shot_film: bool = False):
+                 two_shot_film: bool = False,
+                 per_block_film_heads: bool = False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -239,17 +281,26 @@ class Transolver(nn.Module):
 
         self.film_cond = film_cond
         self.film_cond_slice = film_cond_slice
+        self.per_block_film_heads = per_block_film_heads
         if film_cond:
+            n_shots = 2 if (per_block_film_heads and two_shot_film) else 1
             self.film = FiLMConditioner(
                 cond_dim=film_cond_dim, hidden_dim=n_hidden,
                 n_layers=n_layers, mlp_hidden=film_mlp_hidden,
+                per_block_heads=per_block_film_heads,
+                n_shots_per_block=n_shots,
             )
 
         self.apply(self._init_weights)
         # Re-zero FiLM output head after generic init (the apply above clobbers it).
         if film_cond:
-            nn.init.zeros_(self.film.net[-1].weight)
-            nn.init.zeros_(self.film.net[-1].bias)
+            if per_block_film_heads:
+                for h in self.film.heads:
+                    nn.init.zeros_(h.weight)
+                    nn.init.zeros_(h.bias)
+            else:
+                nn.init.zeros_(self.film.net[-1].weight)
+                nn.init.zeros_(self.film.net[-1].bias)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -269,7 +320,14 @@ class Transolver(nn.Module):
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for i, block in enumerate(self.blocks):
             if self.film_cond:
-                fx = block(fx, scale=scales[:, i], shift=shifts[:, i])
+                if self.per_block_film_heads and self.two_shot_film:
+                    fx = block(
+                        fx,
+                        scale=scales[:, i, 0], shift=shifts[:, i, 0],
+                        scale_mlp=scales[:, i, 1], shift_mlp=shifts[:, i, 1],
+                    )
+                else:
+                    fx = block(fx, scale=scales[:, i], shift=shifts[:, i])
             else:
                 fx = block(fx)
         return {"preds": fx}
@@ -486,6 +544,7 @@ class Config:
     film_cond: bool = False  # enable per-block FiLM conditioning on x[:,0,13:24]
     film_mlp_hidden: int = 128
     two_shot_film: bool = False  # apply FiLM modulation at both attn and mlp sites per block
+    per_block_film_heads: bool = False  # per-block FiLM output heads (shared body); with two-shot, attn and mlp get independent (γ, β)
 
 
 cfg = sp.parse(Config)
@@ -530,6 +589,7 @@ model_config = dict(
     film_cond_slice=(13, 24),
     film_mlp_hidden=cfg.film_mlp_hidden,
     two_shot_film=cfg.two_shot_film,
+    per_block_film_heads=cfg.per_block_film_heads,
 )
 
 model = Transolver(**model_config).to(device)
