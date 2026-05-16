@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-16 00:45
+- **Date**: 2026-05-16 01:35
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
-- **Round**: 3 active (R3 experiments: H20–H33)
+- **Round**: 3 active (R3 experiments: H20–H34)
 - **Most recent human research directive**: None received
 
 ## Current Best
@@ -25,8 +25,8 @@
 1. **T_max mismatch was the dominant first-order bottleneck**: CosineAnnealingLR(T_max=50) with 30-min cap → ~14 epochs → LR never anneals. T_max=15 fix gave 11.7-pt gain.
 2. **Per-channel Huber wins over uniform (H25)**: δ_p=0.25 for pressure (heavy-tailed), δ_vel=1.0 for velocities (near-MSE) — decoupling channels targets the right statistical structure per field.
 3. **Grad clip=1.0 is independently effective (H20)**: Clipping was active every step (pre-clip norm 5–17). Caps per-step update magnitude, preventing any single high-Re sample from dominating a training step.
-4. **H20 and H25 use the SAME δ_p and δ_vel defaults**: H20's effective config is δ_vel=0.5/δ_p=0.25 (from merged defaults) + clip=1.0; H25 differs only in δ_vel=1.0 (no clip). The two wins are orthogonal: pressure clipping vs gradient clipping.
-5. **Compound H25+H20 (H29) is the top priority**: Neither has the other's improvement — combining should yield ~74 or better.
+4. **H20 and H25 use the SAME δ_p and δ_vel defaults**: H20's effective config is δ_vel=0.5/δ_p=0.25 (from merged defaults) + clip=1.0; H25 differs only in δ_vel=1.0 (no clip).
+5. **H20 and H25 do NOT compound (H29 closed)**: H29 (δ_vel=1.0 + clip=1.0) regressed to 76.80 vs H20's 75.50. Mechanism: `clip_grad_norm_` rescales by ‖g‖, which is velocity-dominated when δ_vel=1.0, scaling down pressure updates disproportionately. The interventions interact through the global rescale. → H34 (nezuko) tests element-wise clip to bypass this.
 6. **Averaging (EMA H24, SWA H28) fails at 14-epoch budget**: Model is in steep descent throughout; no converged basin to average. Both closed as dead ends.
 7. **WSD fails on this budget (H21 confirmed H9)**: Decay phase never fires within 14 epochs. CosineAnnealingLR T_max=15 is the right schedule.
 8. **cond_dim=3 beats cond_dim=11 (H26)**: Geometry tail dims zero out for single-foil samples (~50% of training), creating noise. cond_dim=3 (Re, AoA1, NACA1_camber) is the cleaner FiLM conditioning.
@@ -38,7 +38,7 @@
 
 | PR | Student | Hypothesis | Status |
 |----|---------|------------|--------|
-| #3549 | nezuko | **H29: Per-channel δ_vel=1.0/δ_p=0.25 + clip=1.0 (compound H25+H20)** | WIP — **HIGHEST PRIORITY** |
+| #3587 | nezuko | **H34: Element-wise clip (clip_grad_value) + per-channel Huber** | WIP — **highest priority (tests H29 mechanism)** |
 | #3551 | askeladd | H30: Clip sweep (2.0, 1.5) on H20 base | WIP |
 | #3553 | fern | H31: δ_p push (0.1, 0.05) with clip=1.0 | WIP |
 | #3557 | thorfinn | H32: LR sweep (1e-3, 8e-4) on H20 base | WIP |
@@ -46,13 +46,15 @@
 | #3452 | frieren | H27b: LR sweep (7e-4, 1e-3) + clip=1.0 rebase | WIP (rebase in progress) |
 | #3448 | tanjiro | H23b: surf_weight=5/2 + clip=1.0 rebase | WIP (rebase in progress) |
 | #3451 | alphonse | H26b: cond_dim=3/2 + clip=1.0 rebase | WIP (rebase in progress) |
+| #3549 | (closed) | H29: per-channel + clip compound | CLOSED (informative negative; 76.80 vs H20 75.50) |
 
 **Note:** All new R4 PRs use cond_dim=11, huber_delta_vel=0.5, huber_delta_p=0.25 (merged defaults), CosineAnnealingLR T_max=15 as the base. clip_grad_norm=1.0 is explicitly set in all new assignments.
 
 ## Key Open Questions (Post-H20)
 
-1. **Does per-channel δ_vel=1.0 compound with clip=1.0?** H29 (nezuko) — critical, expected ~74 or better.
-2. **Optimal clip threshold?** H30 (askeladd) — does clip=2.0 continue the monotone trend, or is 1.0 the optimum?
+1. ~~Does per-channel δ_vel=1.0 compound with clip=1.0?~~ **ANSWERED: NO** — H29 closed. Global clip rescale defeats per-channel benefit.
+2. **Does element-wise clip preserve per-channel benefit?** H34 (nezuko) — directly tests the H29 interaction mechanism. If Arm B (δ_vel=1.0 + clip_grad_value=1.0) approaches H25 or beats H20, the hypothesis is confirmed.
+3. **Optimal global-norm clip threshold?** H30 (askeladd) — does clip=2.0 continue the monotone trend, or is 1.0 the optimum?
 3. **How far can δ_p go?** H31 (fern) — δ_p=0.1 and δ_p=0.05; if it's nearly L1 at 0.05, does the loss destabilize?
 4. **Higher LR with clip stability?** H32 (thorfinn) + H27b (frieren) — clip=1.0 may allow lr=1e-3 without instability; H27b and H32 cover complementary ranges.
 5. **Architecture headroom on tuned base?** H33 (edward) — n_hidden=192/256 on H20 base. H5 (R1) was inconclusive on untuned stack.
