@@ -237,6 +237,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            x_norm = x_norm.clamp(-3.0, 3.0)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=torch.cuda.is_available()):
                 pred = model({"x": x_norm})["preds"]
@@ -427,6 +428,7 @@ with open(model_dir / "config.yaml", "w") as f:
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
+clip_diag_logged = False
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -445,6 +447,28 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
+        if not clip_diag_logged:
+            real = mask.unsqueeze(-1)
+            n_real = real.float().sum().clamp(min=1)
+            dsdf_norm = x_norm[..., 4:12]
+            n_total_dsdf = n_real * dsdf_norm.shape[-1]
+            n_outlier_dsdf = ((dsdf_norm.abs() > 3.0) & real).float().sum()
+            frac_clipped_dsdf = (n_outlier_dsdf / n_total_dsdf).item()
+            n_total_all = n_real * x_norm.shape[-1]
+            n_outlier_all = ((x_norm.abs() > 3.0) & real).float().sum()
+            frac_clipped_all = (n_outlier_all / n_total_all).item()
+            per_dim_frac = (((x_norm.abs() > 3.0) & real).float().sum(dim=(0, 1)) / n_real).tolist()
+            print(f"  clip diag (first batch): fraction clipped DSDF dims 4-11 = {frac_clipped_dsdf:.4f}; all 24 dims = {frac_clipped_all:.4f}")
+            print(f"  per-dim clipped fraction: {[f'{f:.4f}' for f in per_dim_frac]}")
+            append_metrics_jsonl(metrics_jsonl_path, {
+                "event": "clip_diag",
+                "frac_clipped_dsdf": frac_clipped_dsdf,
+                "frac_clipped_all": frac_clipped_all,
+                "per_dim_frac_clipped": per_dim_frac,
+                "clip_mode": "global_24_dims",
+            })
+            clip_diag_logged = True
+        x_norm = x_norm.clamp(-3.0, 3.0)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=torch.cuda.is_available()):
             pred = model({"x": x_norm})["preds"]
