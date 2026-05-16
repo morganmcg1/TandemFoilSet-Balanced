@@ -867,3 +867,122 @@ Key insight from student: "Don't pursue further EMA-window tuning on this task a
 ## 2026-05-16 03:45 — New assignment: alphonse surf_weight sweep
 
 - **PR #3647 (alphonse): surf_weight sweep (5 vs 20)** — surf_weight=10 was set heuristically before bf16, Bernoulli residual, and T_max alignment changed the loss landscape. Arm A: surf_weight=5.0; Arm B: surf_weight=20.0. Both with full merged stack (T_max=25, Bernoulli, CautiousAdamW, bf16, FiLM, surf-L1, EMA, scale-inv). No code changes needed — pure flag sweep targeting whether the primary metric (surface MAE) benefits from direct gradient reweighting on the new merged baseline.
+
+## 2026-05-16 03:45 — PR #3582: torch.compile() for more effective epochs [MERGED — NEW BEST 61.20, ninth compounding win]
+
+- Branch: `charliepai2i24h5-fern/torch-compile`
+- Student: charliepai2i24h5-fern
+- Hypothesis: Wrap the Transolver in `torch.compile()` to reduce per-forward overhead by 10–25% and unlock 2–4 additional effective epochs within the 30-min wall-clock cap. Run still descending at −2.74/epoch at the baseline cutoff (epoch 17), so more compute directly compounds.
+- Status: MERGED as new round-5 best. Arm A (`default` mode) crushed predictions.
+
+### Results
+
+| Arm | val_avg/mae_surf_p | test_avg/mae_surf_p | Steady-state s/epoch | Epochs in 30min | Best epoch | Peak VRAM |
+|---|---:|---:|---:|---:|---:|---:|
+| Baseline (PR #3465, no compile) | 75.4040 | 65.8592 | 108.0 | 17 | 17 | 35.5 GB |
+| **Arm A (`default`)** | **61.2023** (−18.83%) | **54.0076** (−18.00%) | **57.3** | **32** | 32 | 24.4 GB |
+| Arm B (`reduce-overhead`) | 63.59 (−15.66%) | 55.74 (−15.36%) | 57.4 | 32 | 32 | 26.4 GB |
+
+Per-epoch speedup: 108.0s → 57.3s = **1.88× faster** (47% reduction). Effective epoch unlock: 17 → 32 = **+15 extra epochs**. Epoch-1 compile overhead ~10s — negligible.
+
+### Per-split val/test surface-pressure MAE (Arm A — winner)
+
+| Split | val (Arm A) | val (baseline) | Δ% | test (Arm A) | test (baseline) | Δ% |
+|---|---:|---:|---:|---:|---:|---:|
+| single_in_dist     | 65.44 | 84.88 | −22.9% | 59.18 | 73.84 | −19.9% |
+| geom_camber_rc     | 76.77 | 85.90 | −10.6% | 70.58 | 77.25 | −8.6% |
+| geom_camber_cruise | 41.49 | 57.65 | −28.0% | 34.14 | 46.64 | −26.8% |
+| re_rand            | 61.11 | 73.19 | −16.5% | 52.13 | 65.70 | −20.6% |
+| **avg**            | **61.20** | **75.40** | **−18.8%** | **54.01** | **65.86** | **−18.0%** |
+
+All 8 cells improve. Biggest gains: geom_camber_cruise (−28% val) and single_in_dist (−22.9% val) — exactly the two splits where the model was most undercooked at the 17-epoch cutoff. Confirms the wall-clock-bound mechanism.
+
+Metric artifacts:
+- `models/model-charliepai2i24h5-fern-torch_compile_default-20260516-015149/{metrics.jsonl, metrics.yaml, config.yaml}` (Arm A — winner)
+- `models/model-charliepai2i24h5-fern-torch_compile_reduce_overhead-20260516-022506/{metrics.jsonl, metrics.yaml, config.yaml}` (Arm B)
+
+### Per-epoch trajectory analysis
+
+At matched epoch number, compile arms are ~3% worse than baseline (e.g. epoch 17: 78.04 vs 75.40). The gain comes **entirely from additional epochs** the same wall-clock budget unlocks. Likely cause of the small per-epoch drift is kernel reordering/fusion under compile producing slightly different fp32-accumulated reductions — same gradients to within bf16 precision but small accumulation-order differences.
+
+### Implementation details (committed to baseline)
+
+- Two new cfg fields: `torch_compile: bool = False` and `torch_compile_mode: str = "default"`.
+- Compile wrapping happens **after** EMA shadow deepcopy (EMA holds the raw `Transolver`, not an `OptimizedModule`).
+- `dynamic=True` handles variable padded mesh size (74K–242K nodes) without recompiling per shape.
+- For `reduce-overhead`, `torch._inductor.config.triton.cudagraph_skip_dynamic_graphs = True` avoids CUDA Graph Tree memory issues (PyTorch issue #128424).
+- `torch.set_float32_matmul_precision("high")` enables TF32 matmuls when compile is active.
+- `compile_setup` event logged to `metrics.jsonl` with torch version, device name, active mode.
+- Per-epoch records log `train/torch_compile_active` and `train/torch_compile_mode`.
+
+### Compile mode comparison (A vs B)
+
+Both arms hit best at epoch 32 with virtually identical steady-state per-epoch time (57.3s vs 57.4s). Arm A (`default`) wins by ~2.4 val MAE points (61.20 vs 63.59) — `default` generalizes slightly better than `reduce-overhead`. With `dynamic=True` (required for variable mesh size), `reduce-overhead`'s CUDA Graph Trees fall back to default-like behaviour with extra cudagraph machinery overhead → no incremental speedup, slightly hurts convergence.
+
+### Critical finding from student review: bernoulli_residual was OFF in the baseline 75.40
+
+Student noticed that the merged baseline reproduce command in BASELINE.md (`--bernoulli_residual freestream`) does not actually enable bernoulli — simple_parsing drops the `freestream` arg. Verification:
+1. `models/model-charliepai2i24h5-thorfinn-tmax25_em10-20260515-232319/config.yaml` (the run that produced the 75.40 baseline) has NO `bernoulli_residual` field — the field didn't exist in the Config dataclass at the run's commit (3a3104a).
+2. Compile Arm A and B `config.yaml` both show `bernoulli_residual: false`.
+3. Therefore the 75.40 baseline did NOT have Bernoulli residual active — the "Bernoulli mechanism" claim in PR #3466's merge attribution is suspect.
+
+**This compile win (75.40 → 61.20) is apples-to-apples valid** (both ran without Bernoulli). But the merged stack is actually a **7-stack** (scale-inv + EMA + surf-L1 + FiLM + bf16 + Cautious AdamW + T_max=25 + compile), not an 8-stack. The Bernoulli mechanism is **untested on current code** and represents real potential headroom.
+
+### Suggested follow-ups (student)
+
+1. **Stack compile + bernoulli_residual** — fix the argparse so `--bernoulli_residual` works, re-run Arm A with both. Predicted: ~58 val if Bernoulli is additive.
+2. **Push epoch count further** — at epoch 32 still descending −0.7/epoch. T_max=25 too short again. Try T_max=35 or T_max=40 with compile.
+3. **Try `max-autotune` mode** — single arm; extra autotune compile cost (~1–2 min on epoch 1) is amortized over 30 epochs.
+4. **Larger batch size with compile** — VRAM headroom is huge (24/96 GB). batch_size=8 or 16 may now be feasible.
+5. **Bucketed dynamic shapes with `reduce-overhead`** — pad meshes to small number of size buckets so `reduce-overhead`'s CUDA Graph Trees provide a real speedup on top of `default`.
+
+Picked #2 (T_max alignment) as the natural fern follow-up since it's their own data and the cleanest single-knob compounding.
+
+## 2026-05-16 03:45 — PR #3581: Peak LR sweep on T_max=25 aligned schedule [CLOSED — both arms regressed]
+
+- Branch: `charliepai2i24h5-thorfinn/peak-lr-sweep-tmax25`
+- Student: charliepai2i24h5-thorfinn
+- Hypothesis: Higher peak LR (7e-4 or 1e-3) on the aligned T_max=25 schedule should accelerate the still-active descent within the 17-epoch budget. Cautious AdamW masking (≈0.62 agreement) predicted to stabilize the higher LR.
+- Status: CLOSED. Both arms regressed by +9.4–14.8% on the baseline.
+
+### Results
+
+| Arm | lr | best_epoch | val_avg | Δ val | test_avg | Δ test |
+|---|---:|---:|---:|---:|---:|---:|
+| Baseline (PR #3465, lr=5e-4) | 5e-4 | 17 | **75.4040** | — | **65.8592** | — |
+| Arm A (lr=7e-4) | 7e-4 | 17 | 86.5339 | **+14.76%** | 77.3001 | **+17.37%** |
+| Arm B (lr=1e-3) | 1e-3 | 17 | 82.4929 | **+9.40%** | 71.9510 | **+9.25%** |
+
+Both arms hit the 30-min wall-clock cap at epoch 17/50 — same epoch budget as baseline. All per-split metrics underperform baseline in both arms.
+
+Metric artifacts:
+- `models/model-charliepai2i24h5-thorfinn-lr7e4_tmax25-20260516-013246/{metrics.jsonl, metrics.yaml, config.yaml}`
+- `models/model-charliepai2i24h5-thorfinn-lr1e3_tmax25-20260516-022345/{metrics.jsonl, metrics.yaml, config.yaml}`
+
+### Analysis
+
+Excellent honest writeup identifying the failure mechanism:
+
+1. **Epoch-1 spike confirmed.** Both arms started at val_avg ≈800, ~2.2× higher than baseline's epoch-1 ≈365. The increase is super-linear in LR — Cautious AdamW's mask does not gate enough of the high-magnitude initial updates to keep epoch 1 near baseline.
+2. **17-epoch budget too short to recover.** Both arms still well above baseline at epoch 17. Late-epoch descent rates at cutoff: Arm A −3.7/epoch, Arm B −4.13/epoch (vs baseline −2.74/epoch). Higher LR produces faster descent but insufficient to overcome head-start deficit.
+3. **Arm B beats Arm A despite higher LR**, consistent with "late-stage peak-LR drive" — higher peak LR keeps cosine taller longer, so the last 3-4 epochs are faster. Crossover around epoch 15.
+4. **Cautious mask invariant.** Mask stayed at ≈0.62 (mean 0.6204 Arm A, 0.6206 Arm B) regardless of LR. The PR's hypothesis that masking would protect against higher-LR instability is **falsified by these traces**. The cautious mechanism is orthogonal to LR magnitude.
+
+### Suggested follow-ups (student)
+
+1. LR warm-up (1–2 epoch linear ramp from 0.1×lr to peak).
+2. Slow T_max further (T_max=35 or T_max=40) at baseline lr=5e-4 — trades early-epoch budget for later-epoch LR magnitude without paying the epoch-1 spike.
+3. Try lr=6e-4 (between baseline 5e-4 and Arm A 7e-4).
+4. Cautious-mask LR-sensitivity ablation — verify whether masking is doing anything useful at the current LR (flat 0.62 across LRs is suspicious).
+
+### Decision
+
+Closed. Picked re-run of LR sweep with compile (new 32-epoch budget) as the natural thorfinn follow-up — directly tests whether the extra recovery time rescues the higher-LR descent rate. Crossover dynamics from this PR (Arm B passing Arm A at epoch 15) suggest the math could work over 32 epochs if late-epoch descent sustains.
+
+## 2026-05-16 03:50 — New assignment: fern T_max alignment for compile (T_max=32 vs T_max=35)
+
+- **PR (forthcoming, fern): T_max alignment for 32-epoch compile budget**. The schedule misalignment that PR #3465 fixed (T_max=50 → 25 because epoch budget was 17) now reappears in reverse — compile's 32-epoch budget makes T_max=25 too short. Arm A: T_max=32 (exact match to observed epoch count, cosine hits floor at cutoff). Arm B: T_max=35 (3 epochs of safety margin past cutoff). Pure schedule change, compounds with compile. Predicted: −1% to −5% val_avg.
+
+## 2026-05-16 03:50 — New assignment: thorfinn LR sweep re-run with compile
+
+- **PR (forthcoming, thorfinn): LR sweep with `--torch_compile`**. Re-run lr=7e-4 and lr=1e-3 on the new 32-epoch compile baseline. Thorfinn's #3581 closed because the 17-epoch budget couldn't overcome the epoch-1 spike, but at lr=1e-3 the late-epoch descent rate was −4.13/epoch (vs −2.74 baseline). If that rate sustains through 15 more epochs (compile-unlocked), the math has a chance of working. T_max=25 unchanged to factorize cleanly from fern's parallel T_max experiment.
