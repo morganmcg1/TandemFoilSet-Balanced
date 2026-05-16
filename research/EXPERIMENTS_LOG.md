@@ -117,6 +117,38 @@ Per-split best seed (`99jk5guj`):
 
 ---
 
+## 2026-05-16 03:45 — PR #3207: Geom-slice + SmoothL1 (nezuko) — SENT BACK (compound)
+- student: willowpai2i24h2-nezuko
+- branch: `willowpai2i24h2-nezuko/geom-slice-injection`
+- hypothesis: PGOT-style geometry-conditioned slice assignment biases PhysicsAttention toward airfoil-relevant regions; explicit geometry features (NACA1/AoA2/NACA2/gap/stagger) from x[:,0,15:24] threaded through all blocks
+- W&B runs: `6c4iugpv` (primary, best), `b5qdr9r9`, `r6engyzr`
+
+| Run | val_avg/mae_surf_p | test_avg/mae_surf_p | Best epoch |
+|---|---|---|---|
+| `6c4iugpv` (primary) | **85.6045** | **76.8542** | 14 |
+| `b5qdr9r9` | 97.43 | 81.67 | 13 |
+| `r6engyzr` | 103.48 | 85.98 | 11 |
+| Baseline (#3215) | 90.6039 | 83.0029 | — |
+| **New FiLM-Re baseline (#3350)** | **79.9018** | **69.3296** | — |
+
+Per-split best run (`6c4iugpv`):
+| Split | val | test | Δ val vs #3215 |
+|---|---|---|---|
+| `single_in_dist` | 100.36 | 88.39 | −10.4% |
+| `geom_camber_rc` | 96.32 | 88.94 | −7.8% |
+| `geom_camber_cruise` | 62.70 | 54.42 | ≈ parity |
+| `re_rand` | 83.04 | 75.67 | ≈ parity |
+
+**Analysis:** Best seed beats the old SmoothL1 baseline by 5.5%/7.4%. Notable high variance (val ∈ [85.60, 103.48] across 3 seeds — std ~9.5). The mechanism is real but discriminative: geom-slice particularly helps geometry-OOD splits (`single_in_dist` −10.4%, `geom_camber_rc` −7.8%) but has near-zero effect on `re_rand` and `geom_camber_cruise`. This is **exactly complementary to FiLM-Re** which helps `re_rand` (−10.8%) and `geom_camber_cruise` (−11.5%) most. The two mechanisms attack orthogonal OOD axes — geom-slice for geometry, FiLM for Reynolds number. The compound is potentially the largest win in the programme so far.
+
+Notable bug: nezuko discovered that `data/scoring.py:48` computes `(pred - y).abs() * mask` before per-sample skip, causing `inf * 0 = NaN` when GT has non-finite values. The fix (pre-zero samples with non-finite GT before accumulate_batch) was applied in `train.py`'s `evaluate_split`.
+
+val=85.60 does not beat new FiLM-Re baseline (79.90) in standalone form.
+
+**Decision:** SENT BACK — compound FiLM-Re + geom-slice (2 seeds) vs new baseline. Highest-priority compound due to orthogonal OOD coverage.
+
+---
+
 ## 2026-05-16 01:30 — PR #3523: Domain one-hot embedding (edward) — CLOSED
 - student: willowpai2i24h2-edward
 - branch: `willowpai2i24h2-edward/domain-onehot-embedding`

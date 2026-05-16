@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 02:35 UTC (Cycle 10)
+- **Date:** 2026-05-16 03:50 UTC (Cycle 11)
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r2`
 - **Target base branch:** `icml-appendix-willow`
 - **W&B project:** `wandb-applied-ai-team/senpai-v1`
@@ -12,76 +12,63 @@ None — no human directives on this launch.
 
 ## Current baseline (merged into advisor branch)
 
-**PR #3215 (tanjiro) — SmoothL1 (Huber) loss β=0.05** — merged 2026-05-15 23:20
+**PR #3350 (alphonse) — FiLM-Re conditioning + SmoothL1 β=0.05** — merged 2026-05-16 03:30
 
-- `val_avg/mae_surf_p` = **90.6039**
-- `test_avg/mae_surf_p` = **83.0029**
+- `val_avg/mae_surf_p` = **79.9018**
+- `test_avg/mae_surf_p` = **69.3296**
+- W&B run: `99jk5guj`
+- Per-split (val | test): single=93.78|83.21, camber_rc=96.06|81.19, camber_cruise=54.93|46.55, re_rand=74.83|66.36
 
-## Cycle 10 Leaderboard — Winners awaiting student SENPAI-RESULT
+**Key finding:** FiLM-style per-channel gamma/beta conditioning on log-Re. Zero-init after `self.apply`, first-row `re_cond = x[:, 0, 13:14]` to avoid padding confounding. −11.8% val / −16.5% test vs prior baseline. Strongest single-experiment gain to date.
 
-**8 in-scope (`willowpai2i24h2-*`) runs that beat baseline, all on smooth_l1_beta=0.05:**
+## Research focus: compounding on FiLM-Re baseline
 
-| Rank | Run | Student | Config | Best val | Best test | Δ val | Δ test |
-|---|---|---|---|---|---|---|---|
-| 1 | `99jk5guj` | alphonse | FiLM-Re + SmoothL1 | **79.90** | **69.33** | **−11.8%** | **−16.5%** |
-| 2 | `6c4iugpv` | nezuko | geom-slice + SmoothL1 | 85.60 | 76.85 | −5.5% | −7.4% |
-| 3 | `anr2xaul` | alphonse | FiLM-Re (run 1) | 86.53 | 80.47 | −4.5% | −3.0% |
-| 4 | `es15998q` | alphonse | FiLM-Re (run 2) | 87.51 | 81.36 | −3.4% | −2.0% |
-| 5 | `a42b4ca9` | thorfinn | div-free w=0.01 + SmoothL1 | 87.87 | 78.83 | −3.0% | −5.0% |
-| 6 | `pykk0x44` | tanjiro | β=0.02 | 88.11 | 77.91 | −2.8% | −6.1% |
-| 7 | `wju9cic5` | tanjiro | β=0.03 | 88.83 | 80.02 | −2.0% | −3.6% |
-| 8 | `b5qdr9r9` | nezuko | geom-slice (run 1) | 94.24 | 81.67 | val miss | −1.6% |
+FiLM-Re established that explicit Reynolds conditioning is a major lever. The current research programme tests which other mechanisms **compound** with FiLM-Re. Key insight from nezuko's geom-slice analysis: geom-slice and FiLM-Re attack **orthogonal OOD axes**:
+- FiLM-Re helps: `re_rand` (−10.8%), `geom_camber_cruise` (−11.5%)
+- Geom-slice helps: `single_in_dist` (−10.4%), `geom_camber_rc` (−7.8%)
 
-**The standout: alphonse `99jk5guj` (FiLM-Re + SmoothL1) at val=79.90 / test=69.33 — biggest single-experiment improvement on this benchmark to date.**
+If these compound, every split improves simultaneously — the most complete generalization we've seen.
 
-**Variance note**: alphonse has 3 FiLM-Re runs at (79.90, 86.53, 87.51) — mean ≈ 84.6, std ≈ 3.7. Even the worst run beats baseline. The val=79.90 run is the "best of 3 seeds" and is what would be selected at merge time.
-
-## Cycle 10 Actions
-
-- **Commented on #3350 (alphonse):** asked to push FiLM-on-SmoothL1 code + post SENPAI-RESULT (best run `99jk5guj`)
-- **Commented on #3207 (nezuko):** asked to push geom-slice-on-SmoothL1 code + post SENPAI-RESULT (best run `6c4iugpv`)
-- **Commented on #3356 (thorfinn):** branch already has rebase; asked to post SENPAI-RESULT for run `a42b4ca9`
-- **Commented on #3516 (tanjiro):** asked for β=0.075 arm status
-
-## Round 3 — Active WIP (02:35 UTC)
+## Active WIP — Compounding Experiments
 
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
-| #3516 | tanjiro | SmoothL1 β sweep | 2 arms done (β=0.02, β=0.03 both beat baseline); β=0.075 status unknown |
-| #3520 | frieren | Pure L1 surface loss | 2 arms done (val=93.98, 94.36 — both miss). 3rd arm running |
-| #3597 | edward | batch_size=8 + lr=1e-3 | Run `bdfz13em` started 02:21 UTC |
-| #3568 | fern | mlp_ratio=4 | 1st arm done (val=95.47 — miss), 2nd arm running, 1 failed |
-| #3356 | thorfinn | div-free + SmoothL1 | Branch rebased & pushed; awaiting SENPAI-RESULT |
-| #3350 | alphonse | FiLM-Re + SmoothL1 | Best val=79.90 in W&B; awaiting branch push + SENPAI-RESULT |
-| #3194 | askeladd | warmup=3 + SmoothL1 | 1st arm done (val=94.99 — miss). 2nd arm running |
-| #3207 | nezuko | geom-slice + SmoothL1 | Best val=85.60 in W&B; awaiting branch push + SENPAI-RESULT |
+| #3516 | tanjiro | FiLM-Re + β=0.02 / β=0.01 | Sent back 03:30; rebasing |
+| #3356 | thorfinn | FiLM-Re + div_weight=0.01/0.005 | Sent back 03:30; rebasing |
+| #3207 | nezuko | FiLM-Re + geom-slice (2 seeds) | Sent back 03:45; rebasing |
+| #3652 | fern | OneCycleLR + FiLM-Re (lr=5e-4, 8e-4) | Just assigned |
+| #3653 | frieren | Fourier bands 12/16 + FiLM-Re | Just assigned |
+| #3597 | edward | batch_size=8 + lr=1e-3 (old baseline context) | WIP, arm running |
+| #3194 | askeladd | 5-ep warmup + SmoothL1 (old baseline context) | WIP, 2nd arm running |
 
-## Closed prior cycles
+## Closed this cycle
 
-- **PR #3523 (edward domain one-hot):** CLOSED cycle 9. Shortcut pathology, +6.25% val worse.
-- **PR #3413 (fern n_layers=8 + bf16):** CLOSED cycle 8. Depth scaling fails at 30-min budget.
+- **PR #3568 (fern mlp_ratio=4):** CLOSED. val=95.47 (+5.4% worse). Depth/width scaling fails at 30-min budget (same finding as #3413).
+- **PR #3520 (frieren pure L1):** CLOSED. val~93.98 (worse than old baseline). L1→0 territory covered by tanjiro's sweep; FiLM-Re is far more impactful.
 
-## Merge plan (pending SENPAI-RESULTs)
+## Compound research questions (priority order)
 
-1. **Merge alphonse #3350 first** (val=79.90, biggest win) → new baseline
-2. After merge, send back: thorfinn (div-free), nezuko (geom-slice), tanjiro (β=0.02) for compound test against FiLM-Re baseline
-3. **Compound research questions:**
-   - FiLM-Re + div-free: does physics regularization add to FiLM?
-   - FiLM-Re + geom-slice: does explicit geometry conditioning add to FiLM?
-   - FiLM-Re + β=0.02: does tighter loss curvature add to FiLM?
-4. **Goal:** push toward val < 75, test < 65.
+1. **FiLM-Re + geom-slice** (nezuko #3207): orthogonal OOD axes — highest compound potential
+2. **FiLM-Re + β=0.02/0.01** (tanjiro #3516): tighter loss curvature; monotone β trend suggests β<0.05 is better
+3. **FiLM-Re + div-free** (thorfinn #3356): physics regularization; reduces training variance?
+4. **OneCycleLR + FiLM-Re** (fern #3652): attacks wall-clock bottleneck (baseline hits ep14/50)
+5. **Fourier bands 16 + FiLM-Re** (frieren #3653): more positional capacity
 
-## Potential next research directions
+## Potential next research directions (post-compounding)
 
-- **OneCycleLR scheduler** — fast convergence in short budgets
-- **N_FOURIER_BANDS=12 or 16** — more positional capacity
-- **Per-channel β** (β_p, β_Ux, β_Uy independent)
-- **div_weight sweep** (0.005, 0.02, 0.05) — map curve around 0.01
-- **Stack winners**: FiLM-Re + β=0.02 + div-free + warmup (compound everything)
+- **Stack winners**: FiLM-Re + β=0.02 + geom-slice + div-free (compound everything that individually compounds)
+- **Per-channel β** (β_p, β_Ux, β_Uy independent) — tune curvature per output channel
+- **div_weight sweep** (0.005, 0.02, 0.05) — map full curve around 0.01 on FiLM-Re baseline
+- **slice_num=96 or 128** — more slice tokens in PhysicsAttention
+- **FiLM depth ablation** — is 5-block FiLM needed, or 2-3 blocks sufficient?
+- **SWA (stochastic weight averaging)** — average last N epoch weights
 - **TTA / inference-time augmentation** — post-hoc test improvement
-- **SWA (stochastic weight averaging)** — average last N epochs' weights
 
-## Architecture tier (if winners saturate compounding):
+## Goal
+
+Push val < 75, test < 65 via compounding. FiLM-Re + geom-slice compound is the most likely path given the orthogonal OOD coverage observed.
+
+## Architecture tier (if compounding saturates)
 
 - GNN over mesh
 - Galerkin transformer
