@@ -1066,3 +1066,80 @@ Sent back for **Arm C: n_layers=3 + n_head=2 + lr=1e-3 + wd=5e-5 + clip=1.0** �
 - Artifacts: `models/model-h42-nlayers3-lr1e3-clip1-20260516-072335/`, `models/model-h42-nlayers7-lr1e3-clip1-20260516-062551/`
 
 **Status: SENT BACK — alphonse running Arm C stack (PR #3689 → draft).**
+
+---
+
+## 2026-05-16 09:42 — PR #3767: H45: DropPath / stochastic depth (0.1, 0.2) on H38 base (edward) — CLOSED
+
+- Branch: `charliepai2i48h3-edward/h45-droppath-sweep`
+- Hypothesis: Add stochastic depth (DropPath) to Transolver residual branches as a regularizer to reduce gap between in-distribution and OOD splits without changing capacity.
+
+| Arm | drop_path | val_avg | Δ vs H38 (68.19) | Δ vs H37b (66.11) |
+|-----|-----------|---------|------------------|--------------------|
+| Arm A | 0.1 | **78.0165** | +9.82 (regression) | +11.91 (regression) |
+| Arm B | 0.2 | **84.3020** | +16.11 (regression) | +18.20 (regression) |
+
+Every split worse including OOD splits where the hypothesis predicted improvement. Both arms still descending at epoch 13 — slow convergence, not divergence. Student's interpretation (correct): pre-overfit regime. The model hasn't started overfitting yet at 14-epoch budget, so stochastic depth only adds noise and slows convergence.
+
+**Key insight closed:** At 30-min wall budget, regularization that costs convergence loses. DropPath would need a longer horizon to express its regularization benefit (consistent with H43 warmup closure — anything that slows the cosine descent eats the budget).
+
+- Artifacts: `models/model-h45-droppath01-20260516-...`, `models/model-h45-droppath02-20260516-...`
+
+**Status: CLOSED — stochastic depth incompatible with short-budget regime. Edward reassigned to H49 (Lion optimizer, PR #3859).**
+
+---
+
+## 2026-05-16 09:42 — PR #3688: H41 Arm C: T_max=20 + n_head=2 + wd=5e-5 stack (fern) — CLOSED
+
+- Branch: `charliepai2i48h3-fern/h41-tmax-sweep` (Arm C run on stack)
+- Hypothesis: Does T_max=20 (extended cosine) stack with n_head=2 + wd=5e-5? Predicted ≈ 63–64 via additive decomposition of orthogonal levers.
+
+| Config | val_avg | val_single_in_dist | Δ vs H37b (66.11) |
+|--------|---------|---------------------|--------------------|
+| H41 Arm C stack | **72.3176** | **94.65** (blew up from 77.23) | +6.21 (regression) |
+| H37b baseline | 66.1060 | 74.40 | — |
+| H41 Arm A (T_max=20 alone) | 66.9242 | — | +0.81 |
+
+**Key finding (HIGH SIGNIFICANCE) — orthogonality hypothesis refuted:**
+1. LR at final epoch 15 was still 1.46e-4 — model never reached fine-tune phase
+2. val_single_in_dist *blew up* — failure concentrated on the in-distribution split
+3. Per-epoch trajectory shows slow early convergence in stacked config vs Arm A
+4. Stretching T_max removed the late-LR fine-tune phase that n_head=2+wd=5e-5 requires for in-distribution
+
+This is the **inverse** of H42's interaction. H42 (n_layers=3) provides BUDGET (21 epochs in 30 min) and the cosine completes — the late LR is reached because there are more epochs to traverse. H41 (T_max=20) provides slower decay but at fixed 14-epoch budget the cosine never reaches the bottom.
+
+**Mechanism implication:** Effective schedule shape must match wall budget. T_max stretch only helps if the model has time to traverse the full cosine. n_head=2+wd=5e-5 are configurations that *especially* need a late-LR cooldown phase for in-distribution.
+
+- Artifacts: `models/model-h41-armc-tmax20-nhead2-wd5e5-...`
+
+**Status: CLOSED — informative negative; schedule lever needs different shape, not extension. Fern reassigned to H50 (WSD trapezoidal schedule, PR #3862) — a mechanically distinct take on the schedule lever that preserves a sharp cooldown.**
+
+---
+
+## 2026-05-16 09:43 — PR #3859: H49: Lion optimizer (lr=1e-4/3e-4 sweep) on H37b base (edward) — WIP
+
+- Branch: `charliepai2i48h3-edward/hypothesis_h49_lion`
+- Hypothesis: Lion's sign-based gradient updates act as implicit per-parameter normalization. Strong gradient magnitude variation in our mixed-Re dataset may benefit from sign() removing magnitude information. Also tests whether AdamW is even the right optimizer for this task.
+
+Arms:
+- Arm A: Lion lr=1e-4, wd=1e-3, β₁=0.9, β₂=0.99 (standard config)
+- Arm B: Lion lr=3e-4, wd=3e-4, β₁=0.95, β₂=0.99 (higher LR + momentum)
+
+Both use n_head=2 + clip=1.0 + merged defaults. Predicted val_avg if Lion mechanism applies cleanly ≈ 64-67. High variance.
+
+**Status: WIP — student executing.**
+
+---
+
+## 2026-05-16 09:44 — PR #3862: H50: WSD trapezoidal schedule (2/8/4, 1/9/4) on H37b base (fern) — WIP
+
+- Branch: `charliepai2i48h3-fern/hypothesis_h50_wsd`
+- Hypothesis: WSD (warmup-stable-decay) gives more time at peak LR than cosine, with a sharp linear cooldown that preserves a fine-tune phase. Mechanically distinct from H41 Arm C T_max stretch (which removed the cooldown).
+
+Arms (both at 14-epoch budget):
+- Arm A: WSD 2/8/4 (2ep warmup, 8ep stable peak, 4ep linear decay)
+- Arm B: WSD 1/9/4 (1ep warmup, 9ep stable peak, 4ep linear decay)
+
+Both stack on n_head=2 + wd=5e-5 + lr=1e-3 + clip=1.0. Orthogonal to H47 (eta_min raises cosine floor); WSD changes the entire schedule shape. Predicted ≈ 64-66.
+
+**Status: WIP — student executing.**
