@@ -62,6 +62,37 @@ ACTIVATION = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Lion optimizer (Chen et al. 2023, "Symbolic Discovery of Optimization
+# Algorithms"). Sign-based update with a single momentum buffer.
+# ---------------------------------------------------------------------------
+class Lion(torch.optim.Optimizer):
+    def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None if closure is None else closure()
+        for group in self.param_groups:
+            lr = group["lr"]
+            wd = group["weight_decay"]
+            beta1, beta2 = group["betas"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                g = p.grad
+                state = self.state[p]
+                if "exp_avg" not in state:
+                    state["exp_avg"] = torch.zeros_like(p)
+                m = state["exp_avg"]
+                p.data.mul_(1 - lr * wd)
+                update = (beta1 * m + (1 - beta1) * g).sign_()
+                p.add_(update, alpha=-lr)
+                m.mul_(beta2).add_(g, alpha=1 - beta2)
+        return loss
+
+
 class MLP(nn.Module):
     def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
         super().__init__()
@@ -351,6 +382,9 @@ def write_experiment_summary(
         "checkpoint": str(model_path),
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
+        "optimizer": cfg.optimizer,
+        "beta1": cfg.beta1,
+        "beta2": cfg.beta2,
         "lr": cfg.lr,
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
@@ -403,6 +437,9 @@ class Config:
     cond_dim: int = 11         # FiLM conditioning dim; 0 disables FiLM
     clip_grad_norm: float = 0.0  # Gradient clip max_norm; 0 disables
     n_head: int = 4   # Transolver attention heads; head_dim = n_hidden // n_head
+    optimizer: str = "adamw"  # 'adamw' (default) or 'lion'
+    beta1: float = 0.9        # first moment coefficient (AdamW: 0.9, Lion: 0.9/0.95)
+    beta2: float = 0.999      # second moment coefficient (AdamW: 0.999, Lion: 0.99)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -454,7 +491,23 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+if cfg.optimizer == "lion":
+    optimizer = Lion(
+        model.parameters(),
+        lr=cfg.lr,
+        betas=(cfg.beta1, cfg.beta2),
+        weight_decay=cfg.weight_decay,
+    )
+elif cfg.optimizer == "adamw":
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=cfg.lr,
+        betas=(cfg.beta1, cfg.beta2),
+        weight_decay=cfg.weight_decay,
+    )
+else:
+    raise ValueError(f"Unknown optimizer: {cfg.optimizer!r} (expected 'adamw' or 'lion')")
+print(f"Optimizer: {cfg.optimizer} (betas=({cfg.beta1}, {cfg.beta2}), lr={cfg.lr}, wd={cfg.weight_decay})")
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
