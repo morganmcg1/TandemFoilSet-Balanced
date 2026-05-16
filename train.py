@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -214,10 +215,34 @@ class Transolver(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Random Fourier Features
+# ---------------------------------------------------------------------------
+
+def build_rff_projection(n_freqs: int, in_dim: int, scale: float, seed: int) -> torch.Tensor:
+    """Fixed-seed Gaussian projection with σ absorbed (B ~ N(0, σ²I)).
+
+    Tancik et al. 2020 (arXiv:2006.10739). Returns [n_freqs, in_dim].
+    """
+    gen = torch.Generator()
+    gen.manual_seed(seed)
+    return torch.randn(n_freqs, in_dim, generator=gen) * scale
+
+
+def compute_rff(positions: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+    """positions: [..., in_dim] normalized coords. B: [n_freqs, in_dim] (σ absorbed).
+
+    Returns: [..., 2 * n_freqs] = concat(cos, sin) at 2π·B·p.
+    """
+    proj = positions @ B.t()
+    two_pi = 2.0 * math.pi
+    return torch.cat([torch.cos(two_pi * proj), torch.sin(two_pi * proj)], dim=-1)
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, rff_B) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -247,6 +272,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
                 y = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            rff_features = compute_rff(x_norm[..., :2], rff_B)
+            x_norm = torch.cat([x_norm, rff_features], dim=-1)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
@@ -368,6 +395,9 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    rff_scale: float = 3.0   # σ for RFF projection on (x, z) — chord-scale match
+    n_rff_freqs: int = 32    # number of RFF directions; output has 2× this dim
+    rff_seed: int = 42       # fixed seed for the RFF projection matrix
 
 
 cfg = sp.parse(Config)
@@ -396,9 +426,19 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+RFF_OUT_DIM = 2 * cfg.n_rff_freqs  # cos + sin
+rff_B = build_rff_projection(
+    n_freqs=cfg.n_rff_freqs, in_dim=2,
+    scale=cfg.rff_scale, seed=cfg.rff_seed,
+).to(device)
+print(
+    f"RFF: n_freqs={cfg.n_rff_freqs} scale={cfg.rff_scale} seed={cfg.rff_seed} "
+    f"→ +{RFF_OUT_DIM} input dims (cos+sin on normalized x,z)"
+)
+
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    fun_dim=X_DIM - 2 + RFF_OUT_DIM,
     out_dim=3,
     n_hidden=96,
     n_layers=5,
@@ -478,6 +518,8 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
+        rff_features = compute_rff(x_norm[..., :2], rff_B)
+        x_norm = torch.cat([x_norm, rff_features], dim=-1)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         sq_err = F.smooth_l1_loss(pred, y_norm, reduction='none', beta=1.0)
@@ -504,7 +546,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, rff_B)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -562,7 +604,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, rff_B)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
