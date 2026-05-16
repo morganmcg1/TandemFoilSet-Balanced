@@ -267,6 +267,34 @@ class Transolver(nn.Module):
         return {"preds": fx}
 
 
+class FourierPosFeatures(nn.Module):
+    """NeRF-style random Fourier features for 2D positions (Tancik et al. 2020)."""
+
+    def __init__(self, num_bands: int = 10, scale: float = 10.0):
+        super().__init__()
+        B = torch.randn(2, num_bands) * scale
+        self.register_buffer("B", B)
+
+    def forward(self, pos):
+        proj = 2 * torch.pi * pos @ self.B
+        return torch.cat([proj.sin(), proj.cos()], dim=-1)
+
+
+class WrappedTransolver(nn.Module):
+    """Concatenates NeRF Fourier features with raw inputs (preserves raw (x, z))."""
+
+    def __init__(self, fourier: FourierPosFeatures, base: Transolver):
+        super().__init__()
+        self.fourier = fourier
+        self.base = base
+
+    def forward(self, data, **kwargs):
+        x = data["x"]
+        pos_feat = self.fourier(x[:, :, :2])
+        x_new = torch.cat([x, pos_feat], dim=-1)
+        return self.base({"x": x_new})
+
+
 # ---------------------------------------------------------------------------
 # EMA — exponential moving average of model weights
 # ---------------------------------------------------------------------------
@@ -345,6 +373,17 @@ def evaluate_split(model, loader, stats, surf_weight, device, amp_dtype: str = "
             y = y.to(device, non_blocking=True)
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
+
+            # Drop samples with non-finite ground truth: accumulate_batch masks
+            # them via mask=0, but NaN * 0 = NaN poisons the per-channel sums.
+            y_finite = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            if not y_finite.all():
+                if not y_finite.any():
+                    continue
+                x = x[y_finite]
+                y = y[y_finite]
+                is_surface = is_surface[y_finite]
+                mask = mask[y_finite]
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
@@ -425,6 +464,9 @@ def write_experiment_summary(
         "amp_dtype": cfg.amp_dtype,
         "use_ema": cfg.use_ema,
         "ema_decay": cfg.ema_decay if cfg.use_ema else None,
+        "use_fourier": cfg.use_fourier,
+        "fourier_num_bands": cfg.fourier_num_bands if cfg.use_fourier else None,
+        "fourier_scale": cfg.fourier_scale if cfg.use_fourier else None,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -477,6 +519,9 @@ class Config:
     ema_decay: float = 0.999  # max decay; warmup ramp protects early training
     film_cond: bool = False  # enable per-block FiLM conditioning on x[:,0,13:24]
     film_mlp_hidden: int = 128
+    use_fourier: bool = False  # enable NeRF-style random Fourier features on (x,z)
+    fourier_num_bands: int = 10
+    fourier_scale: float = 10.0
 
 
 cfg = sp.parse(Config)
@@ -505,9 +550,10 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+fourier_extra = 2 * cfg.fourier_num_bands if cfg.use_fourier else 0
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    fun_dim=(X_DIM - 2) + fourier_extra,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -522,7 +568,16 @@ model_config = dict(
     film_mlp_hidden=cfg.film_mlp_hidden,
 )
 
-model = Transolver(**model_config).to(device)
+if cfg.use_fourier:
+    fourier = FourierPosFeatures(num_bands=cfg.fourier_num_bands, scale=cfg.fourier_scale)
+    base = Transolver(**model_config)
+    model = WrappedTransolver(fourier, base).to(device)
+    print(
+        f"Fourier features ON: num_bands={cfg.fourier_num_bands}, scale={cfg.fourier_scale}, "
+        f"fun_dim={model_config['fun_dim']}"
+    )
+else:
+    model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
