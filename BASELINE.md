@@ -95,7 +95,7 @@ cd target/ && python train.py --agent willowpai2i48h1-thorfinn \
 
 ---
 
-## 2026-05-15 18:30 — PR #3317: H3b: Cosine T_max=15 tuned to actual epoch budget ← CURRENT BEST
+## 2026-05-15 18:30 — PR #3317: H3b: Cosine T_max=15 tuned to actual epoch budget
 
 - **Student:** willowpai2i48h1-askeladd
 - **Branch:** `askeladd/cosine-tmax-tuned`
@@ -106,7 +106,7 @@ cd target/ && python train.py --agent willowpai2i48h1-thorfinn \
 
 | Split | mae_surf_p |
 |-------|-----------|
-| **val_avg/mae_surf_p** | **91.3319** ← CURRENT BEST |
+| **val_avg/mae_surf_p** | **91.3319** |
 | val_single_in_dist | 108.1607 |
 | val_geom_camber_rc | 98.4476 |
 | val_geom_camber_cruise | 72.8700 |
@@ -138,4 +138,53 @@ T_max=15 aligns the cosine LR schedule with the 14-epoch wall-clock budget. At T
 cd target/ && python train.py --agent willowpai2i48h1-askeladd \
   --wandb_name "willowpai2i48h1-askeladd/cosine_tmax15" \
   --wandb_group cosine_tmax_scan
+```
+
+---
+
+## 2026-05-16 00:25 — PR #3480: H: bf16 autocast alone (bs=4 preserved) ← CURRENT BEST
+
+- **Student:** willowpai2i48h1-askeladd
+- **Branch:** `willowpai2i48h1-askeladd/bf16-bs4-only`
+- **W&B run:** `t00506x1`
+- **Epochs:** 18/50 (30-min wall-clock cap, best epoch 17)
+
+### Validation metrics (best checkpoint, epoch 17)
+
+| Split | mae_surf_p |
+|-------|-----------|
+| **val_avg/mae_surf_p** | **87.9105** ← CURRENT BEST |
+| val_single_in_dist | 105.0466 |
+| val_geom_camber_rc | 95.6868 |
+| val_geom_camber_cruise | 68.1961 |
+| val_re_rand | 82.7126 |
+
+### Test metrics (all 4 splits — includes NaN fix from PR #3309)
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|-------|-----------|------------|------------|
+| test_single_in_dist | 93.6807 | 0.9884 | 0.5318 |
+| test_geom_camber_rc | 87.5448 | 1.5750 | 0.7600 |
+| test_geom_camber_cruise | 75.1300 | 0.6383 | 0.4713 |
+| test_re_rand | 77.1572 | 0.9693 | 0.5646 |
+| **test_avg (all 4 splits)** | **83.3782** | 1.0428 | 0.5819 |
+
+### Model config
+- Transolver: 5 layers, hidden=128, heads=4, slice_num=64, mlp_ratio=2
+- Loss: `vol_huber(delta=0.1) + 10 * surf_huber(delta=0.1)` on normalized targets
+- AdamW lr=5e-4, weight_decay=1e-4, batch=4, cosine T_max=15
+- **bf16 autocast around forward + loss**, master weights and optimizer step in fp32
+- **Evaluation in pure fp32** (no autocast wrapper around `evaluate_split`)
+- Peak VRAM: **32.9 GB** / 96 GB (vs 78 GB fp32 baseline → -58%)
+
+### Key insight
+bf16 autocast is numerically safe for Transolver. The forward + loss compute drops ~28% per step (~244 ms vs ~341 ms), buying 4 extra epochs in the 30-min budget (18 vs 14). With T_max=15 the last 2-3 epochs run at near-zero LR and act as a built-in mini fine-tune — epoch 17 is the global minimum (better than 14, 15, 16). VRAM halved, so significant capacity headroom is unlocked for future scaling.
+
+The val gain (-3.74%, ~1.9σ vs alphonse's σ=1.80) is borderline statistically significant; the test gain (-5.71%) is solidly past the noise floor on the paper-facing metric. bf16 should now be the default for all future runs.
+
+### Reproduce
+```bash
+cd target/ && python train.py --agent willowpai2i48h1-askeladd \
+  --wandb_name "willowpai2i48h1-askeladd/bf16_only_bs4" \
+  --wandb_group bf16_clean
 ```

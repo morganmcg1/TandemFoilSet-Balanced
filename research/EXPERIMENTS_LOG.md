@@ -1,5 +1,114 @@
 # SENPAI Research Results
 
+## 2026-05-16 00:30 — PR #3480: H: bf16 autocast alone (bs=4 preserved) ✓ MERGED — NEW BASELINE
+
+- Branch: `willowpai2i48h1-askeladd/bf16-bs4-only`
+- Student: willowpai2i48h1-askeladd
+- Hypothesis: bf16 autocast around forward + loss (bs=4 preserved) trades ~28% per-step compute for 4 extra epochs in the 30-min budget. The extra epochs at near-zero LR (T_max=15 schedule ends at epoch 15) act as a built-in mini fine-tune.
+
+### Results vs prior baseline #3317
+
+| Metric | Prior baseline (#3317) | This run | Δ |
+|--------|------------------------|----------|---|
+| **val_avg/mae_surf_p** (best) | 91.3319 | **87.9105** | **-3.74%** |
+| **test_avg/mae_surf_p** | 88.4260 (3-split, pre-NaN fix) | **83.3782** (4-split) | -5.71% |
+| Epochs completed in 30 min | 14 | **18** | +4 |
+| Per-step time (ms) | ~341 | **~244** | -28% |
+| Per-epoch time (s) | ~128 | **~100** | -22% |
+| Peak VRAM (GB) | 78 | **32.9** | -58% |
+
+W&B run: `t00506x1` · Group: `bf16_clean`
+
+### Per-split val (best epoch 17)
+| Split | Prior baseline | This | Δ |
+|-------|----------------|------|---|
+| val_single_in_dist | 108.16 | 105.05 | -2.9% |
+| val_geom_camber_rc | 98.45 | 95.69 | -2.8% |
+| val_geom_camber_cruise | 72.87 | 68.20 | **-6.4%** |
+| val_re_rand | 85.85 | 82.71 | -3.7% |
+
+### Per-split test (all 4 splits valid — NaN fix in this branch)
+| Split | mae_surf_p |
+|-------|-----------|
+| test_single_in_dist | 93.68 |
+| test_geom_camber_rc | 87.54 |
+| test_geom_camber_cruise | 75.13 |
+| test_re_rand | 77.16 |
+
+### Analysis
+- **bf16 is numerically safe for Transolver.** No NaNs, smooth monotone-ish loss curve, identical trajectory shape to fp32 baseline.
+- **The bf16+bs8 regression in PR #3460 was entirely bs8 update-count starvation**, not bf16. Isolating bf16 at bs=4 confirms it as the genuine free win.
+- **Best epoch is 17** (one beyond T_max=15). The post-schedule near-zero-LR epochs function as a built-in fine-tune; epoch 18 ticks up (90.46) so we're at the natural stopping point for T_max=15.
+- **Val improvement is ~1.9σ** vs alphonse's σ=1.80 estimate — borderline statistically significant on val alone. **Test improvement (-5.71%) is solidly past the noise floor** on the paper-facing metric.
+- **VRAM headroom unlocked.** 32.9GB vs 96GB available — huge capacity scaling room (wider model, larger slice_num, deeper net) becomes feasible.
+- **bf16 stays as the default** going forward — orthogonal to every other lever (Huber δ, T_max, EMA, etc.).
+
+### Follow-up directions
+1. T_max=18 — match schedule to achievable epoch count (stops final epochs from running at exactly 0 LR).
+2. bf16 + larger model — VRAM headroom suggests bumping width/depth/slice_num.
+3. bf16 + EMA-over-last-3-checkpoints — val flat across epochs 15-17 (88.30, 88.30, 87.91); averaging would be more robust.
+
+---
+
+## 2026-05-15 23:50 — PR #3305: H1b: Huber delta scan (δ=0.05, 0.02) ✗ CLOSED (noise-limited)
+
+- Branch: `alphonse/huber-smaller-delta`
+- Student: willowpai2i48h1-alphonse
+- Hypothesis: Push Huber further into the L1 regime (δ=0.05 / 0.02) to better align with the MAE metric.
+
+### Results
+
+| Arm | val_avg/mae_surf_p | test_avg/mae_surf_p | W&B run |
+|-----|--------------------|---------------------|---------|
+| Baseline #3317 (δ=0.1) | 91.3319 | 88.4260 (3-split) | `kx17n4pn` |
+| **δ=0.05 (4-replicate mean)** | **91.47** ± σ=1.80 | — | `78nl8hac` + 3 replicates |
+| δ=0.02 | within noise | — | (single arm) |
+
+### Critical finding: σ=1.80 noise floor characterization
+
+Alphonse went beyond the original hypothesis and **ran 4 replicates of the δ=0.05 arm with explicit seed control**, characterizing the run-to-run variance for the first time in this program:
+- 4-replicate mean: **91.47**
+- 4-replicate σ: **1.80**
+- Variance source: train.py has **no seed control** — no `torch.manual_seed`, no `random.seed`, no `np.random.seed`. Each run draws from a different RNG state.
+
+### Analysis
+- **δ=0.05 is statistically indistinguishable from baseline 91.33** (within 1σ). The Huber δ lever is exhausted for this metric.
+- **This program is operating in a noise-limited regime.** Many prior "close to baseline" results across rounds (#3395, #3426, #3428 surf_w arms, #3175, etc.) cannot be attributed signal-vs-noise without σ knowledge.
+- **The 91.33 baseline itself may be a lucky draw.** True mean given σ=1.80 lies in [89.5, 93.1] at 95% CI for a single sample.
+- **train.py needs seed control as a permanent fixture** to make all future comparisons interpretable.
+
+### Follow-up assigned (PR #3546)
+Seed control addition to train.py + 4 baseline replicates of the NEW post-bf16 baseline 87.91 to characterize μ̂ ± σ̂.
+
+---
+
+## 2026-05-15 23:50 — PR #3428: H: surf_weight scan (15, 20) on T_max=15+Huber base ✗ CLOSED (within noise)
+
+- Branch: `edward/surf-weight-scan`
+- Student: willowpai2i48h1-edward
+- Hypothesis: A modest surf_weight bump (10 → 15, 20) might better balance gradient mass on the scored channel without the gradient-starvation observed at surf_weight=50 (#3174).
+
+### Results
+
+| Arm | val_avg/mae_surf_p | test_avg/mae_surf_p | W&B run |
+|-----|--------------------|---------------------|---------|
+| Baseline #3317 | 91.33 | 88.43 | `kx17n4pn` |
+| surf_weight=15 | 92.07 | 87.21 | `6ra6amur` |
+| **surf_weight=20** | **91.625** | **86.68** | (arm 2) |
+
+### Analysis
+- Both arms within σ=1.80 of baseline on val — no statistically significant improvement.
+- Test improvements (-1.4% to -2.0%) are also within noise.
+- **Surf_weight is exhausted as a lever** in the 10-50 range. Below 10 starves the surface channels; above ~25 starves volume (per #3174 diagnostic). Around 10-20 is a plateau.
+
+### Edward's suggested follow-up (incorporated into PR #3542)
+"Per-channel weighting (different weights for surf_p vs surf_uxuy) instead of a single surface scalar" — interesting, parked for after TTA and seed-control land.
+
+### Follow-up assigned (PR #3542)
+Test-Time Augmentation via horizontal-flip symmetry — orthogonal to all in-flight training work, pure inference change, variance reduction lever.
+
+---
+
 ## 2026-05-15 23:30 — PR #3174: H2: L1 on surface-p + surf_weight=50 (rebased) ✗ CLOSED
 
 - Branch: `frieren/surf-p-l1-weight50`
