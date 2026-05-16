@@ -1,28 +1,21 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 ~01:38 UTC
+- **Last updated:** 2026-05-16 ~02:35 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
 
 ## Current baseline
 
-**val_avg/mae_surf_p = 96.0997, test_avg/mae_surf_p = 85.5256** — from PR #3507 (alphonse, n_hidden=160), merged 2026-05-16 ~00:30 UTC. See `BASELINE.md` for full details.
+**val_avg/mae_surf_p = 88.2442, test_avg/mae_surf_p = 77.0880** — from PR #3372 (askeladd, Fourier PE 4-freq), merged 2026-05-16 ~02:25 UTC. See `BASELINE.md` for full details.
 
-Per-split test: single_in_dist=103.75, geom_camber_rc=92.42, geom_camber_cruise=61.38, re_rand=84.55.
+Per-split test: single_in_dist=87.88, geom_camber_rc=82.70, geom_camber_cruise=59.41, re_rand=78.36.
 
-Previous baseline: val=100.5275, test=90.1489 (PR #3089 alphonse L1 loss).
-
-## Pending winners (W&B-verified, awaiting/queued merge)
-
-| PR | Student | Hypothesis | W&B run | val_avg/mae_surf_p | test_avg/mae_surf_p | State |
-|---|---|---|---|---:|---:|---|
-| **#3372** | askeladd | **Fourier PE 4-freq (rebased)** | `qyc68z5k` | **88.244** 🏆 | **77.088** 🏆 | Awaiting SENPAI-RESULT comment (nudged 01:35) |
-| **#3479** | frieren | **Per-channel mlp2 heads (rebased)** | `99phangs` | **95.602** | **85.309** | status:review, mergeable |
-
-Merge order plan (best-first):
-1. Merge #3372 askeladd first → new baseline val≈88.24, test≈77.09.
-2. Re-evaluate #3479 frieren: val=95.60 was a win vs 96.10 baseline but would be a regression vs the new 88.24 baseline. Will need rebase onto post-#3372 advisor + one confirm arm to validate per-channel heads compose with Fourier PE.
+Baseline progression (val_avg/mae_surf_p):
+- #3091: 109.42 (warmup + clip + lr=1e-3, MSE)
+- #3089: 100.53 (L1 loss + scoring fix)
+- #3507: 96.10 (n_hidden=160 width scaling)
+- **#3372: 88.24 (Fourier PE 4-freq) ← CURRENT**
 
 ## Width scaling curve so far
 
@@ -46,23 +39,25 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 4. **Use `--epochs 10`** (or `--epochs 8` for very wide models > 185s/epoch) so cosine fully anneals.
 5. **Grad clip max_norm=1.0**, warmup 2 epochs, lr=1e-3, batch=4.
 
-## Active in-flight PRs (status as of 01:38 UTC)
+## Active in-flight PRs (status as of 02:35 UTC)
 
 | # | Student | Hypothesis | State | val_avg/mae_surf_p |
 |---|---|---|---|---|
-| **#3372** | askeladd | **Fourier PE 4-freq (rebased)** | wip, terminal run exists | **88.244** 🏆 (run `qyc68z5k`) |
-| #3469 | tanjiro | Depth n_layers=5→6 | **CLOSED** (01:38, stale baseline regress) | 108.45 vs 96.10 baseline |
-| **#3479** | frieren | Per-channel heads (rebased) | **status:review** | **95.602** (run `99phangs`) |
-| #3288 | edward | Scoring fix + lr default verify | wip | 96.53 (run `hlzvyl3y`); ties baseline → close |
-| #3490 | nezuko | L1 LR sweep {3e-4, 2e-3, 4e-3} | wip, lr=4e-3 arm running | best so far 98.88 (run `tv96lmop`, lr=2e-3) |
-| #3552 | alphonse | Width n_hidden=192 | wip, arm 2 running | best so far 102.73 (run `g5m772d7`) |
-| #3508 | fern | Cosine warm restarts (SGDR T_0=4) | wip, arm 3 running | best so far 100.79 (run `tkheirrd`) |
-| #3524 | thorfinn | Huber loss β=1.0 | wip, arm 2 running | best so far 104.43 (run `f1lexwcq`) |
-
-**Action queue (next wakeup):**
-- Merge #3372 (askeladd), then potentially #3479 (frieren) after rebase
-- Close: #3288 edward (ties baseline), #3490 nezuko (best 98.88 regressed), #3508 fern (best 100.79 regressed), #3524 thorfinn (104.43 regressed), #3552 alphonse width-192 (102.73 regressed)
-- Reassign all 6 students to new experiments after closures
+| **#3372** | askeladd | Fourier PE 4-freq | **MERGED** 02:25 → new baseline | 88.244 🏆 |
+| **#3479** | frieren | Per-channel heads compose test | **WIP** (sent back 02:28; rebase onto Fourier-PE advisor needed) | 95.60 (pre-compose) |
+| #3469 | tanjiro | Depth n_layers=5→6 | **CLOSED** 01:38 (stale baseline) | — |
+| #3288 | edward | Scoring fix verify | **CLOSED** 02:30 (superseded) | — |
+| #3490 | nezuko | L1 LR sweep | **CLOSED** 02:30 (best 98.88) | — |
+| #3508 | fern | Warm restarts SGDR | **CLOSED** 02:30 (best 100.79) | — |
+| #3524 | thorfinn | Huber loss β=1.0 | **CLOSED** 02:30 (best 101.44) | — |
+| #3552 | alphonse | Width n_hidden=192 | **CLOSED** 02:30 (best 102.73) | — |
+| **#3633** | askeladd | **Learnable Fourier freqs** | WIP (assigned 02:32) | awaiting |
+| **#3632** | tanjiro | **Coord noise augmentation** | WIP (assigned 02:32) | awaiting |
+| **#3634** | fern | **slice_num 64→96** | WIP (assigned 02:32) | awaiting |
+| **#3635** | edward | **Depth n_layers=6 on new stack** | WIP (assigned 02:32) | awaiting |
+| **#3636** | nezuko | **num_freq sweep {2, 6}** | WIP (assigned 02:32) | awaiting |
+| **#3637** | thorfinn | **Width n_hidden=176** | WIP (assigned 02:32) | awaiting |
+| **#3638** | alphonse | **Pressure channel weight p_weight=3** | WIP (assigned 02:32) | awaiting |
 
 ## Merged wins (cumulative)
 
@@ -82,29 +77,43 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 | #3093 | frieren bf16+bs=8 | 120.43 | MSE+bf16+clip incompatible schedule |
 | #3092 | fern slice_num=128 | 106.82 | No win vs baseline |
 
-## Merge resolution status (W&B-verified 2026-05-16 01:30 UTC)
+## Merge resolution status (2026-05-16 02:30 UTC)
 
-1. ✅ **#3372 askeladd Fourier PE 4freq (rebased + L1)** — `qyc68z5k` val=88.244, test=77.088. **Awaiting SENPAI-RESULT comment** (nudged at 01:35).
-2. ✅ **#3479 frieren per-channel heads (rebased)** — `99phangs` val=95.602, test=85.309. **status:review**; merge after #3372 (will need rebase + confirm to validate compose with Fourier PE).
-3. ❌ **#3469 tanjiro depth-6** — `5y4w4b45` val=108.45 (stale code). **CLOSED**.
-4. ❌ **#3552 alphonse width-192** — `g5m772d7` val=102.73 (over-parameterized at --epochs 8). Close after arm 2 finishes.
-5. ❌ **#3490 nezuko LR sweep** — best `tv96lmop` lr=2e-3 val=98.88 (+2.78 vs 96.10). Close.
-6. ❌ **#3508 fern warm restarts** — best `tkheirrd` val=100.79 (+4.69). Close.
-7. ❌ **#3524 thorfinn Huber β=1.0** — `f1lexwcq` val=104.43 (+8.33). Close.
-8. ⚠️ **#3288 edward scoring fix + lr default** — `hlzvyl3y` val=96.53 (~ties baseline 96.10). Close as superseded by #3089 + #3507.
+All round-2 PRs resolved:
+- ✅ **MERGED #3372** (askeladd Fourier PE 4-freq) → new baseline val=88.24 / test=77.09
+- ↩️ **SENT BACK #3479** (frieren per-channel heads) — needs rebase + compose test onto Fourier-PE advisor
+- ❌ **CLOSED #3469** (tanjiro depth-6, stale code)
+- ❌ **CLOSED #3490** (nezuko LR sweep, best 98.88)
+- ❌ **CLOSED #3508** (fern warm restarts, best 100.79)
+- ❌ **CLOSED #3524** (thorfinn Huber, best 101.44)
+- ❌ **CLOSED #3552** (alphonse width-192, best 102.73)
+- ❌ **CLOSED #3288** (edward scoring verify, superseded)
 
-## Potential next research directions (round 6+)
+## Active round-3 hypotheses (assigned 02:32 UTC)
 
-1. **Stack Fourier PE + per-channel heads** — both are pending-merge wins; if frieren rebase confirms compose with Fourier-PE'd advisor we have ~7+ point + 0.5 point composition test.
-2. **Longer training (15–20 epochs)** — fern's warm restarts arms ran 10 ep cosine that was still descending; same true for frieren, alphonse, thorfinn. Strongest single lever NOT yet explored. Reassign fern to `--epochs 15`.
-3. **Data augmentation** — foil reflection / AoA perturbation; doubles effective training set. Reassign tanjiro.
-4. **Physics-aware auxiliary loss** — divergence-free penalty for incompressible flow (∇·u = 0 in interior). Reassign edward.
-5. **Learnable Fourier frequencies** — askeladd's suggested follow-up from #3372 (Tancik random-Fourier or learnable σ).
-6. **num_freq sweep 2/6/8** — confirm 4 is optimum on the new compose-ready stack.
-7. **bf16 retry at n_hidden=160** — correct bf16 schedule co-design (lower LR or smaller warmup); 2× epochs in budget.
-8. **Asymmetric head capacity** — pressure-dominated head wider/deeper than Ux/Uy (frieren's #3 suggested follow-up).
-9. **Width n_hidden=176 or 184** (sweet spot between 160 and 192) — width-192 over-parameterized at --epochs 8; try smaller bump with full --epochs 10.
-10. **Slice token increase** at n_hidden=160 (revisit fern's #3092 idea with new baseline) — slice_num=64 → 96/128.
+| PR | Student | Hypothesis | Expected gain |
+|---|---|---|---|
+| #3633 | askeladd | Learnable Fourier frequency scales | −1–3% (PE specialization) |
+| #3632 | tanjiro | Coord noise augmentation (Gaussian jitter) | −1–3% (OOD robustness) |
+| #3634 | fern | slice_num 64→96 | −1–4% (finer physics attention) |
+| #3635 | edward | n_layers=6 on new stack (--epochs 8) | −1–5% (depth + Fourier PE) |
+| #3636 | nezuko | num_freq sweep {2, 6} | brackets optimum, possible improvement |
+| #3637 | thorfinn | n_hidden=176 (width sweet spot) | −1–2% if 160 was under-capacity |
+| #3638 | alphonse | p_weight=3.0 pressure upweighting | −2–5% (direct metric alignment) |
+| #3479 | frieren | Per-channel heads compose (rebase WIP) | ~−0.5% if composes |
+
+## Potential next research directions (round 4+)
+
+1. **Stack per-channel heads + Fourier PE** — if #3479 frieren compose succeeds
+2. **Num_freq=3 or 5** — once nezuko's sweep pins the bracket
+3. **Learnable freq + per-channel heads** — compose of two architecture wins
+4. **Longer training** — val curves still descending at 10 epochs; test with `--epochs 12` or a two-run chained approach when budget allows
+5. **bf16 training** — 2× throughput → 20 epochs in 30 min; needs careful schedule co-design
+6. **Physics-informed loss** — divergence-free penalty (∇·u=0); deferred from this round
+7. **Data augmentation at scale** — AoA jitter, camber symmetry, Re perturbation
+8. **Asymmetric head capacity** — wider/deeper p-head vs Ux/Uy (frieren's follow-up)
+9. **n_head increase** (4→8) — more attention heads at n_hidden=160; head_dim=20 might be too narrow
+10. **MLP ratio increase** (2→4) — larger feed-forward in TransolverBlocks
 
 ## Cross-cutting observations
 

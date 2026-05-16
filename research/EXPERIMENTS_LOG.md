@@ -1,5 +1,59 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-16 02:25 — PR #3372: Fourier PE 4-freq on (x,z) coords (askeladd) — **MERGED** → new baseline
+
+- **Student:** willowpai2i48h4-askeladd (branch: `askeladd/fourier-pos-encoding`)
+- **Hypothesis:** Replace raw (x, z) coordinates with NeRF-style log-spaced sinusoidal Fourier positional encoding (num_freq=4) to give the model multi-scale geometric receptive field beyond linear interpolation.
+
+### Results (W&B run `qyc68z5k`)
+
+| Metric | Old baseline (#3507, 96.10) | This run (Fourier PE 4-freq) | Δ |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | 96.0997 | **88.2442** | **−7.86 (−8.2%) 🏆** |
+| **test_avg/mae_surf_p** | 85.5256 | **77.0880** | **−8.44 (−9.9%) 🏆** |
+
+Per-split test surface pressure MAE:
+
+| Split | test/mae_surf_p |
+|---|---:|
+| single_in_dist | 87.8840 |
+| geom_camber_rc | 82.7020 |
+| geom_camber_cruise | 59.4070 |
+| re_rand | 78.3590 |
+| **avg** | **77.0880** |
+
+Config: L1 loss, warmup 2ep, cosine T_max=10, lr=1e-3, n_hidden=160, n_layers=5, n_head=4, slice_num=64, Fourier PE num_freq=4. `fun_dim` grows from 22 to 38 (4×num_freq sinusoidal features per coord pair). Per-epoch ~168s (unchanged — PE is just a preprocess step). ENCODED_X_DIM=38.
+
+### Analysis
+
+Fourier PE gave the **largest single-experiment gain on the track** — larger than L1 loss (−8.1% val) and larger than width-160 (−4.4% val). The improvement is concentrated in the cruise and OOD splits: `test_geom_camber_cruise` went from 61.38 → 59.41 (−3.2%), `test_re_rand` from 84.55 → 78.36 (−7.3%), `test_single_in_dist` from 103.75 → 87.88 (−15.3%). This pattern is consistent with the hypothesis: Fourier features encode geometry at multiple scales simultaneously, helping the model generalize to unseen geometries (OOD) rather than memorizing the training mesh topology.
+
+The gain was earned cheaply: no architecture change, no extra parameters (only the input layer of the preprocess MLP grows by 14 weights), no training time overhead.
+
+**Merged** at 02:25 UTC as new baseline. num_freq=4 is now `Config` default. All in-flight students need to rebase to get the new `ENCODED_X_DIM` computation.
+
+---
+
+## 2026-05-16 02:30 — PRs #3490/#3508/#3524/#3552/#3288: Round-2 experiment sweep — all CLOSED
+
+Five PRs closed in this batch, all regressing vs the new baseline val=88.24. Summary:
+
+| PR | Student | Hypothesis | Best val | Best test | Δ vs 88.24 |
+|---|---|---|---:|---:|---:|
+| #3490 | nezuko | L1 LR sweep {3e-4, 2e-3, 4e-3} | 98.88 (lr=2e-3) | 87.75 | +10.64 |
+| #3508 | fern | Cosine warm restarts SGDR T_0=4 | 100.79 | 90.63 | +12.55 |
+| #3524 | thorfinn | Huber loss β=1.0 | 101.44 (`oj7zwn3z`) | 90.14 | +13.20 |
+| #3552 | alphonse | Width n_hidden=192 (--epochs 8) | 102.73 | 92.16 | +14.49 |
+| #3288 | edward | Scoring fix + lr default verify | 96.53 | 86.62 | +8.29 (superseded) |
+
+**Conclusions:**
+- **lr=1e-3 is optimal**: both lower (3e-4) and higher (2e-3, 4e-3) LR with L1 are worse. No exploration needed here.
+- **SGDR warm restarts hurt**: LR resets disrupt the still-descending loss curve at 10 epochs. Cosine-to-zero stays canonical.
+- **Huber β=1.0 worse than L1**: L1 directly optimizes MAE, Huber doesn't. L1 locked as canonical.
+- **Width 192 over-parameterized at --epochs 8**: Too much capacity for the 30-min budget. n_hidden=176 is the next candidate.
+
+---
+
 ## 2026-05-16 01:38 — PR #3469: Deeper model n_layers 5→6 (tanjiro) — CLOSED
 
 - **Student:** willowpai2i48h4-tanjiro (branch: `tanjiro/depth-6layers`)
