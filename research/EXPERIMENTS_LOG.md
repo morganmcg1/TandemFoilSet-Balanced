@@ -651,3 +651,48 @@ Hypothesis: Increase attention heads 4→8. n_head changes the attention partiti
 - Arm A (primary): `--n_head 8` (per-head dim 16)
 - Arm B (conditional if A wins decisively): `--n_head 16` or `--n_head 2` depending on direction
 - W&B group: `n-head-sweep`
+
+## 2026-05-16 03:30 — PR #3475 MERGED: asinh-pressure → new baseline val=81.9754 (−9.53%)
+
+| Run | Config | val_avg/mae_surf_p | test_3split | Δ vs baseline |
+|---|---|---|---|---|
+| 2028x8co (verify) | asinh_p_scale=1.0, ema_decay=0.99 | 85.8151 | 83.3376 | −5.3% |
+| **j5214ii4 (replicate)** | **asinh_p_scale=1.0, ema_decay=0.99** | **81.9754** | **81.3654** | **−9.53%** |
+
+Per-split val (best replicate):
+| split | j5214ii4 | baseline (fzrq04xr) | Δ |
+|---|---|---|---|
+| val_single_in_dist | 101.013 | 106.135 | −4.8% |
+| val_geom_camber_rc | 90.717 | 99.466 | −8.8% |
+| val_geom_camber_cruise | 59.909 | 70.358 | −14.8% |
+| val_re_rand | 76.263 | 86.494 | −11.8% |
+
+**Key finding**: asinh + fast-EMA compound super-additively. Standalone asinh on old decay=0.999 base = −2.1%. On decay=0.99 base = −9.53%. Fast shadow (decay=0.99) tracks the late-training basin cleanly, and compressed gradient signal from asinh lets EMA act more effectively. val_re_rand drop (−11.8%) is the largest OOD improvement yet.
+
+Merged. New baseline: val=81.9754, test_3split=81.3654. BASELINE.md updated.
+
+## 2026-05-16 03:45 — Round-4 closures (3 PRs regress vs old baseline, all fail new baseline)
+
+| PR | Student | Hypothesis | Best val | Vs old baseline | Vs new baseline | Decision |
+|---|---|---|---|---|---|---|
+| #3610 | thorfinn | mlp_ratio=4 | 93.1162 | +2.76% REGRESS | +13.6% | CLOSED |
+| #3576 | nezuko | wd sweep (5e-3 best) | 90.4605 | −0.17% TIED | +10.3% | CLOSED |
+| #3575 | edward | p_surf_weight=3/5 | 94.6538 | +4.5% REGRESS | +15.5% | CLOSED |
+
+## 2026-05-16 03:50 — Stale WIP closures
+
+| PR | Student | Hypothesis | Best val | Root cause | Decision |
+|---|---|---|---|---|---|
+| #3578 | frieren | re-sinusoidal-embed | 130.821 | Frequency mismatch: log_re/16 spans [0.78,0.96] → 7/8 dims constant | CLOSED |
+| #3577 | tanjiro | slice-num=128 (old stack) | 101.177 | +11.6% vs old baseline; no SENPAI-RESULT posted; pre-asinh stack | CLOSED |
+
+## 2026-05-16 03:55 — Round-5 assignments (6 new PRs, all on new asinh+EMA baseline)
+
+| PR | Student | Hypothesis | Key innovation |
+|---|---|---|---|
+| #3659 | askeladd | asinh-scale-sweep (1.5, 2.0) | Find optimal compression strength |
+| #3660 | frieren | re-sinusoidal-corrected | Fix frequency bug: normalize log_re to actual [10.8,13.4] range |
+| #3661 | nezuko | wd-on-asinh (1e-3, 5e-3) | Regularization compound with asinh |
+| #3662 | thorfinn | vel-asinh (scale=1.0) | Apply asinh to Ux/Uy channels too |
+| #3663 | edward | dropout-sweep (0.05, 0.1) | MLP dropout for OOD regularization |
+| #3664 | tanjiro | slice-num-on-asinh (128) | Retest with cleaner loss landscape |
