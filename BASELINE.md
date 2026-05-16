@@ -1,6 +1,49 @@
 # BASELINE — TandemFoilSet (willow-pai2i-24h-r4)
 
-## Current best — PR #3258 (fern, merged 2026-05-16 06:xx UTC)
+## Current best — PR #3504 (frieren, merged 2026-05-16 08:xx UTC)
+
+**Richer FiLM conditioning: cond_dim=1→11 (log_Re + AoA_1 + NACA_1 + AoA_2 + NACA_2 + gap + stagger) and film_mid=64→128. Stacked on top of #3258 grad-clip+warmup + #3262 RFF + #3358 cosine T_max=14 + #3263 FiLM(log_Re) + #3257 surf-MAE+p_weight=3.**
+
+| Metric | Value | W&B run | Δ vs prior baseline |
+|--------|------:|---------|---------------------|
+| `val_avg/mae_surf_p` | **67.2955** | `v38snhoe` (frieren) | **−13.31%** (from 77.65) |
+| `test_avg/mae_surf_p` | **59.2916** | `v38snhoe` (frieren) | **−11.34%** (from 66.87) |
+| `test_single_in_dist/mae_surf_p` | 69.6891 | `v38snhoe` | −11.39% (from 78.65) |
+| `test_geom_camber_rc/mae_surf_p` | 74.1610 | `v38snhoe` | −4.51% (from 77.66) |
+| `test_geom_camber_cruise/mae_surf_p` | 36.6302 | `v38snhoe` | **−20.66%** (from 46.17) |
+| `test_re_rand/mae_surf_p` | 56.6860 | `v38snhoe` | **−12.79%** (from 65.00) |
+
+**Cumulative path:** vanilla 106.23 → #3257 94.35 → #3263 90.06 → #3358 80.08 → #3262 69.27 → #3258 66.87 → #3504 **59.29** (**−44.2% from vanilla in 6 PRs**). R3#1.
+
+All subsequent PRs must beat **test_avg/mae_surf_p < 59.29**.
+
+### What changed
+- **`cond_dim=1 → 11`**: FiLM conditioning expanded from `log_Re` only (`x[..., 13:14]`) to full per-sample-global stack: `log_Re, AoA_1, NACA_1 (3 dims), AoA_2, NACA_2 (3 dims), gap, stagger` (`x[..., 13:24]`). Zero-init preserved (γ=0, β=0 at init → model starts identical to #3258 at the FiLM site).
+- **`film_mid=64 → 128`**: FiLM bottleneck widened. The 11-dim conditioning can exploit more capacity, confirmed by mid128 > mid64 by ~3% test.
+- **Param delta:** +17,792 (from 687,319 → 705,111). <0.1% relative.
+- **Peak VRAM:** 44.5 GiB / 46.4% of 96 GiB H100. Huge headroom.
+
+### Mechanism summary
+AoA/NACA/gap/stagger conditioning is orthogonal to RFF (spatial encoding) and grad-clip+warmup (training stability). Cruise (tandem-only) gains most: −20.66% — gap/stagger features directly separate tandem-cruise from other splits. re_rand gains −12.79% — log_Re channel not crowded out. The single_in_dist regression seen in R1 (on old base) is gone: RFF's spatial signal gives the model enough structure that the degenerate 6-zero cond manifold on single-foil samples doesn't hurt generalization.
+
+### Model config
+- `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2`
+- `lr=5e-4, weight_decay=1e-4, batch_size=4, surf_weight=10, p_channel_weight=3, surface-MAE loss, epochs=50`
+- **FiLM:** `cond_dim=11, mid_dim=128, hidden=128, zero-init`
+- **Cosine LR:** `T_max=14` with 5-epoch linear warmup
+- **RFF:** `fourier_n_freqs=16, fourier_sigma=1.0` on (x, z) coordinates
+- **`grad_clip=1.0, warmup_epochs=5`**
+- Best epoch: 14 / 50. Wall clock: 32.1 min.
+
+### Reproduce command
+
+```bash
+cd target && python train.py --wandb_group richer-film --wandb_name richer-film-mid128-v2-on-rff-base --film_mid 128
+```
+
+---
+
+## Previous best — PR #3258 (fern, merged 2026-05-16 06:xx UTC)
 
 **Gradient clip 1.0 + 5-epoch linear LR warmup, stacked on top of #3262 RFF + #3358 cosine T_max=14 + #3263 FiLM(log_Re) + #3257 surf-MAE+p_weight=3.**
 
@@ -15,7 +58,7 @@
 
 **Cumulative path:** vanilla 106.23 → #3257 94.35 → #3263 90.06 → #3358 80.08 → #3262 69.27 → #3258 **66.87** (**−37.0% from vanilla in 5 PRs**).
 
-All subsequent PRs must beat **test_avg/mae_surf_p < 66.87**.
+All subsequent PRs must beat **test_avg/mae_surf_p < 66.87** (superseded by #3504 → 59.29).
 
 ### What changed
 - **`grad_clip=1.0`**: `clip_grad_norm_(model.parameters(), max_norm=cfg.grad_clip)` in the training step. Clip binds on 100% of steps (pre-clip grad-norm median 70, max 432 — compressed from pre-stack 56/1110 by the cosine+RFF base but still substantial).
