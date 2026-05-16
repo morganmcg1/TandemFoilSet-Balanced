@@ -207,8 +207,16 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.n_layers = n_layers
-        self.film_head = nn.Sequential(
-            nn.Linear(11, n_hidden),  # 11 broadcast scalars: log_Re, AoA0, NACA0(3), AoA1, NACA1(3), gap, stagger
+        # Two-stage FiLM: always-meaningful (Re/AoA/NACA0) vs tandem-only (NACA1/gap/stagger).
+        # The geometry head is gated by is_tandem to avoid feeding structural zeros to the
+        # FiLM modulation on single-foil samples (which regressed val_single_in_dist in v1).
+        self.film_base = nn.Sequential(
+            nn.Linear(6, n_hidden),  # log_Re, AoA0, AoA1, NACA0×3
+            nn.GELU(),
+            nn.Linear(n_hidden, 2 * n_layers * n_hidden),
+        )
+        self.film_geom = nn.Sequential(
+            nn.Linear(5, n_hidden),  # NACA1×3, gap, stagger
             nn.GELU(),
             nn.Linear(n_hidden, 2 * n_layers * n_hidden),
         )
@@ -216,8 +224,10 @@ class Transolver(nn.Module):
         self.apply(self._init_weights)
         # Identity init AFTER apply (so trunc_normal_ doesn't overwrite zeros):
         # γ=0, β=0 → (1+γ)*fx + β = fx, model starts equivalent to baseline.
-        nn.init.zeros_(self.film_head[-1].weight)
-        nn.init.zeros_(self.film_head[-1].bias)
+        nn.init.zeros_(self.film_base[-1].weight)
+        nn.init.zeros_(self.film_base[-1].bias)
+        nn.init.zeros_(self.film_geom[-1].weight)
+        nn.init.zeros_(self.film_geom[-1].bias)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -230,13 +240,19 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
-        # All 11 broadcast-constant scalars (same value across N mesh points per sample,
-        # see data/prepare_splits.py:87-99): idx 13=log_Re, 14=AoA0, 15-17=NACA0,
-        # 18=AoA1, 19-21=NACA1, 22=gap, 23=stagger.
-        # Sample at node 0 since it's always a real (non-padding) node.
-        cond = x[:, 0, 13:]  # [B, 11]
         B = x.shape[0]
-        film = self.film_head(cond).view(B, self.n_layers, 2, self.n_hidden)
+        # Broadcast-constant scalars at node 0 (always a real, non-padding node).
+        # idx 13=log_Re, 14=AoA0, 15-17=NACA0, 18=AoA1, 19-21=NACA1, 22=gap, 23=stagger.
+        # Note: x is already normalized at this point — both heads consume normalized features.
+        cond_base = x[:, 0, [13, 14, 18, 15, 16, 17]]  # [B, 6]: Re, AoA0, AoA1, NACA0×3
+        cond_geom = x[:, 0, [19, 20, 21, 22, 23]]      # [B, 5]: NACA1×3, gap, stagger
+        # is_tandem comes in as a [B, 1] float indicator computed from RAW (un-normalized) x
+        # in the training loop, since (0 - x_mean)/x_std is not 0 in normalized space.
+        is_tandem = data["is_tandem"]                  # [B, 1]
+        film_b = self.film_base(cond_base).view(B, self.n_layers, 2, self.n_hidden)
+        film_g = self.film_geom(cond_geom).view(B, self.n_layers, 2, self.n_hidden)
+        # Gate the geometry FiLM by is_tandem (broadcast over (n_layers, 2, n_hidden)).
+        film = film_b + is_tandem.view(B, 1, 1, 1) * film_g  # [B, L, 2, H]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for i, block in enumerate(self.blocks):
             gamma = film[:, i, 0, :].unsqueeze(1)  # [B, 1, n_hidden]
@@ -271,8 +287,10 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            # is_tandem from raw x: structural zeros in NACA1/gap/stagger imply single-foil.
+            is_tandem = (x[:, 0, 19:24].abs().sum(-1, keepdim=True) > 1e-6).float()
             with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-                pred = model({"x": x_norm})["preds"]
+                pred = model({"x": x_norm, "is_tandem": is_tandem})["preds"]
             pred = pred.float()
 
             sq_err = F.smooth_l1_loss(pred, y_norm, reduction='none', beta=0.25)
@@ -491,8 +509,10 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        # is_tandem from raw x: structural zeros in NACA1/gap/stagger imply single-foil.
+        is_tandem = (x[:, 0, 19:24].abs().sum(-1, keepdim=True) > 1e-6).float()
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_norm, "is_tandem": is_tandem})["preds"]
             sq_err = F.smooth_l1_loss(pred, y_norm, reduction='none', beta=0.25)
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
