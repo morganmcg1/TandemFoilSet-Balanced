@@ -617,6 +617,7 @@ class Config:
     film_mode: str = "output_only"  # "output_only" or "all_blocks"
     ema_decay: float = 0.0   # 0 disables EMA; e.g. 0.999 enables EMA-of-weights
     grad_clip: float = 0.0   # 0 disables; e.g. 1.0 clips global grad norm
+    llrd_gamma: float = 1.0  # 1.0 disables LLRD; <1 applies per-block LR decay from output toward input
 
 
 def _residual_err(pred, target, loss_type, beta):
@@ -626,6 +627,77 @@ def _residual_err(pred, target, loss_type, beta):
     if loss_type == "smooth_l1":
         return F.smooth_l1_loss(pred, target, reduction="none", beta=beta)
     raise ValueError(loss_type)
+
+
+def make_llrd_param_groups(model, base_lr, gamma, weight_decay):
+    """Build per-block LR groups for Transolver (layer-wise LR decay).
+
+    Tier layout (γ<1 → output trains fastest, input slowest):
+        input_embed (preprocess + placeholder)         → base_lr * γ^(N+1)
+        block_i   (i=0..N-1, last block excludes head) → base_lr * γ^(N-i)
+        output_head (last block ln_3 + mlp2)           → base_lr * γ^0 = base_lr
+        film (if present)                              → base_lr
+    """
+    blocks = list(model.blocks)
+    num_blocks = len(blocks)
+    last_block = blocks[-1]
+
+    # Output head is the last block's ln_3 + mlp2.
+    output_head_param_ids = set()
+    output_head_params = []
+    for mod in (last_block.ln_3, last_block.mlp2):
+        for p in mod.parameters():
+            output_head_param_ids.add(id(p))
+            output_head_params.append(p)
+
+    # Input embed: preprocess MLP + placeholder bias.
+    input_params = list(model.preprocess.parameters()) + [model.placeholder]
+
+    groups = []
+    groups.append({
+        "params": input_params,
+        "lr": base_lr * (gamma ** (num_blocks + 1)),
+        "weight_decay": weight_decay,
+        "name": "input_embed",
+    })
+    for i, blk in enumerate(blocks):
+        if i == num_blocks - 1:
+            blk_params = [p for p in blk.parameters() if id(p) not in output_head_param_ids]
+        else:
+            blk_params = list(blk.parameters())
+        groups.append({
+            "params": blk_params,
+            "lr": base_lr * (gamma ** (num_blocks - i)),
+            "weight_decay": weight_decay,
+            "name": f"block_{i}",
+        })
+    groups.append({
+        "params": output_head_params,
+        "lr": base_lr,
+        "weight_decay": weight_decay,
+        "name": "output_head",
+    })
+    if hasattr(model, "film"):
+        groups.append({
+            "params": list(model.film.parameters()),
+            "lr": base_lr,
+            "weight_decay": weight_decay,
+            "name": "film",
+        })
+
+    # Sanity: param coverage equals model.parameters() count.
+    grouped_ids = set()
+    for g in groups:
+        for p in g["params"]:
+            grouped_ids.add(id(p))
+    model_ids = set(id(p) for p in model.parameters() if p.requires_grad)
+    missing = model_ids - grouped_ids
+    extra = grouped_ids - model_ids
+    if missing or extra:
+        raise RuntimeError(
+            f"[LLRD] param coverage mismatch: missing={len(missing)} extra={len(extra)}"
+        )
+    return groups
 
 
 cfg = sp.parse(Config)
@@ -691,13 +763,24 @@ if cfg.ema_decay > 0:
     ).to(device)
     print(f"EMA enabled (decay={cfg.ema_decay})")
 
+if cfg.llrd_gamma < 1.0:
+    param_groups = make_llrd_param_groups(model, cfg.lr, cfg.llrd_gamma, cfg.weight_decay)
+    print(f"[LLRD] gamma={cfg.llrd_gamma}, num_groups={len(param_groups)}")
+    for g in param_groups:
+        n_params_g = sum(p.numel() for p in g["params"])
+        print(f"  group {g['name']:<14s} lr={g['lr']:.3e} ({g['lr']/cfg.lr:.3f}*base) "
+              f"params={n_params_g:,}")
+    opt_params = param_groups
+else:
+    opt_params = model.parameters()
+
 if cfg.optimizer_name == "lion":
-    optimizer = Lion(model.parameters(), lr=cfg.lr,
+    optimizer = Lion(opt_params, lr=cfg.lr,
                      betas=(cfg.lion_beta1, cfg.lion_beta2),
                      weight_decay=cfg.weight_decay)
     print(f"Optimizer: Lion(lr={cfg.lr}, betas=({cfg.lion_beta1}, {cfg.lion_beta2}), wd={cfg.weight_decay})")
 elif cfg.optimizer_name == "adamw":
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    optimizer = torch.optim.AdamW(opt_params, lr=cfg.lr, weight_decay=cfg.weight_decay)
     print(f"Optimizer: AdamW(lr={cfg.lr}, wd={cfg.weight_decay})")
 else:
     raise ValueError(f"Unknown optimizer_name: {cfg.optimizer_name!r}")
@@ -823,6 +906,10 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "global_step": global_step,
     }
+    # Per-group LRs (LLRD verification + general visibility)
+    for i, g in enumerate(optimizer.param_groups):
+        gname = g.get("name", f"g{i}")
+        log_metrics[f"lr_group/{gname}"] = g["lr"]
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
