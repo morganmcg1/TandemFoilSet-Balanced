@@ -32,7 +32,7 @@ import torch.nn.functional as F
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from tqdm import tqdm
 
 from data import (
@@ -46,6 +46,83 @@ from data import (
     load_test_data,
     pad_collate,
 )
+
+
+# ---------------------------------------------------------------------------
+# SDF (signed distance to surface) input feature
+# ---------------------------------------------------------------------------
+
+
+@torch.no_grad()
+def _compute_sample_sdf(x: torch.Tensor, is_surface: torch.Tensor,
+                        device: torch.device | None = None
+                        ) -> tuple[torch.Tensor, float]:
+    """Per-node distance to nearest surface node, normalized by per-sample p95.
+
+    Computed in raw (chord-unit) position space using brute-force ``torch.cdist``.
+    The p95 normalization makes the channel mesh-extent-invariant: values are in
+    ~[0, 1] for the typical near-field, with the far-field tail extending to
+    a few units. Per-sample (not per-batch / per-dataset) so each sample's
+    near-wall region is resolved at full precision regardless of domain size.
+
+    Returns ``(sdf_norm [N], raw_p95 scalar)`` so callers can log raw-scale stats.
+    """
+    pos = x[:, :2]
+    surf_mask = is_surface.bool()
+    if device is not None:
+        pos = pos.to(device, non_blocking=True)
+        surf_mask = surf_mask.to(device, non_blocking=True)
+    surf_pos = pos[surf_mask]
+    if surf_pos.shape[0] == 0:
+        return torch.zeros(pos.shape[0], dtype=torch.float32), 0.0
+    d = torch.cdist(pos.unsqueeze(0), surf_pos.unsqueeze(0)).squeeze(0)
+    sdf, _ = d.min(dim=-1)
+    p95 = torch.quantile(sdf.float(), 0.95)
+    if p95.item() < 1e-8:
+        return sdf.float().cpu(), float(p95.item())
+    return (sdf / p95).float().cpu(), float(p95.item())
+
+
+def precompute_sdf(dataset, name: str, device: torch.device | None) -> list[torch.Tensor]:
+    """Run ``_compute_sample_sdf`` over every sample once and return a list."""
+    sdf_list: list[torch.Tensor] = []
+    raw_p95s: list[float] = []
+    norm_maxs: list[float] = []
+    t0 = time.time()
+    for i in range(len(dataset)):
+        x, _y, is_surface = dataset[i]
+        sdf, p95 = _compute_sample_sdf(x, is_surface, device=device)
+        sdf_list.append(sdf)
+        raw_p95s.append(p95)
+        norm_maxs.append(float(sdf.max().item()))
+    dt = time.time() - t0
+    total_mb = sum(t.numel() for t in sdf_list) * 4 / 1e6
+    p95_arr = torch.tensor(raw_p95s)
+    nm_arr = torch.tensor(norm_maxs)
+    print(
+        f"  SDF[{name}]: {len(sdf_list)} samples in {dt:.1f}s, {total_mb:.1f} MB | "
+        f"raw_p95 [min={p95_arr.min():.4f} med={p95_arr.median():.4f} max={p95_arr.max():.4f}] | "
+        f"norm_max [min={nm_arr.min():.3f} med={nm_arr.median():.3f} max={nm_arr.max():.3f}]"
+    )
+    return sdf_list
+
+
+class SDFWrapper(Dataset):
+    """Append a precomputed per-node SDF channel (column 24) to each sample."""
+
+    def __init__(self, base: Dataset, sdf_cache: list[torch.Tensor]):
+        assert len(base) == len(sdf_cache), (len(base), len(sdf_cache))
+        self.base = base
+        self._sdf = sdf_cache
+
+    def __len__(self):
+        return len(self.base)
+
+    def __getitem__(self, idx):
+        x, y, is_surface = self.base[idx]
+        sdf = self._sdf[idx]
+        x_aug = torch.cat([x, sdf.unsqueeze(-1)], dim=-1)
+        return x_aug, y, is_surface
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -486,6 +563,7 @@ class Config:
     film_cond: bool = False  # enable per-block FiLM conditioning on x[:,0,13:24]
     film_mlp_hidden: int = 128
     two_shot_film: bool = False  # apply FiLM modulation at both attn and mlp sites per block
+    use_sdf: bool = False  # append per-node SDF (distance to nearest surface) as a 25th input channel
 
 
 cfg = sp.parse(Config)
@@ -496,6 +574,24 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
+
+effective_x_dim = X_DIM
+if cfg.use_sdf:
+    print("SDF: precomputing per-node distance-to-surface for all splits")
+    train_sdf = precompute_sdf(train_ds, "train", device)
+    val_sdf = {name: precompute_sdf(ds, name, device) for name, ds in val_splits.items()}
+    train_ds = SDFWrapper(train_ds, train_sdf)
+    val_splits = {name: SDFWrapper(ds, val_sdf[name]) for name, ds in val_splits.items()}
+    # Extend stats with identity normalization for SDF channel (already per-sample
+    # p95 normalized, so further centering/scaling would be redundant).
+    stats = {
+        "x_mean": torch.cat([stats["x_mean"], torch.zeros(1)]),
+        "x_std": torch.cat([stats["x_std"], torch.ones(1)]),
+        "y_mean": stats["y_mean"],
+        "y_std": stats["y_std"],
+    }
+    effective_x_dim = X_DIM + 1
+
 stats = {k: v.to(device) for k, v in stats.items()}
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
@@ -516,7 +612,7 @@ val_loaders = {
 
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    fun_dim=effective_x_dim - 2,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -684,6 +780,11 @@ if best_metrics:
     if not cfg.skip_test:
         print("\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
+        if cfg.use_sdf:
+            test_datasets = {
+                name: SDFWrapper(ds, precompute_sdf(ds, name, device))
+                for name, ds in test_datasets.items()
+            }
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
             for name, ds in test_datasets.items()
