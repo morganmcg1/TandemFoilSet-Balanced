@@ -484,3 +484,72 @@ All three PRs target `icml-appendix-charlie-pai2i-48h-r1` on top of dropout=0.1 
 
 All PRs target `icml-appendix-charlie-pai2i-48h-r1`; each is a single-knob
 change from the `target/train.py` defaults so effects are attributable.
+
+---
+
+## 2026-05-16 02:00 — PR #3533 — slice_num=64→32 (MERGED → NEW BASELINE)
+
+- **Branch:** `charliepai2i48h1-frieren/slice-num-32`
+- **Hypothesis:** Halving slice_num from 64→32 reduces slice-attention O(K²) cost from 4096→1024 op-pairs (~4× cheaper attention), fitting ~16 epochs in the 30-min budget vs ~14, while also providing implicit regularization (each slice covers 2× more mesh nodes).
+- **Results:**
+
+| Metric | Value | Δ vs baseline |
+|--------|-------|---------------|
+| `val_avg/mae_surf_p` | **90.58** | **-5.81%** vs 96.17 |
+| `test_avg/mae_surf_p` | **81.25** | **-6.48%** vs 86.88 |
+| `val_single_in_dist/mae_surf_p` | 108.12 | -7.21% |
+| `val_geom_camber_rc/mae_surf_p` | 104.27 | -2.22% |
+| `val_geom_camber_cruise/mae_surf_p` | 66.77 | -7.84% |
+| `val_re_rand/mae_surf_p` | 83.15 | -6.63% |
+| Best epoch | 16 | +2 vs baseline |
+| Per-epoch time | 115.2s | (down from ~140s) |
+| Peak GPU mem | 37.76 GB | (down from ~42.7 GB) |
+
+- **Metrics path:** `models/model-slice-num-32-20260516-002650/metrics.jsonl`
+- **Decision:** MERGED. All 4 val splits improved. Model still improving at the 30-min cap (epoch 16) — indicates headroom remains with longer budget. Biggest single win since SmoothL1 (both -5.81%).
+- **Key finding:** The compute/quality tradeoff for slice_num strongly favors reduction in our regime. Two compounding mechanisms: (1) fewer attention ops → more training epochs; (2) each slice spans more nodes → implicit coarser-grained regularization. Together they produce the best result yet. Next probe: slice_num=16.
+
+---
+
+## 2026-05-16 02:10 — PR #3531 — n_hidden=128→96 (CLOSED, regression)
+
+- **Branch:** `charliepai2i48h1-askeladd/n-hidden-96`
+- **Hypothesis:** Reducing n_hidden (128→96) lowers per-step cost ~30%, fitting ~16 epochs in budget. Smaller model with more training epochs might outperform larger model with fewer.
+- **Results:**
+
+| Metric | Value | Δ vs baseline |
+|--------|-------|---------------|
+| `val_avg/mae_surf_p` | 97.61 | +1.50% (regression) |
+| Best epoch | 15 | +1 vs baseline |
+| Per-epoch speedup | ~4% | (not 15-20% expected) |
+
+- **Decision:** CLOSED. n_hidden=96 regresses; per-epoch speedup was only ~4% (insufficient to cover capacity loss). Three-point triangulation: n_hidden=96 (97.61) > n_hidden=128 (96.17) << n_hidden=160 (107.22). n_hidden=128 is the clear local optimum. **Capacity axis fully closed in both directions.**
+
+---
+
+## 2026-05-16 02:15 — PR #3532 — EMA decay 0.999→0.9995 (CLOSED, catastrophic)
+
+- **Branch:** `charliepai2i48h1-alphonse/ema-09995`
+- **Hypothesis:** Tighter Polyak averaging (0.9995 vs 0.999) gives a smoother model with longer averaging horizon.
+- **Results:**
+
+| Metric | Value | Δ vs baseline |
+|--------|-------|---------------|
+| `val_avg/mae_surf_p` | 129.37 | **+34.5% CATASTROPHIC** |
+| `val_single_in_dist/mae_surf_p` | 179.04 | +53.6% |
+
+- **Decision:** CLOSED. The failure mechanism is clear: at decay=0.9995, effective EMA window ≈ 2000 steps, spanning the entire 14-16 epoch training run. The EMA averages heavily over high-loss early epochs, producing a weight ensemble dominated by undertrained states. **EMA axis closed from the tighter direction.** Student's diagnosis was correct; follow-up probe is EMA=0.998 (looser window, assigned to alphonse as #3601).
+
+---
+
+## 2026-05-16 02:30 — Round 7 assigned (3 PRs)
+
+**Theme:** Exploit the newly established slice_num=32 base. Two experiments continue the winning axis; one probes the LR schedule mismatch exposed by the 16-epoch training budget.
+
+| PR | Student | Hypothesis | Rationale |
+|----|---------|------------|-----------|
+| #3601 | alphonse | EMA decay 0.999→0.998 | Student's own suggestion; looser window avoids early-epoch bias |
+| #3602 | askeladd | slice_num=32→16 | Continue the winning axis; probe whether reduction is monotone |
+| #3603 | frieren  | CosineAnnealingLR T_max=50→16 | Match LR schedule to actual 16-epoch budget; model never sees low-LR phase with T_max=50 |
+
+All three PRs target `icml-appendix-charlie-pai2i-48h-r1` on top of slice_num=32 + dropout=0.1 + beta=0.25 + EMA-0.999 (new baseline val=90.58).
