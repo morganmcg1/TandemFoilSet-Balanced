@@ -570,6 +570,7 @@ class Config:
     optimizer: str = "adamw"   # 'adamw' or 'lion'
     beta1: float = 0.9   # Optimizer momentum coefficient (Adam/Lion)
     beta2: float = 0.999  # Optimizer second-moment coefficient (Adam) / EMA coeff (Lion)
+    warmup_epochs: int = 0   # Linear LR warmup epochs prefix (start_factor=1e-6 -> 1.0); 0 disables
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -640,9 +641,25 @@ elif cfg.optimizer == "adamw":
     print(f"Optimizer: AdamW (lr={cfg.lr}, betas=({cfg.beta1}, {cfg.beta2}), wd={cfg.weight_decay})")
 else:
     raise ValueError(f"Unknown optimizer: {cfg.optimizer!r} (expected 'adamw' or 'lion')")
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer, T_max=15, eta_min=cfg.eta_min
-)
+if cfg.warmup_epochs > 0:
+    cosine_t_max = max(15 - cfg.warmup_epochs, 1)
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=1e-6, end_factor=1.0, total_iters=cfg.warmup_epochs
+    )
+    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=cosine_t_max, eta_min=cfg.eta_min
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[cfg.warmup_epochs]
+    )
+    print(f"Scheduler: LinearLR(start=1e-06, end=1.0, iters={cfg.warmup_epochs}) -> "
+          f"CosineAnnealingLR(T_max={cosine_t_max}, eta_min={cfg.eta_min})")
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=15, eta_min=cfg.eta_min
+    )
+    print(f"Scheduler: CosineAnnealingLR(T_max=15, eta_min={cfg.eta_min})")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -669,6 +686,7 @@ for epoch in range(MAX_EPOCHS):
         break
 
     t0 = time.time()
+    lr_used = optimizer.param_groups[0]["lr"]
     model.train()
     epoch_vol = epoch_surf = 0.0
     epoch_grad_norm_pre = 0.0
@@ -753,6 +771,8 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/grad_norm_pre_clip": epoch_grad_norm_pre,
+        "lr": lr_used,
+        "warmup_epochs": cfg.warmup_epochs,
         "clip_grad_norm": cfg.clip_grad_norm,
         "norm_type": cfg.norm_type,
         "ffn_act": cfg.ffn_act,
@@ -762,7 +782,7 @@ for epoch in range(MAX_EPOCHS):
         "is_best": tag == " *",
     })
     print(
-        f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
+        f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={lr_used:.2e}  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
