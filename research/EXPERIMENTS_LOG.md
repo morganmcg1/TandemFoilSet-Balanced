@@ -621,3 +621,90 @@ The current merged baseline has moved much further out of reach (90.34 vs 114.17
 
 - **PR #3519 (nezuko): Fourier-embedded FiLM conditioning** — replace the raw 11-dim flow-condition vector with a multi-frequency sin/cos Fourier embedding (Tancik et al. 2020 style) before feeding into the FiLM MLP. Concat raw+Fourier for residual safety. Arm A: 4 frequencies, sigma=1 (Tancik default). Arm B: 8 frequencies, sigma=2 (rich basis). Targets the single_in_dist split by giving FiLM richer angular resolution on AoA and Re×geometry interactions. Orthogonal to all 7 in-flight experiments.
 
+## 2026-05-16 00:00 — PR #3466: Bernoulli pressure residual [MERGED — new best val_avg=86.09]
+
+- Branch: `charliepai2i24h5-askeladd/bernoulli-pressure-residual`
+- Student: charliepai2i24h5-askeladd
+- Hypothesis: predict the viscous residual `p − p_B` where `p_B = 0.5·V_∞²` is the freestream Bernoulli reference (per-sample scalar), instead of raw `p`. Remove the analytic dynamic-range component so the network specializes on viscous spatial structure (BL, separation, vortex shedding).
+- Status: MERGED. Seventh compounding win in round 5. New cumulative −30.49% val_avg / −32.22% test_avg.
+
+### Results vs current merged baseline (PR #3315 + bf16 + FiLM + surf-L1 + EMA + scale-inv, val_avg=90.34)
+
+| Arm | val_avg/mae_surf_p | Δ val | test_avg/mae_surf_p | Δ test |
+|---|---:|---:|---:|---:|
+| Baseline merged | 90.3428 | — | 80.1674 | — |
+| **A: Free-stream Bernoulli** | **86.0948** | **−4.70%** | **77.5066** | **−3.32%** |
+| B: + chord correction (raw x) | 122.1765 | +35.24% | 121.3164 | +51.33% |
+
+### Per-split (Arm A)
+
+| Split | val_baseline | val_armA | val Δ | test_baseline | test_armA | test Δ |
+|---|---:|---:|---:|---:|---:|---:|
+| single_in_dist | 109.9053 | **102.0390** | **−7.16%** | 96.3817 | 93.0730 | −3.43% |
+| geom_camber_rc | 103.3709 | 100.1206 | −3.14% | 91.8343 | 90.1840 | −1.80% |
+| geom_camber_cruise | 65.6940 | 62.9941 | −4.11% | 54.3760 | 52.3967 | −3.64% |
+| re_rand | 82.4009 | 79.2254 | −3.85% | 78.0776 | 74.3726 | −4.74% |
+| **avg** | **90.3428** | **86.0948** | **−4.70%** | **80.1674** | **77.5066** | **−3.32%** |
+
+All 8 val and test cells improved. Largest gain on `single_in_dist` (the previous worst split). Gains scale with V_∞-range mixedness — largest on regime-mixed splits (single_in_dist, re_rand), smallest on narrow-V_∞ splits (geom_camber_rc which is only raceCar tandem).
+
+Metric artifacts:
+- `models/model-charliepai2i24h5-askeladd-bernoulli_freestream-20260515-215606/metrics.jsonl`
+- `models/model-charliepai2i24h5-askeladd-bernoulli_chord-20260515-223334/metrics.jsonl`
+
+### Analysis
+
+The student's pre-pass identified an interesting paradox: subtracting `p_B` *increases* the total p-channel std by 1.71× (raw std=679 → residual std=1160), because per-sample means are anticorrelated with p_B (raceCar inverted-foil samples have suction-dominant means when V_∞ is largest, `Corr(per_sample_p_mean, p_B) = −0.583`). Their post-result analysis correctly reframed why Arm A wins despite this: **the model isn't optimizing per-pixel std — it's optimizing a normalized-space MSE/L1 with a finite-capacity Transolver. Subtracting p_B doesn't reduce variance; it shifts variance into a more learnable functional form.** The network no longer has to internally compute `V_∞²/2` from the conditioning vector and apply it everywhere; that piece is now handled outside the network, freeing capacity for the viscous residual.
+
+Arm B failed because the chord-position formula was applied to global mesh x-coordinate (range ~[-9.55, 11.34], spanning ~20 chord lengths), producing high-frequency oscillations. The hypothesis spec explicitly anticipated this fragility ("if this gets complex, just use the simple formula" → it didn't work). Proper chord-position-aware Cp would require per-foil chord-boundary detection; deferred as follow-up.
+
+Best epoch 17/50 — training still in cold-start at the wall-clock cap.
+
+## 2026-05-16 00:05 — PR #3433: Per-domain target normalization [CLOSED — both arms regressed]
+
+- Branch: `charliepai2i24h5-alphonse/per-domain-target-norm`
+- Student: charliepai2i24h5-alphonse
+- Hypothesis: normalize y-targets with per-domain (racecar_single / racecar_tandem / cruise) means and stds instead of global stats; addresses the in-distribution split's gap.
+- Status: CLOSED. Both arms regressed on the tested baseline (FiLM #3265 val=103.02), with `val_single_in_dist` regressing most under arm B (+8.0%) — opposite of the prediction.
+
+### Results vs tested baseline (PR #3265 FiLM, val_avg=103.02)
+
+| Arm | val_avg | Δ | test_avg | Δ |
+|---|---:|---:|---:|---:|
+| A: scalar std per domain | 114.82 | **+11.5%** | 103.01 | +11.8% |
+| B: per-channel std per domain | 106.37 | **+3.2%** | 95.83 | +4.0% |
+
+Per-split Arm B: `val_single_in_dist` +8.0% (target split worsened), `val_geom_camber_rc` +4.7%, `val_geom_camber_cruise` −5.0% (only split that helped), `val_re_rand` +2.1%.
+
+### Analysis
+
+Per-domain *empirical* output normalization is the wrong direction. The regime mismatch the hypothesis aimed to address is the V_∞²-driven per-sample std variance, which is more cleanly addressed by the analytic Bernoulli prior (#3466 merged the same day, attacking the same problem from a physics-informed angle and winning). Arm B's per-channel directionality was better than scalar arm A (matching DomainNorm literature), but neither inverted sign at 14 epochs in the cold-start regime.
+
+The student's domain-distribution analysis (racecar_single=599 train, racecar_tandem=457, cruise=443 train) and per-domain p-channel std numbers (904.80 / 782.40 / 383.65) are useful empirical baselines we should retain. Sharp post-mortem.
+
+## 2026-05-16 00:05 — PR #3422: Huber loss for surf-pressure aux [CLOSED — both arms regressed]
+
+- Branch: `charliepai2i24h5-frieren/surf-pressure-huber-aux`
+- Student: charliepai2i24h5-frieren
+- Hypothesis: replace L1 surf-pressure aux loss with Huber (smooth at small residuals) to reduce optimization oscillation.
+- Status: CLOSED. Both arms regressed (+5-8%) on the tested baseline (#3337 L1, val=106.86). Hypothesis falsified: L1's *constant gradient magnitude* at small residuals is the active mechanism, not its noise tolerance.
+
+### Results vs tested baseline (PR #3337 L1, val_avg=106.86)
+
+| Run | val_avg | Δ | test_avg | Δ | Best epoch |
+|---|---:|---:|---:|---:|---:|
+| Arm A — Huber δ=1.0, w=1.0 | 115.04 | **+7.66%** | 103.34 | +6.68% | 14 |
+| Arm B — Huber δ=0.5, w=1.0 | 112.62 | **+5.39%** | 101.86 | +5.16% | 14 |
+
+### Analysis
+
+The student's train-loss-trajectory data is the gem of this experiment: L1 trajectory std=0.0144, Huber δ=1.0 std=0.0050, Huber δ=0.5 std=0.0056. **Huber smooths the training trajectory 2-3× tighter — but the smoother training loss does NOT predict better validation.** This is a useful counter-example to "smooth loss landscapes generalize better." The L1 aux's value is its constant gradient at small residuals (no "give up" behavior near zero), pushing the network to refine even well-fit pressure predictions. Huber's quadratic regime explicitly damps this signal.
+
+Lower δ doesn't help: as δ → 0, Huber → L1, so we just recover the merged baseline. Scheduled δ (Huber early, L1 late) is a future experiment, but out of scope for this rebase.
+
+## 2026-05-16 00:30 — New assignments for 3 idle students after Bernoulli merge
+
+- **PR #3545 (alphonse): EMA decay annealing** — start with decay=0.99 (~100-step window), ramp to 0.999 (~1000-step window). Arm A: linear ramp first 5 epochs. Arm B: cosine ramp over full 19 epochs. Targets the cold-start regime where the merged 0.999 EMA window is too long for early-training fast iterate movement.
+- **PR #3547 (askeladd): Cp normalization on top of Bernoulli residual** — extend her own merged win by additionally dividing by `p_B` (Arm A: full Cp = (p − p_B) / p_B; Arm B: half-Cp dividing by V_∞ instead of V_∞²). Her own pre-pass identified this as the natural physics-informed follow-up to address the V_∞²-correlated per-sample std variance.
+- **PR #3548 (frieren): AoA-jitter test-time augmentation** — first eval-only experiment in round 5. K-ensemble of inference with small AoA perturbations. Arm A: K=4, σ=0.1°. Arm B: K=8, σ=0.05° + jitter on other continuous cond dims. Targets OOD splits without any training cost. Compounds with every merged mechanism.
+
