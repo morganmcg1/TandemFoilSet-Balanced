@@ -965,6 +965,54 @@ Slice_num axis fully closed. Bottleneck is now per-batch matmul overhead. bf16 i
 
 ---
 
+## 2026-05-16 22:45 — PR #4107 — slice_num 12→8 on bf16+GEGLU+SF (MERGED → **NEW BEST, -2.78%**)
+
+- **Branch:** `charliepai2i48h1-tanjiro/slice-num-8-on-bf16` (rebased onto full stack)
+- **Hypothesis:** Continue slice_num halving. slice=8 saves ~9% sec/epoch on bf16+GEGLU stack, gaining +2 epochs in 30-min cap. SF keeps full LR on those extra epochs.
+- **Results vs baseline (val=45.07, test=38.58):**
+
+| Metric | Baseline (SF on bf16+GEGLU, slice=12) | slice=8 | Δ |
+|--------|-----------------------:|--------:|--:|
+| `val_avg/mae_surf_p` | **45.07** | **43.82** | **-2.78% ✓ WIN** |
+| `test_avg/mae_surf_p` | **38.58** | **38.05** | -1.37% ✓ |
+| `val_single_in_dist` | 48.79 | 47.39 | -2.87% |
+| `val_geom_camber_rc` | 58.57 | 55.44 | -5.35% |
+| `val_geom_camber_cruise` | 26.72 | 26.97 | +0.94% (tiny regression, within noise) |
+| `val_re_rand` | 46.21 | 45.50 | -1.55% |
+| sec/epoch | 79.2s | 72.3s | -8.7% |
+| epochs in cap | 23 | **25** | +2 |
+| Peak VRAM | 25.96 GB | 25.19 GB | -0.77 GB |
+
+- **Metrics path:** `models/model-slice-num-8-on-bf16-geglu-20260516-215247/metrics.jsonl`
+- **Decision:** MERGED. 3/4 val and 3/4 test splits improved. Still descending at -0.71 pts/epoch at terminal (epoch 25). **New best: val=43.82, test=38.05.**
+- **Critical validation:** The rc-split (hardest OOD geometry) that *regressed* on the bf16-only baseline (+3.93% test) now *improves* on the full stack (-2.09% test, -5.35% val). GEGLU + SF together give enough expressive capacity to tolerate the slice budget reduction even on the hardest split.
+- **Total improvement from calibration baseline:** 143.52 → 43.82 = **-69.5%** in 15 merged PRs.
+- **slice_num trajectory:**  64→32 (-5.81%), 32→16 (-6.78%), 16→12 (-0.34%), 12→8 (-2.78%). 12→8 out-improved 16→12 → optimum below 8. Next: slice_num=6 (assigned to tanjiro as #4185).
+
+---
+
+## 2026-05-16 22:45 — PR #4168 — GEGLU gating in mlp2 readout head (CLOSED — tie within noise)
+
+- **Branch:** `charliepai2i48h1-alphonse/geglu-readout-head`
+- **Hypothesis:** Apply GEGLU to the final output projection (`mlp2`: Linear→GELU→Linear) to replicate the block-MLP win in the readout path.
+- **Results vs baseline (val=45.07, test=38.58):**
+
+| Metric | Baseline | GEGLU readout | Δ |
+|--------|---------:|-------------:|--:|
+| `val_avg/mae_surf_p` | 45.07 | 46.53 | +3.2% (within noise, tie zone) |
+| `test_avg/mae_surf_p` | 38.58 | 39.90 | +3.4% |
+| `val_geom_camber_cruise` | 26.72 | 30.26 | +13.3% (worst) |
+| `val_re_rand` | 46.21 | 48.45 | +4.9% |
+| n_params | 737,491 | 754,003 | +16,512 (+2.2%) |
+| sec/epoch | 79.2s | 79.8s | +0.6s |
+
+- **Metrics path:** `models/model-charliepai2i48h1-alphonse-geglu-readout-20260516-215040/metrics.jsonl`
+- **Decision:** CLOSED (tie zone per PR's own decision rule).
+- **Analysis:** The per-split pattern — cruise and re_rand regressed most, single/rc flat — is consistent with mild OOD capacity hurt, not gating failure. The 128→3 readout is a projection, not a feature mixer; most of the 128-wide gate capacity is wasted producing 3 output numbers. GEGLU's value in block MLPs comes from gating during residual updates across 128 channels — the 3-channel projection doesn't benefit from the same mechanism.
+- **Readout axis closed.** Alphonse reassigned to per-node geometric FiLM (#4186) — the natural escalation from closed broadcast-scalar FiLM axis.
+
+---
+
 ## 2026-05-16 22:00 — PR #4069 — torch.compile(dynamic=True) on bf16+GEGLU (SENT BACK — beats new baseline but missing SF)
 
 - **Branch:** `charliepai2i48h1-nezuko/torch-compile-on-film` (rebased)
