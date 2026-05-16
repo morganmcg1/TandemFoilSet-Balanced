@@ -963,3 +963,27 @@ All three tested real mechanisms that won on the SwiGLU-only baseline (66.61), b
 | #3901 | alphonse | Huber δ=0.5 compound on full stack | Does δ=0.5 compound with vel-asinh+n_head=2? |
 | #3902 | nezuko | wd=1e-3 compound on full stack | Does wd=1e-3 compound with vel-asinh+n_head=2? |
 | #3903 | askeladd | vel-asinh per-channel Ux≠Uy (uy=0.3 vs 0.7) | Does independent per-channel scale beat shared 0.5? |
+
+## 2026-05-16 11:30 — PR #3858: attention dropout in PhysicsAttention — frieren (CLOSED)
+
+- Branch: `willowpai2i48h2-frieren/attn-dropout-nhead2`
+- W&B run: `5cganaon`
+- **Hypothesis**: dropout on softmax(QK/√d) regularizes attention routing for OOD generalization on n_head=2 baseline
+
+| Metric | val_avg | test_3split |
+|---|---|---|
+| attn_drop_rate=0.1 | 64.5621 | 63.9835 |
+| baseline #3794 n_head=2 | 64.3427 | 63.6663 |
+| Δ | +0.34% | +0.50% |
+| baseline (current) #3789 | 63.7383 | 62.9264 |
+| Δ vs current | +1.31% | +1.7% |
+
+Per-split: rc −1.29 (better) | cruise −0.59 (better) | re_rand +0.06 (tied) | single_in_dist **+2.69 (worse)**
+
+**Analysis**: hypothesis was a partial hit — OOD splits improved as predicted, but single_in_dist regression was larger and dominated the average. At slice_num=64 and n_head=2 (32 slices/head), dropping 10% post-softmax mass perturbs routing more than it regularizes for a 0.72M-param model. **CLOSED**. Suggested follow-ups (slice-diagonal-preserving dropout, dropout schedule, target-noise pairing) interesting but deprioritized vs untested orthogonal axes.
+
+## 2026-05-16 11:35 — Round-8 assignment: PR #3924 frieren SGDR warm restarts (T_0=5)
+
+| PR | Student | Hypothesis | Key test |
+|---|---|---|---|
+| #3924 | frieren | CosineAnnealingWarmRestarts T_0=5 | Do 3 lr-restart cycles in 15ep budget find a deeper basin than single cosine? |

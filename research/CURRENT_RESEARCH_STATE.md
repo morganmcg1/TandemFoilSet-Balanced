@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 11:05 UTC
+- **Last updated:** 2026-05-16 11:35 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
-- **Most recent direction from human researcher team:** None (checked 10:55 UTC — no open issues)
+- **Most recent direction from human researcher team:** None (checked 11:30 UTC — no open issues)
 
 ## Current best baseline
 
@@ -35,15 +35,13 @@ cd target/ && python train.py \
 | PR | Student | Hypothesis | Status | Expected |
 |----|---------|-----------|--------|----------|
 | #3854 | fern | slice_num fine sweep (32, 128) with n_head=2 | WIP — training | New axis |
-| #3858 | frieren | Attention dropout in PhysicsAttention on n_head=2 | WIP — training | New axis |
 | #3874 | edward | LR warmup (1-2 ep) on SwiGLU + n_head=2 | WIP — training | −0.5-2.5% |
 | #3877 | tanjiro | PhysicsAttention temperature_init=0.2 | WIP — training | −0.5-2.5% |
-| #3901 | alphonse | Huber δ=0.5 compound on full stack | WIP — just assigned | −1-2% |
-| #3902 | nezuko | wd=1e-3 compound on full stack | WIP — just assigned | −1-2% |
-| #3903 | askeladd | vel-asinh per-channel (Ux≠Uy) | WIP — just assigned | −1-3% |
-| #3789 base | thorfinn | MERGED — now idle (new assignment next cycle) | IDLE | — |
-
-**Note**: thorfinn becomes idle post-merge. Will need a fresh hypothesis next wakeup.
+| #3901 | alphonse | Huber δ=0.5 compound on full stack | WIP — training | −1-2% |
+| #3902 | nezuko | wd=1e-3 compound on full stack | WIP — training | −1-2% |
+| #3903 | askeladd | vel-asinh per-channel (Ux≠Uy) | WIP — training | −1-3% |
+| #3907 | thorfinn | surf_weight sweep (15, 20) on full stack | WIP — training | −1-4% |
+| #3924 | frieren | SGDR warm restarts (T_0=5) on full stack | WIP — just assigned | −2-5% |
 
 ## Confirmed winners (merged)
 
@@ -70,7 +68,7 @@ cd target/ && python train.py \
 - vel-asinh scale=0.5 on Ux+Uy (Round 7-8)
 
 ### What does NOT work
-- EMA decay < 0.99, depth n_layers=6, mlp_ratio>2, slice_num=128, sinusoidal Re-embed, p_surf_weight, feature dropout, asinh scale > 1.0, n_head=8, DropPath, SwiGLU-in-all-MLPs, Mixup, vel-asinh scale < 0.5 (over-compresses)
+- EMA decay < 0.99, depth n_layers=6, mlp_ratio>2, slice_num=128, sinusoidal Re-embed, p_surf_weight, feature dropout, asinh scale > 1.0, n_head=8, DropPath, SwiGLU-in-all-MLPs, Mixup, vel-asinh scale < 0.5 (over-compresses), attention dropout (rate=0.1 — OOD gain offset by in-dist regression at this scale)
 
 ### Confirmed mechanisms on SwiGLU-only baseline (need re-test on full stack)
 - Huber δ=0.5: −1.62% on SwiGLU-only → compound test #3901
@@ -93,7 +91,7 @@ Conservative compound path: 63.74 × (1−0.015) × (1−0.015) × (1−0.01) �
 
 ## Operational notes
 
-- **thorfinn is now idle** post-merge — needs fresh assignment next wakeup
+- thorfinn re-assigned post-merge → #3907 surf_weight; frieren re-assigned post-close → #3924 SGDR
 - **GitHub REST rate limit**: 2900/5000 remaining (checked 10:55 UTC). Monitor.
 - **data/scoring.py NaN bug**: cruise=NaN fleet-wide (affects test_avg; use test_3split everywhere).
 - **Per-run budget**: 30 min wall clock, ~15 epochs with n_head=2 at 124s/epoch.
@@ -101,7 +99,9 @@ Conservative compound path: 63.74 × (1−0.015) × (1−0.015) × (1−0.01) �
 
 ## Queued hypotheses (next idle assignments)
 
-| ID | Hypothesis | Expected |
+(All H-01 through H-07 from researcher-agent now in flight. Need researcher-agent re-run if more students go idle.)
+| Source | Hypothesis | Expected |
 |----|-----------|---------|
-| thorfinn | surf_weight sweep (H-06: 15 or 20 vs current 10) | −1-4% |
-| H-02 | SGDR warm restarts (T_0=5 or 8) | −2-5% |
+| frieren follow-up | Slice-diagonal-preserving attention dropout | Speculative — addresses #3858 failure mode |
+| askeladd follow-up | Box-Cox power transform on velocity channels (not asinh shape) | Speculative — different target compression family |
+| researcher needed | Fresh axes when next idle student appears | tbd |
