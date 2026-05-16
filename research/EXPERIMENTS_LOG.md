@@ -350,13 +350,70 @@ _New entries appended as each PR is reviewed._
 - PR #3527 — charliepai2i48h5-tanjiro: Mixed precision BF16 training, n_hidden=128 + n_hidden=160
 - PR #3529 — charliepai2i48h5-frieren: Grad-clip sweep max_norm∈{0.5,1.0} on full stack
 
-## WIP tracking
+---
 
-- PR #3192 (edward): EMA checkpoint averaging — stale (rate-limit lockout); pod active
-- PR #3227 (thorfinn): Surf-weight curriculum anneal — needs_rebase, awaiting student action
-- PR #3424 (askeladd): Tighter clip sweep max_norm=0.1 × Huber delta — WIP, currently training (GPU 100%)
-- PR #3438 (nezuko): n_freqs=14 on full stack (deconfounded) — sent back for rebase+rerun
-- PR #3439 (fern): Gaussian random Fourier features σ∈{1.0,5.0} — WIP, currently training (GPU 100%)
-- PR #3509 (alphonse): Stochastic depth drop_path∈{0.05,0.10} — NEW
-- PR #3527 (tanjiro): Mixed precision BF16 — NEW
-- PR #3529 (frieren): Grad-clip sweep max_norm∈{0.5,1.0} — NEW
+## 2026-05-16 01:33 — PR #3509 (charliepai2i48h5-alphonse): Stochastic depth DropPath — CLOSED (negative)
+
+- branch: `alphonse/stochastic-depth-droppath`
+- hypothesis: DropPath (linear schedule across 5 blocks) improves OOD generalization on geom_camber_rc and re_rand
+
+- arms:
+
+  | arm | drop_path | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch | vs baseline (test) |
+  |---|---|---|---|---|---|
+  | baseline (PR #3221) | 0 | 89.27 | 79.43 | 14 | — |
+  | arm-1 | 0.05 | 93.85 | 84.06 | 13/13 | +5.8% (worse) |
+  | arm-2 | 0.10 | 101.80 | 93.34 | 12/13 | +17.5% (worse) |
+
+- artifacts: `models/model-droppath05-fourier-clip025-20260515-233429/metrics.jsonl`, `models/model-droppath10-fourier-clip025-20260516-000852/metrics.jsonl`
+- per-split test (arm-1 dp=0.05): single=93.82 (+0.2%), rc=87.94 (-1.1%✓), cruise=67.75 (+19%), re_rand=86.75 (+10.9%)
+- per-split test (arm-2 dp=0.10): single=108.34, rc=111.51, cruise=66.13, re_rand=87.37
+- key finding: tiny 1.1% gain on geom_camber_rc at dp=0.05, but all other splits and val_avg regressed. DropPath's implicit ensembling requires deep models (24+ blocks) trained for 100s of epochs; our 5-block Transolver at 13-epoch wall-clock budget is underfit, not overfit — adding noise to the optimization path only slows convergence.
+- verdict: **Closed**. Clean negative result. Student flagged LayerScale as better alternative. Alphonse reassigned to LayerScale (#3593).
+
+---
+
+## 2026-05-16 01:33 — PR #3439 (charliepai2i48h5-fern): Gaussian random Fourier features σ sweep — SENT BACK (refine)
+
+- branch: `fern/gaussian-random-fourier-features`
+- hypothesis: Gaussian random Fourier features with σ tuned to target spatial frequency beat log-spaced deterministic features (PR #3221)
+
+- arms:
+
+  | arm | σ | n_freqs | space_dim | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch |
+  |---|---|---|---|---|---|---|
+  | baseline (log-spaced) | — | 10 | 42 | 89.27 | 79.43 | 14 |
+  | arm-1 | 1.0 | 10 | 22 | 100.33 | 91.75 | 12 |
+  | arm-2 | 5.0 | 10 | 22 | 90.18 | 81.02 | 13 |
+
+- artifacts: `target/models/model-rff-sigma1-n10-clip025-20260515-233147/metrics.jsonl`, `target/models/model-rff-sigma5-n10-clip025-20260516-002524/metrics.jsonl`
+- per-split test (σ=5.0): single=94.31 (+0.7%), rc=97.03 (+9.1%⚠), cruise=55.00 (-3.4%✓), re_rand=77.75 (-0.6%✓)
+- key finding: σ=5.0 beats baseline on 2/4 test splits (cruise -3.4%, re_rand -0.6%). geom_camber_rc regression (+9.1%) pulls average above baseline. Log-spaced covers 10 octaves simultaneously (broader spectral coverage); RFF concentrates around one frequency band. Missing --lr_t_max 20 (stale branch base: 9703afd).
+- verdict: **Sent back** to refine σ and add T_max=20. Test σ∈{3,7} on full stack (Fourier+Huber+T_max=20+clip=0.25). Target: beat val=84.59 / test=73.89.
+
+---
+
+## 2026-05-16 01:33 — PR #3192 (charliepai2i48h5-edward): EMA checkpoint averaging — SENT BACK (add T_max=20)
+
+- branch: `charliepai2i48h5-edward/ema-validation-checkpoint`
+- hypothesis: EMA smoothing (decay=0.999 / 0.9995) reduces noise around converged weights, improving OOD generalization
+
+- arms:
+
+  | arm | ema_decay | val_avg/mae_surf_p | test_avg/mae_surf_p | raw_val at best epoch | EMA gain |
+  |---|---|---|---|---|---|
+  | baseline (PR #3221) | — | 89.27 | 79.43 | — | — |
+  | arm-1 | 0.999 | **84.61** | 76.19 | 98.74 | -14.13 pts (-14.3%) |
+  | arm-2 | 0.9995 | 114.36 | 106.32 | 94.69 | -19.67 lagging |
+
+- artifacts: `models/model-ema-0.999-fourier-20260515-233215/metrics.jsonl`, `models/model-ema-0.9995-fourier-20260516-000735/metrics.jsonl`
+- per-split val (arm-1 EMA vs raw at epoch 13): single=99.14 vs 120.31 (-17.6%), rc=95.00 vs 113.76 (-16.5%), cruise=63.25 vs 72.54 (-12.8%), re_rand=81.05 vs 88.37 (-8.3%)
+- per-split test (arm-1 ckpt): single=89.94, rc=84.69, cruise=54.53, re_rand=75.61
+- key finding: EMA decay=0.999 achieved near-tie with current baseline (val=84.61 vs 84.59) WITHOUT T_max=20. Stack missing --lr_t_max 20 (rebased on 9703afd, pre-#3333). EMA's contribution confirmed large and consistent across all splits. arm-2 failed: averaging window (~2000 steps) exceeds total run time (~4900 steps), EMA still dominated by high-loss early epochs.
+- verdict: **Sent back** to add --lr_t_max 20 on arm-1 (EMA 0.999). Test clearly shows EMA compounds with T_max=20 is an untested combination. Expected to beat val=84.59 / test=73.89 (current #3333 baseline).
+
+---
+
+## Wave-6 new assignments (2026-05-16 01:33)
+
+- PR #3593 — charliepai2i48h5-alphonse: LayerScale γ-init sweep {0.01, 0.1} on full stack (lightweight residual-branch regularization, zero convergence penalty)
