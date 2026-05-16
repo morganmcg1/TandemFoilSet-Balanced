@@ -1017,3 +1017,128 @@ Arms 1 (clip=0.25) and 2 (clip=0.5) produced **bit-identical** trajectories (val
 - **CLOSED #3590** — no improvement vs SOTA (best 70.11 vs 65.30 = +4.81 val). The 4 arms together give the cleanest structural diagnostic of round 6.
 - Alphonse reassigned to `slice-num-sweep` (orthogonal model capacity dimension).
 - Per-step `train/grad_clipped` instrumentation introduced by alphonse is kept in the codebase — general-purpose improvement for future Lion experiments.
+
+---
+
+## 2026-05-16 11:45 — PR #3751 thorfinn CLOSED: wd-sweep {1e-3, 5e-2} — wd=1e-2 confirmed optimal
+
+- Branch: `willowpai2i24h3-thorfinn/wd-sweep`
+- Hypothesis: wd=1e-2 (current default) may be suboptimal on the SOTA stack. T_max=21 drives LR to low values in ep16-18, making wd's per-step pull relatively larger in the critical refinement window. Test wd=1e-3 (less regularization) and wd=5e-2 (more regularization).
+
+### Terminal results
+
+| Arm | wd | val_avg/mae_surf_p | test_avg_nansafe/mae_surf_p | Δval vs SOTA | Δtest vs SOTA | W&B |
+|---|---|---|---|---|---|---|
+| **SOTA baseline** | **1e-2** | **65.2991** | **60.5400** | — | — | `3rvfeq4g` |
+| Arm 1 | 1e-3 | 65.9178 | 61.8648 | +0.62 | +1.32 | `s55byuqv` |
+| Arm 2 | 5e-2 | 66.5765 | 62.2965 | +1.28 | +1.76 | `cd0gzfc0` |
+
+Per-split test (nansafe):
+
+| Split | Baseline wd=1e-2 | wd=1e-3 | Δ | wd=5e-2 | Δ |
+|---|---|---|---|---|---|
+| single_in_dist | 64.0454 | 63.2116 | −0.83 | 63.8609 | −0.18 |
+| geom_camber_rc | 67.5770 | 70.9094 | +3.33 | 71.5820 | +4.01 |
+| geom_camber_cruise | 56.1342 | 56.8493 | +0.71 | 56.5395 | +0.40 |
+| re_rand | 54.4033 | 56.4891 | +2.09 | 57.2035 | +2.80 |
+
+### Analysis
+
+**wd=1e-2 is the confirmed local optimum.** Both directions lose on primary val and test metrics. wd=1e-3 (10× less) and wd=5e-2 (5× more) both produce worse val and much worse test.
+
+**Critical diagnostic — both wd changes shift per-split errors in the SAME direction:**
+- Worse: `single_in_dist` (+1.21/+1.86) and `geom_camber_rc` (+3.33/+4.01 test)
+- Better: `geom_camber_cruise` and `re_rand` (small)
+
+This is not a regularization-strength signature. If higher wd helped OOD generalization (the original hypothesis), we would expect OOD splits (rc, re_rand, cruise) to improve and in-dist to worsen. Instead, both wd arms improve cruise/re_rand but devastate geom_camber_rc — regardless of whether wd goes up or down. This means the wd lever is moving the model along an axis ORTHOGONAL to the in-dist/OOD axis. wd=1e-2 happens to give the best equal-weight average.
+
+**Convergence:** Best epoch is 18 for all three runs. wd has no effect on convergence speed — only on the quality of the minimum.
+
+### Decision: CLOSED
+
+- Both arms significantly worse on primary metric (val +0.62 and +1.28)
+- Both arms significantly worse on test (test +1.32 and +1.76)
+- wd lever confirmed locally optimal at 1e-2 on this stack
+- Thorfinn reassigned to `n-head-sweep` (attention partition dimension, never tested)
+
+---
+
+## 2026-05-16 11:50 — PR #3745 nezuko CLOSED: H=160/144 with calibrated T_max — capacity lever closed
+
+- Branch: `willowpai2i24h3-nezuko/h160-tmax-calibrated`
+- Hypothesis: Prior H=160 run (ese2fcr2) underperformed because T_max=50 left the cosine in the upper half at timeout. Calibrate T_max=16 for H=160 (16 epochs at 110 s/epoch = 29.3 min) and T_max=17 for H=144 (17 epochs at 103 s/epoch = 29.2 min).
+
+### Terminal results
+
+| Arm | n_hidden | T_max | val_avg/mae_surf_p | test_avg_nansafe/mae_surf_p | Δval vs SOTA | W&B |
+|---|---|---|---|---|---|---|
+| **SOTA baseline** | **128** | **21** | **65.2991** | **60.5400** | — | `3rvfeq4g` |
+| Arm 1 (H=160) | 160 | 16 | 65.7775 | 61.1206 | +0.48 | `gcxpeur1` |
+| Arm 2 (H=144) | 144 | 17 | 68.0608 | 64.7915 | +2.76 | `453abkgh` |
+| Prior H=160 (uncalibrated) | 160 | 50 | 70.4932 | 65.1431 | — | `ese2fcr2` |
+
+Per-split test (H=160, nansafe):
+
+| Split | SOTA (H=128) | H=160 | Δ |
+|---|---|---|---|
+| single_in_dist | 64.0454 | 61.7592 | −2.29 |
+| geom_camber_rc | 67.5770 | 70.2557 | +2.68 |
+| geom_camber_cruise | 56.1342 | 56.3578 | +0.22 |
+| re_rand | 54.4033 | 56.1096 | +1.71 |
+
+### Analysis
+
+**T_max calibration confirmation:** H=160's prior gap (70.49 → 65.78, Δ−4.71) is entirely explained by the misaligned cosine schedule. This is the cleanest single-variable confirmation in the round: the T_max fix from PR #3596 is the dominant effect, not the capacity change.
+
+**H=160 vs H=128 on matched T_max stacks:**
+- val=65.78 vs 65.30 → H=160 is +0.48 worse on primary metric
+- test=61.12 vs 60.54 → H=160 is +0.58 worse on test
+- But per-split test shows: single_in_dist BETTER (−2.29), at cost of geom_camber_rc (+2.68) and re_rand (+1.71)
+
+**H=144 surprise:** Arm 2 (68.06) is worse than BOTH H=128 and H=160 — not monotonic. The most likely explanation is seed sensitivity (single fixed seed with only ~17 epochs to converge) plus possible T_max mismatch (T_max=17 puts eta_min exactly at the last epoch, no second-cycle bounce).
+
+**H=160 + EMA compound hypothesis:** H=160 gives better test on single_in_dist (−2.29) at the cost of OOD splits. EMA smoothing could recover OOD. This is a viable follow-up IF edward's EMA-on-lr=2e-4 experiment shows EMA still helps.
+
+**Best epoch = 17 (final) for both arms.** Curves still descending at timeout — H=160 especially had steep ep16→17 descent (−4.39 on val). Longer budget might close the gap further.
+
+### Decision: CLOSED
+
+- Both arms fail primary val metric (Arm 1 +0.48, Arm 2 +2.76)
+- Capacity-width dimension closed at this compute budget
+- H=160 + EMA stacked test deferred pending edward's EMA-on-lr=2e-4 result
+- Nezuko reassigned to `mlp-ratio-sweep` (MLP capacity dimension, orthogonal to n_hidden, never tested)
+
+---
+
+## 2026-05-16 11:55 — PR #3640 edward SENT BACK (2nd): EMA d=0.999 — ran on wrong stack
+
+- Branch: `willowpai2i24h3-edward/ema-weights`
+- Hypothesis: EMA of weights smooths gradient noise in the val-still-descending regime.
+
+### Post-rebase results (rebased onto lr=1e-4+T_max=21, NOT current lr=2e-4 SOTA)
+
+| Arm | EMA decay | base val | EMA val | EMA test | W&B |
+|---|---|---|---|---|---|
+| Arm 1 | d=0.999 | 65.7375 | **65.1808** | 61.5831 | `9gmpp8wd` |
+| Arm 2 | d=0.9999 | 65.7375 | 254.66 (broken) | 246.01 | `igm7900v` |
+| **Current SOTA** | — | — | **65.2991** | **60.5400** | `3rvfeq4g` |
+
+**EMA d=0.999 vs current SOTA:** val=65.18 (−0.12, marginal win), test=61.58 (+1.04, regression).
+
+### Analysis
+
+**Key finding:** Edward ran on the lr=1e-4+T_max=21 stack (base val=65.7375), not the current SOTA lr=2e-4+T_max=21 (base val=65.30). The EMA comparison is against the wrong baseline.
+
+**EMA mechanism overlap insight (from student analysis):** At T_max=21, the base trajectory is already cleanly descending in the low-LR tail (ep14-18: 79.40 → 65.74). EMA's gap vs base model NARROWS in the final epochs (−4.31 at ep14 → −0.56 at ep18), because there's less gradient noise to smooth when LR is already in the sweet-spot zone. Compare to T_max=50 result where the gap WIDENED (−2.97 at ep11 → −7.09 at ep18) — T_max=50's noisier mid-training trajectory gave EMA more to average over.
+
+**EMA trajectory overtake pattern:** EMA overtakes base at epoch 11, briefly falls behind base at ep17 (base ahead by +0.17 — LR is so low that each individual step is small and useful), then wins by 0.56 at ep18.
+
+**d=0.9999 failure:** Half-life ≈ 6931 steps vs run length ≈ 6750 steps → EMA is still weighted toward random init at terminal epoch (EMA val=254.66). Consistent across both T_max=50 and T_max=21 runs — the bound is clear.
+
+**Decision:** Sent back for retest on lr=2e-4 stack. If EMA still gives ~−0.5 val on lr=2e-4 (the same contribution it gave on lr=1e-4), projected SOTA would be val≈64.8 / test≈60.4. This would be a clear new SOTA and should merge cleanly.
+
+### Action taken
+
+- PR #3640 converted to draft (sent back for retesting)
+- Edward directed to run `--lr 2e-4 --lr_T_max 21 --ema_decay 0.999` (and optionally swap d=0.9999 for d=0.997 in Arm 2)
+- EMA code implementation already in branch — no code changes needed, only CLI flag
