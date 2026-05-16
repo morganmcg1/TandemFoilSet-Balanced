@@ -455,6 +455,7 @@ class Config:
     ffn_act: str = "gelu"   # FFN activation: 'gelu' (default MLP), 'geglu', 'swiglu'
     eta_min: float = 0.0   # CosineAnnealingLR floor; 0 = anneal to zero (default)
     n_head: int = 4   # Transolver attention heads; head_dim = n_hidden // n_head
+    n_layers: int = 5   # Transolver depth (number of TransolverBlocks)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -493,7 +494,7 @@ model_config = dict(
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=128,
-    n_layers=5,
+    n_layers=cfg.n_layers,
     n_head=cfg.n_head,
     slice_num=64,
     mlp_ratio=2,
