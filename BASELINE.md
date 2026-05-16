@@ -1,23 +1,39 @@
 # Baseline — icml-appendix-willow-pai2i-48h-r3
 
-## Current best (as of 2026-05-16 01:35) — PR #3430: EMA of model weights
+## Current best (as of 2026-05-16 05:05) — PR #3495: SOAP precond_freq=5
 
-Four winners merged: **Huber loss** (PR #3155, −18.1%) + **LR warmup 1e-3** (PR #3147, −8.9%) + **SOAP optimizer** (PR #3283, −31.7%) + **EMA of model weights decay=0.999** (PR #3430, nezuko, **−18.8% vs previous canonical**).
+Five winners merged: **Huber loss** (PR #3155, −18.1%) + **LR warmup 1e-3** (PR #3147, −8.9%) + **SOAP optimizer** (PR #3283, −31.7%) + **EMA of model weights decay=0.999** (PR #3430, −18.8%) + **SOAP precondition_frequency=5** (PR #3495, askeladd, **−1.78% vs previous canonical**).
 
 **Primary ranking metric:**
-- `val_avg/mae_surf_p` = **61.43** (run `4iw1n8xw`, nezuko EMA, best epoch)
+- `val_avg/mae_surf_p` = **60.33** (run `94f3r1yb`, askeladd freq=5 EMA, best epoch 14)
 
-**Test (paper-facing, from nezuko PR #3430 comment):**
-- `test_avg/mae_surf_p_excl_cruise` (3-split mean) = **60.92** (PR comment; not W&B-logged)
-  - Note: per-split test breakdown not separately reported; full W&B re-logging recommended in next round
+**Test (paper-facing):**
+- `test_avg/mae_surf_p_excl_cruise` (3-split mean) = **59.27** (−2.70% vs previous 60.92)
+  - `test_single_in_dist/mae_surf_p` = 69.39
+  - `test_geom_camber_rc/mae_surf_p` = 60.65
+  - `test_re_rand/mae_surf_p` = 47.78
+  - `test_geom_camber_cruise/mae_surf_p` = NaN (pre-existing bug)
+
+**Sanity:** baseline-freq10-ema (run `uu4nll7s`) reproduced canonical exactly: val=61.43, test=60.92 with seed=42 — confirms EMA+SOAP stack is fully reproducible.
 
 **Config (post-merge):**
 - Transolver: n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, dropout=0
-- **SOAP optimizer** (precondition_frequency=10) lr=1e-3, warmup_epochs=3 (LinearLR) → CosineAnnealingLR, weight_decay=1e-4, batch_size=4, surf_weight=10.0
+- **SOAP optimizer** (**precondition_frequency=5**) lr=1e-3, warmup_epochs=3 (LinearLR) → CosineAnnealingLR, weight_decay=1e-4, batch_size=4, surf_weight=10.0
 - 50 epochs, Huber loss (SmoothL1 beta=1.0) `vol_loss + 10*surf_loss`
 - **EMA of model weights** (ema_decay=0.999, updated each training step, used for all validation/test evaluation)
-- Wall-clock: ~136 s/epoch (EMA update is near-zero overhead)
+- Wall-clock: ~138 s/epoch (+1.0% vs freq=10; negligible overhead)
 - `param count = 0.66M`
+
+**Reproduce:**
+```bash
+cd target/ && python train.py \
+  --optimizer soap --precondition_frequency 5 \
+  --lr 1e-3 --warmup_epochs 3 \
+  --surf_weight 10.0 --seed 42 \
+  --ema_decay 0.999 \
+  --wandb_group precond-freq-ema-soap \
+  --wandb_name baseline-freq5-ema
+```
 
 ---
 
