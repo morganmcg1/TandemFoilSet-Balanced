@@ -686,3 +686,100 @@ The win composes but shrinks — EMA + T_max=15 captures part of the bf16-noise 
 - **Cannot merge as-is.** The current advisor baseline moved to 92.606 while Round 3 was running (FiLM merged in PR #3122). Arm B (92.694) is +0.095% worse than current baseline (92.606), and the branch is `CONFLICTING`. Final composition question — does Fourier compose with FiLM? — is still unmeasured.
 - **Sent back for Round 4:** rebase onto advisor HEAD `9adc607` (post-FiLM), run 2 paired arms on the full current stack including FiLM. Decision rule: any Δ > 0 → merge; tie → close as "Fourier subsumed by FiLM"; regression → close with interaction warning.
 
+
+---
+
+## 2026-05-16 04:50 — PR #3584 [MERGED]: Two-shot FiLM — condition attention + MLP paths per TransolverBlock
+
+- **Student branch:** `charliepai2i48h4-frieren/two-shot-film`
+- **Hypothesis:** Conditioning FiLM at two sites per TransolverBlock (attention input after ln_1 AND MLP input after ln_2) vs current single-shot (attention only), using shared FiLMConditioner (+0 parameters).
+
+### Results
+
+| Arm | FiLM sites | params | val_avg/mae_surf_p | best_epoch | vs Arm A | vs baseline |
+|-----|------------|--------|---------------------|------------|----------|-------------|
+| A   | 1-shot (attn only) | 845,527 | 93.205 | 18 | — | +0.65% (noise) |
+| B   | 2-shot (attn + MLP) | 845,527 | **89.784** | 17 | **−3.67%** ✅ | **−3.05%** ✅ |
+
+### Per-split val (mae_surf_p)
+
+| Split | Arm A | Arm B (2-shot) | Δ |
+|-------|---:|---:|---:|
+| `val_single_in_dist`     | 106.191 | **103.854** | −2.20% |
+| `val_geom_camber_rc`     | 103.036 |  **95.887** | **−6.94%** ✅ |
+| `val_geom_camber_cruise` |  73.888 |  **73.143** | −1.01% |
+| `val_re_rand`            |  89.704 |  **86.251** | −3.85% |
+| **val_avg**              | **93.205** | **89.784** | **−3.67%** ✅ |
+
+### Per-split test (3 finite splits)
+
+| Split | Arm A | Arm B (2-shot) | Δ |
+|-------|---:|---:|---:|
+| `test_single_in_dist`    |  91.619 |  **89.460** | −2.36% |
+| `test_geom_camber_rc`    |  91.888 |  **87.408** | −4.87% |
+| `test_re_rand`           |  84.201 |  **80.336** | −4.59% |
+| **avg (3 splits)**       | **89.236** | **85.735** | **−3.92%** ✅ |
+
+Metric artifacts:
+- `models/model-charliepai2i48h4-frieren-two-shot-film-armb-twoshot-20260516-030245/metrics.jsonl` (winner)
+- `models/model-charliepai2i48h4-frieren-two-shot-film-arma-baseline-20260516-022727/metrics.jsonl` (baseline)
+
+### Analysis & conclusions
+
+- **Uniform win across all 4 val splits and all 3 test splits.** Strongest gain on `val_geom_camber_rc` (−6.94% val, −4.87% test) — the unseen-camber/raceCar OOD generalization split.
+- **Zero extra parameters**: shared FiLMConditioner called twice per block (same γ,β reused). Only compute cost: +6.2% epoch time, +6.8% peak VRAM (38.9 GB). Lost 1 epoch under budget (17 vs Arm A's 18) but still wins clearly.
+- **Both arms at final epoch = still descending**. Additional budget would likely improve both; two-shot would likely maintain or widen the gap.
+- **Mechanism**: MLP-path FiLM helps the model transfer geometric features across cambers (OOD) independently of the attention path's slice aggregation. The two paths provide complementary physics-regime adaptation.
+- **New best: 89.784.** Compound stack: Huber + bf16 + T_max=15 + EMA + FiLM + two-shot FiLM.
+
+### Decision: MERGED (new best → 89.784)
+
+---
+
+## 2026-05-16 04:52 — PR #3595 [CLOSED, falsified]: n_layers depth sweep — 5→6 layers on full EMA+FiLM stack
+
+- **Student branch:** `charliepai2i48h4-edward/nlayers-depth-sweep`
+- **Hypothesis:** Depth increase (5→6 TransolverBlocks) gives more representational capacity on the full FiLM+EMA+bf16+T_max=15 stack.
+
+### Results
+
+| Arm | n_layers | params | sec/epoch | epochs | val_avg/mae_surf_p | vs Arm A |
+|-----|----------|--------|-----------|--------|--------------------|----------|
+| A (n_layers=5) | 5 | 845,527 | 104.4 s | 18 | **92.408** | — |
+| B (n_layers=6) | 6 | 999,707 | 123.9 s (+18.7%) | 15 | **94.694** | **+2.47% ❌** |
+
+### Analysis
+
+- **Depth regression.** +2.47% intra-PR. The mechanism is clear: +20% wall-clock per epoch means 3 fewer fine-tune epochs at lr≈0 (epochs 16-18 where Arm A improved 93.05 → 92.41). Even projecting Arm B gets the same fine-tune lift (−0.65), projected Arm B ≈ 94.04 — still +1.6% worse. Depth-vs-epochs tradeoff is asymmetric and net-negative under 30-min budget.
+- **Lesson**: with a fixed 30-min wall-clock, capacity changes that increase per-epoch cost trade away load-bearing fine-tune epochs. n_layers=4 (faster, more fine-tune time) might be more interesting than n_layers=6, though that's a separate hypothesis.
+- All val splits regress; largest hit on `val_geom_camber_cruise` (+4.19). Test direction matches val.
+
+### Decision: CLOSED (falsification — depth bump net-negative under 30-min budget)
+
+---
+
+## 2026-05-16 04:53 — PR #3511 [SENT BACK for rebase]: Grad clipping on bf16+T_max=15+EMA stack
+
+- **Student branch:** `charliepai2i48h4-tanjiro/grad-clip-bf16-tmax-15`
+- **Hypothesis:** Gradient clipping (clip_norm ∈ {0.5, 1.0, ∞}) reduces bf16 noise outliers.
+
+### Results (pre-FiLM stack, bf16+T_max=15+EMA only)
+
+| Arm | clip | val_avg/mae_surf_p | vs A-mean | vs baseline 96.464 |
+|-----|-----:|---------------------|-----------|---------------------|
+| A1  | none | 94.669 | — | — |
+| A2  | none | 96.778 | — | — |
+| A-mean | none | **95.724** | — | −1.28% |
+| **B** | **1.0** | **91.861** | **−4.03%** ✅ | **−4.77%** ✅ |
+| C | 0.5 | 94.365 | −1.42% ✅ | −2.18% |
+
+### Key finding
+
+**Clip=1.0 fires on ~98-100% of steps** — this is not outlier clipping, it's gradient direction normalization (LION/Normalized-GD behavior). Natural grad norms: p50≈9, p90≈22 (driven by `surf_weight=10` and large mesh sizes 74K-242K nodes × bf16 quantization). AdamW with lr=5e-4 typically sees norms in [0.1, 5]; this system runs 10× higher. Decoupling step magnitude from gradient magnitude is genuinely beneficial.
+
+Arm B at 91.861 beats the EMA pre-FiLM baseline (96.464) by 4.77%, and even beats the current FiLM baseline (92.606) by 0.80%. However, the PR is CONFLICTING (pre-FiLM, pre-two-shot-FiLM). Current baseline moved to 89.784 while this ran.
+
+### Decision: SENT BACK for rebase + rerun on full two-shot FiLM stack
+
+New rerun: Arm A (two-shot FiLM, no clip) vs Arm B (two-shot FiLM + clip=1.0). Expected ~86-88 if composition holds.
+
