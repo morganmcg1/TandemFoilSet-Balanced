@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **As of:** 2026-05-16 07:40 UTC
+- **As of:** 2026-05-16 08:15 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r3`
 - **Research tag:** `willow-pai2i-24h-r3` (round 6 active)
 - **Most recent human research direction:** None received.
@@ -40,9 +40,9 @@ The full current SOTA stack (7 levers stacked across 6 rounds):
 | Student | PR | Slug | Hypothesis | Status |
 |---|---|---|---|---|
 | alphonse | #3590 | `lion-clip-sweep` | Add clip=off arm on T_max=21 stack | WIP — clip-off running |
-| edward | #3640 | `ema-weights` | EMA d=0.999 on T_max=21 stack | WIP — preliminary val_ema=65.18 (marginal), re-run in progress |
-| frieren | (idle, just merged #3675) | `lion-lr-refine` | NEW — lr=2.5e-4 + lr=2e-4/T_max=25 | About to assign |
-| tanjiro | #3713 | `eta-min-sweep` | eta_min {2e-5, 3e-5} | WIP — both arms worse, eta-min-2e5 re-run still in progress |
+| edward | #3640 | `ema-weights` | EMA d=0.999 on T_max=21 stack | WIP — post-rebase re-run in progress |
+| frieren | #3801 | `lion-lr-refine` | lr=2.5e-4 + lr=2e-4/T_max=25 | WIP |
+| tanjiro | #3821 | `cosine-plateau-tail` | Plateau at 1.4e-5 or 2e-5 for ep17-19 | NEW — just assigned |
 | nezuko | #3745 | `h160-tmax-calibrated` | H=160 + T_max=16 | WIP |
 | fern | #3747 | `vol-loss-p-weight` | vol_loss p-weight {1.5, 2.0} | WIP |
 | askeladd | #3749 | `lion-beta-sweep` | Lion β₁ {0.8, 0.95} | WIP |
@@ -68,14 +68,14 @@ The full current SOTA stack (7 levers stacked across 6 rounds):
 
 | Priority | PR | Student | Hypothesis | Latest signal |
 |---|---|---|---|---|
-| MED | #3640 | edward | EMA d=0.999 on T_max=21 | val_ema=65.18 (−0.12 marginal); EMA+T_max=21 mechanistic overlap |
-| LOW | #3713 | tanjiro | eta_min sweep | Both arms worse (67.16, 70.36); re-run still in progress |
+| MED | #3640 | edward | EMA d=0.999 on T_max=21 | Post-rebase re-run in progress |
+| HIGH | #3801 | frieren | lr-refine: lr=2.5e-4 + T_max=25 | Training |
+| MED | #3821 | tanjiro | cosine-plateau-tail: plateau 1.4/2e-5 ep17-19 | NEW |
 | MED | #3590 | alphonse | clip=off arm | Running |
 | MED | #3745 | nezuko | H=160 + T_max=16 | Training |
 | MED | #3747 | fern | vol_loss p-weight | Training |
 | LOW | #3749 | askeladd | Lion β₁ sweep | Training |
 | LOW | #3751 | thorfinn | wd sweep | Training |
-| HIGH | (new) | frieren | lr-refine: 2.5e-4 + T_max=25 | About to assign |
 
 ## Critical insight: EMA + T_max=21 mechanism overlap
 
@@ -93,16 +93,18 @@ This redirects round-7 priorities:
 
 ## Round-6 directions (in progress)
 
-1. **LR refinement** (frieren new assignment): probe lr=2.5e-4 and lr=2e-4+T_max=25.
-2. **H=160 + calibrated T_max** (nezuko): orthogonal capacity test.
-3. **vol_loss p-weight** (fern): orthogonal loss-shape test.
-4. **Lion beta sweep** (askeladd): tests momentum time horizon.
-5. **wd sweep** (thorfinn): tests regularization on SOTA stack.
-6. **clip=off** (alphonse): probes whether 100% clip is required.
+1. **LR refinement** (frieren #3801): lr=2.5e-4 + lr=2e-4/T_max=25.
+2. **Cosine-plateau-tail** (tanjiro #3821 — NEW): hold LR=1.4e-5 or 2e-5 for ep17-19 instead of cosine decay. Orthogonal to frieren's T_max=25 extension.
+3. **H=160 + calibrated T_max** (nezuko #3745): orthogonal capacity test.
+4. **vol_loss p-weight** (fern #3747): orthogonal loss-shape test.
+5. **Lion beta sweep** (askeladd #3749): tests momentum time horizon.
+6. **wd sweep** (thorfinn #3751): tests regularization on SOTA stack.
+7. **clip=off** (alphonse #3590): probes whether 100% clip is required.
+8. **EMA d=0.999 on T_max=21 stack** (edward #3640): post-rebase result pending.
 
 ## Round-7 directions (speculative)
 
-1. **Decouple eta_min from lr** — at lr=2e-4 the ratio eta_min/lr = 0.05, half the previous 0.1. Test eta_min=2e-5 at lr=2e-4 to restore the ratio.
+1. **Decouple eta_min from lr** — at lr=2e-4 the ratio eta_min/lr = 0.05, half the previous 0.1. Test eta_min=2e-5 at lr=2e-4 to restore the ratio. NOTE: eta_min RAISE is eliminated (tanjiro #3713). Decouple means testing eta_min=2e-5 ONLY in combination with higher LR as a ratio fix, not in isolation.
 2. **Bigger model + EMA stack** — if nezuko's H=160 works, retest EMA on top.
 3. **Different optimizers** — SOAP, Adan, Lion with custom momentum, after exhausting LR/wd levers.
 4. **Architectural changes** — Transolver variants, attention patterns, slice_num adjustment (avoiding 128 inf bug).
@@ -112,7 +114,7 @@ This redirects round-7 priorities:
 
 | Approach | Best result | Decision |
 |---|---:|---|
-| eta_min raise (tanjiro #3713 arms): {2e-5, 3e-5} | 67.16 / 70.36 (worse) | Both arms confirmed worse — eta_min sweep failing |
+| **eta_min raise (tanjiro #3713): {2e-5, 3e-5}** | 67.16 / 68.44 (both worse) | **CLOSED** — raises entire cosine second half; model can't reach sweet-spot LR≈1.45e-5 |
 | (other round-6 in-flight TBD) | — | Pending terminals |
 
 ## Eliminated approaches (cumulative)

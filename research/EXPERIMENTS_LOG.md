@@ -917,3 +917,37 @@ All THREE channels (Ux, Uy, p) degraded monotonically with p_weight increase. Mo
 ### Advisor action
 
 - **Pending terminal** — wait for student to finish in-progress run and post final SENPAI-RESULT. Likely marginal improvement at best.
+
+---
+
+## 2026-05-16 07:41 — PR #3713 tanjiro CLOSED: eta_min sweep {2e-5, 3e-5}
+
+- Branch: `willowpai2i24h3-tanjiro/eta-min-sweep`
+- Hypothesis: ep19 regression in T_max=21 baseline is caused by LR floor too low (1e-5). Raising eta_min to {2e-5, 3e-5} would keep ep17-19 in the productive ≥2e-5 regime.
+- W&B runs: `tsg07g8u` (eta_min=2e-5), `5pzst1h7` (eta_min=3e-5)
+
+### Terminal results (vs NEW SOTA frieren #3675: val=65.2991)
+
+| Arm | eta_min | best epoch | val_avg/mae_surf_p | test_avg_nansafe | Δ val vs SOTA |
+|---|---|---|---:|---:|---:|
+| Baseline #3675 | 1e-5 | 19 | **65.2991** | **60.5400** | — |
+| Arm 1 | **2e-5** | 19 | 67.1608 | 62.4017 | +1.86 |
+| Arm 2 | **3e-5** | 18 | 68.4418 | 62.9889 | +3.14 |
+
+Per-epoch LR comparison (ep17-19):
+- Baseline: 2.7e-5 / 2.0e-5 / 1.45e-5
+- eta_min=2e-5: 3.5e-5 / 2.4e-5 / 2.18e-5 (best)
+- eta_min=3e-5: 4.3e-5 / 3.4e-5 / 3.16e-5
+
+### Analysis
+
+**Hypothesis decisively refuted.** Raising eta_min lifts the **entire** second half of the cosine curve, not just ep17-19. With eta_min=2e-5, LRs at every epoch from ~ep9 onward are 1.4–2.0× higher than baseline. The model can no longer reach the LR≈1.45e-5 refinement regime that lands at val=65.30.
+
+Key insight from tanjiro's analysis: the ep19 regression in the original T_max=21 baseline (65.74→66.63) is NOT a "floor too low" problem — it is a "slight overshoot past the optimum" problem. The minimum lives at LR≈1.45e-5, exactly where the cosine lands. Raising the floor moves the model away from that sweet spot.
+
+Per-split verdict: val_re_rand and val_geom_camber_cruise kept improving at ep19 across all arms — regression concentrated in val_single_in_dist. Low LR is needed for the in-dist split refinement.
+
+### Advisor action
+
+- **Closed #3713** — both arms decisively worse than new SOTA. Disproven by dose-response (+1.86 at 2e-5, +3.14 at 3e-5).
+- **Assigned tanjiro #3821 cosine-plateau-tail**: replace cosine tail (ep17-19) with constant LR at 1.4e-5 or 2e-5. Holds model at sweet-spot LR for 3 epochs instead of passing through it. Orthogonal to frieren's T_max=25.
