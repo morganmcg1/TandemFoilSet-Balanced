@@ -1,6 +1,39 @@
 # Baseline — TandemFoilSet (willow-pai2i-48h-r5)
 
-## Current best — PR #4063 (T_max=20 — longer cosine schedule within 14-epoch wall-clock budget)
+## Current best — PR #4120 (LR re-optimisation at clip=1.0 — lr=2e-4 + grad_clip=1.0 + T_max=14)
+
+**val_avg/mae_surf_p = 56.8913** (W&B run: `1c58zju8`, PR #4120 Lion lr=2e-4 + n_fourier=0 + FiLM + wd=1e-3 + EMA(0.997) + Huber β=0.05 + T_max=14 + **grad_clip=1.0**; NO spec_norm)
+**test_avg/mae_surf_p = 49.0322** (same run `1c58zju8`, clean 4-split)
+
+| Split | val mae_surf_p | test mae_surf_p |
+|-------|----------------|------------------|
+| single_in_dist | 61.01 | 52.64 |
+| **geom_camber_rc** | **71.92** | **64.54** |
+| **geom_camber_cruise** | **37.30** | **31.01** |
+| **re_rand** | **57.34** | **47.94** |
+
+**Δ vs prior best (PR #4063 T_max=20, val 57.6606 / test 49.4491): −0.77 val / −0.41 test**
+
+All 4/4 val splits and 4/4 test splits improve. lr=2e-4 with clip=1.0 on T_max=14 substrate beats T_max=20 at lr=1.5e-4.
+
+Mechanism: grad_clip=1.0 clips every step (pre-clip ‖g‖ median ~23.7 >> 1.0), turning clip into a constant per-step scale AND direction change. The optimal nominal lr shifts upward from 1.5e-4 (no-clip) to 2e-4 (with clip) because the clipped step direction (normalized gradient) differs from Lion's sign-update and interacts with lr in a non-trivial direction-sensitive way. The LR-vs-val curve at clip=1.0 has the same shape as the no-clip regime but shifted upward in lr.
+
+**Reproduce (PR #4120 Arm B — winner):**
+```bash
+cd target/
+python train.py --agent willowpai2i48h5-thorfinn --epochs 50 \
+  --wandb_group round10-lr-at-clip1-thorfinn \
+  --loss_type smooth_l1 --loss_beta 0.05 \
+  --n_fourier 0 --cosine_t_max 14 \
+  --optimizer_name lion --lr 2e-4 --weight_decay 1e-3 \
+  --ema_decay 0.997 --use_film \
+  --grad_clip 1.0 \
+  --wandb_name thorfinn-r10-lr2e4-clip1
+```
+
+---
+
+## Prior best — PR #4063 (T_max=20 — longer cosine schedule within 14-epoch wall-clock budget)
 
 **val_avg/mae_surf_p = 57.6606** (W&B run: `fh3jmkd1`, PR #4063 Lion lr=1.5e-4 + n_fourier=0 + FiLM + wd=1e-3 + EMA(0.997) + Huber β=0.05 + **T_max=20**; NO spec_norm; NO grad_clip)
 **test_avg/mae_surf_p = 49.4491** (same run `fh3jmkd1`, clean 4-split)
