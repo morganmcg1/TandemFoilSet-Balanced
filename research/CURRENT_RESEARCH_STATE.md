@@ -1,22 +1,22 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 03:35 (SwiGLU PR #3608 merged — new baseline 78.407; all in-flight PRs notified to rebase; round-9 assignments underway)
-- **Most recent research direction from human researcher team:** none (no open issues — verified 03:20Z).
-- **Current best (merged):** `val_avg/mae_surf_p` = **78.407** (PR #3608 SwiGLU FFN)
-- **GH rate-limit status:** ~2800/5000 remaining.
+- **Last updated:** 2026-05-16 05:35 (SwiGLU full mlp_ratio=2 PR #3654 merged — new baseline 75.578; all in-flight PRs notified; frieren assigned GEGLU ablation PR #3727)
+- **Most recent research direction from human researcher team:** none (no open issues — verified 05:30Z).
+- **Current best (merged):** `val_avg/mae_surf_p` = **75.578** (PR #3654 SwiGLU hidden_inner=192)
+- **GH rate-limit status:** ~2200/5000 remaining.
 
 ## Active PRs after this triage
 
 | PR | Student | Hypothesis | State | Notes |
 |----|---------|-----------|-------|-------|
-| #3536 | tanjiro | eta_min=1e-5 (compound retest) | WIP (rebase needed) | Old baseline — must rebase onto SwiGLU |
-| #3607 | thorfinn | FFN dropout p=0.05 (SwiGLU) | WIP (sent back for rebase + p=0.05) | test −0.54% but val +0.63%; retest on SwiGLU |
-| #3606 | nezuko | RFF σ=3 (lower freq) | WIP (rebase needed) | Old baseline — must rebase onto SwiGLU |
-| #3639 | alphonse | EMA / Polyak α=0.999 | WIP (rebase needed) | Old baseline — must rebase onto SwiGLU |
-| #3643 | askeladd | n_head=2 (head_dim=48) | WIP (rebase needed) | Old baseline — must rebase onto SwiGLU |
-| #3645 | edward | surf_weight=10→5 (loss rebalance) | WIP (rebase needed) | Old baseline — must rebase onto SwiGLU |
-| #3646 | fern | stochastic depth / drop-path p=0.1 | WIP (rebase needed) | Old baseline — must rebase onto SwiGLU |
-| **(queued)** | frieren | SwiGLU mlp_ratio=2 (hidden_inner=192, +24% params) | pending PR creation | Follow-up to winning PR #3608 |
+| #3536 | tanjiro | eta_min=1e-5 (compound retest on SwiGLU) | WIP | Notified new baseline 75.578 |
+| #3607 | thorfinn | FFN dropout p=0.05 (SwiGLU, rebased) | WIP | Notified new baseline 75.578 |
+| #3639 | alphonse | EMA / Polyak α=0.999 (SwiGLU) | WIP | Notified new baseline 75.578 |
+| #3643 | askeladd | n_head=2 (head_dim=48, SwiGLU) | WIP | Notified new baseline 75.578 |
+| #3645 | edward | surf_weight=10→5 (SwiGLU) | WIP | Notified new baseline 75.578 |
+| #3646 | fern | stochastic depth DropPath p=0.1 (SwiGLU) | WIP | Notified new baseline 75.578 |
+| #3655 | nezuko | RFF σ=3 + learnable-σ 2-arm (SwiGLU) | WIP (pod stuck in watchdog loop since 04:22Z) | Notified new baseline 75.578; pod has not committed results |
+| #3727 | frieren | GEGLU ablation: SiLU→GELU gate at hidden_inner=192 | WIP (newly assigned) | Gate-function ablation on new baseline |
 
 ## Branch context
 `icml-appendix-charlie-pai2i-24h-r2`. Local JSONL metrics only.
@@ -28,46 +28,48 @@
 4. **PR #3399** (slice_num=64→96) — 97.757
 5. **PR #3377** (n_hidden=128→96) — 96.667
 6. **PR #3314** (weight_decay=1e-4→3e-4) — 95.808
-7. **PR #3608** (SwiGLU FFN, param-matched) — **78.407** (current baseline — MASSIVE WIN)
+7. **PR #3608** (SwiGLU FFN, param-matched hidden_inner=128) — 78.407 (−18.2%)
+8. **PR #3654** (SwiGLU full mlp_ratio=2, hidden_inner=192) — **75.578** (current baseline)
 
-Key config: SmoothL1 (Huber β=1.0) + clip_grad_norm(1.0) + AdamW selective decay (wd=3e-4) + NaN guard + SequentialLR (LinearLR 2ep warmup + CosineAnnealingLR T_max=12, eta_min=0) + lr=7e-4 + epochs=14 + slice_num=96 + n_hidden=96 + n_head=4 + **SwiGLU FFN (hidden_inner=128, bias-free W1/V/W2)** + n_layers=5 + dropout=0.0 + surf_weight=10.
+Key config: SmoothL1 (Huber β=1.0) + clip_grad_norm(1.0) + AdamW selective decay (wd=3e-4) + NaN guard + SequentialLR (LinearLR 2ep warmup + CosineAnnealingLR T_max=12, eta_min=0) + lr=7e-4 + epochs=14 + slice_num=96 + n_hidden=96 + n_head=4 + **SwiGLU FFN (SiLU gate, hidden_inner=192, bias-free W1/V/W2)** + n_layers=5 + dropout=0.0 + surf_weight=10.
 
-## SwiGLU win — program summary
+Total improvement to date: 116.61 → 75.578 = **−35.2%** from original Huber baseline.
 
-The SwiGLU PR is the largest single-experiment improvement in the program: **−18.2% val, −20.1% test**. All 4 splits improved 15-26%.
+## SwiGLU capacity scaling — program summary
 
-Key insights from this result:
-- **GELU FFN was the dominant bottleneck** — explains why 8+ rounds of capacity/regularization/schedule experiments made marginal gains. The parameterization itself was holding back the model.
-- **Multiplicative gating unlocks adaptive feature selection** — especially for mesh geometry shifts (geom_cruise −26% val, −29% test). SwiGLU's `SiLU(W1·x) ⊙ (V·x)` gives each token a gate-selected subspace that GELU's single-path `Linear → GELU → Linear` cannot express.
-- **mlp_ratio=4 failure (PR #3503) was NOT about capacity** — it was about single-path expansion parameterization. SwiGLU re-introduces 1.5× effective expansion at matched params and wins massively.
-- **Retrospective**: if we had tested SwiGLU earlier, many rounds of tuning could have been skipped. Architectural changes at the FFN level are higher-leverage than hyperparameter sweeps on an underpowered FFN.
+After the SwiGLU win (PR #3608, −18.2%), scaling FFN capacity within the gating parameterization continues to help:
+- **hidden_inner=128** (param-matched): val 78.407 (PR #3608)
+- **hidden_inner=192** (+50% FFN params): val 75.578 (PR #3654, −3.6%)
+
+Key insight from #3654: **Gating does most of the work** — ~83% of the total SwiGLU-stack improvement came from gating alone. Extra capacity within a gated FFN sub-linearly increases overfitting risk (the gate can selectively use or suppress extra hidden units). In contrast, plain GELU+mlp_ratio=4 (#3503) failed because extra params with single-path expansion just memorized.
 
 ## Current research focus
 
-### Tier 1 (highest priority — test SwiGLU + X compounds)
-1. **Full mlp_ratio=2 SwiGLU** (hidden_inner=192, +24% params) — frieren queued. If matched-param version wins so decisively, does unconstrained version win more?
-2. **eta_min=1e-5 on SwiGLU** — tanjiro rebase. In isolation on OLD baseline: 95.835. On SwiGLU: should be orthogonal and stack.
-3. **SwiGLU + dropout p=0.05** — thorfinn rebase. Old result showed geom_cruise −6.3% test; p=0.05 should avoid slowing single_in_dist fit.
+### Tier 1 (gate-function ablation and high-value compounds on SwiGLU 192)
+1. **GEGLU at hidden_inner=192** — frieren (#3727). Is the win from gating per se or SiLU specifically? Direct head-to-head SiLU vs GELU at matched hidden_inner=192.
+2. **eta_min=1e-5 on SwiGLU** — tanjiro (#3536). In isolation on OLD baseline: 95.835. Should compound orthogonally on SwiGLU 192.
+3. **SwiGLU + dropout p=0.05** — thorfinn (#3607). Rebase onto SwiGLU stack; test FFN dropout at p=0.05.
 
-### Tier 2 (regularization + optimization axes on SwiGLU)
-4. **EMA/Polyak α=0.999** — alphonse rebase. Orthogonal to FFN parameterization.
-5. **Drop-path p=0.1** — fern rebase. Block-level stochastic regularization.
-6. **surf_weight=5** — edward rebase. Loss rebalance for single_in_dist.
+### Tier 2 (regularization + optimization axes)
+4. **EMA/Polyak α=0.999** — alphonse (#3639). Orthogonal to FFN parameterization.
+5. **Drop-path p=0.1** — fern (#3646). Block-level stochastic regularization.
+6. **surf_weight=5** — edward (#3645). Loss rebalance for single_in_dist.
 
-### Tier 3 (architecture probes on SwiGLU)
-7. **n_head=2 (head_dim=48)** — askeladd rebase. Wider heads on SwiGLU stack.
-8. **RFF σ=3** — nezuko rebase. Low-freq positional encoding.
+### Tier 3 (architecture probes)
+7. **n_head=2 (head_dim=48)** — askeladd (#3643). Wider heads on SwiGLU stack.
+8. **RFF σ=3** — nezuko (#3655). Low-freq positional encoding (pod stuck — monitoring).
 
-## Open questions (on new SwiGLU baseline)
-- Does full-size mlp_ratio=2 SwiGLU (hidden_inner=192) give further gains? (frieren queued)
-- Does eta_min=1e-5 still compound orthogonally on SwiGLU? (tanjiro rebase)
-- Does dropout p=0.05 help geom_cruise without hurting single_in_dist? (thorfinn rebase)
-- Does EMA smooth the cosine tail on the SwiGLU model? (alphonse rebase)
-- Does drop-path regularize productively on the new FFN? (fern rebase)
-- Does surf_weight=5 help single_in_dist on the new baseline? (edward rebase)
-- Does n_head=2 interact favorably with SwiGLU? (askeladd rebase)
-- Does RFF σ=3 provide useful positional information on the SwiGLU model? (nezuko rebase)
-- What is the theoretical floor? SwiGLU at 78.4 is 33% better than the original 116.6 Huber baseline. Total improvement to date: −32.8%.
+## Open questions (on new SwiGLU 192 baseline)
+- Is the SwiGLU win from gating or SiLU specifically? (frieren GEGLU, #3727)
+- Does hidden_inner=256 continue the capacity scaling trend? (queued, not yet assigned)
+- Does eta_min=1e-5 compound orthogonally on SwiGLU 192? (tanjiro #3536)
+- Does dropout p=0.05 help geom_cruise without hurting single_in_dist? (thorfinn #3607)
+- Does EMA smooth the cosine tail on the SwiGLU 192 model? (alphonse #3639)
+- Does drop-path regularize productively on the new FFN? (fern #3646)
+- Does surf_weight=5 help single_in_dist on the new baseline? (edward #3645)
+- Does n_head=2 interact favorably with SwiGLU 192? (askeladd #3643)
+- Does RFF σ=3 provide useful positional information? (nezuko #3655)
+- What is the theoretical floor? 75.578 = −35.2% from original baseline. A full 14-epoch run of hidden_inner=192 might reach ~73-74.
 
 ## Closed/regressed (cumulative)
 - #3579 alphonse lr=1e-3: +2.47%
@@ -87,10 +89,11 @@ Key insights from this result:
 - #3295 edward slice_num=128: +20%
 - Round-1: #3205, #3179, #3183, #3214, #3216, #3220
 
-## Next research directions (beyond round-9)
-1. **GEGLU** — GELU-gated variant (same structure as SwiGLU, GELU instead of SiLU on gate). Head-to-head: is the win from gating per se, or SiLU specifically?
-2. **SwiGLU + larger n_layers** — with SwiGLU unlocking capacity, the n_layers=6 closure on GELU (#3506) may not hold. Worth a re-test with n_layers=6 on SwiGLU.
-3. **Attention dropout** — so far only FFN dropout tested; attention head dropout is orthogonal.
-4. **Log-pressure target** — handles dynamic range across splits.
-5. **Per-layer-class weight decay** — decouple OOD/in-dist trade.
-6. **Data augmentation** — physics-aware flip or geometric perturbation.
+## Next research directions (beyond current in-flight)
+1. **hidden_inner=256** — probe whether capacity scaling saturates or continues. 128→192 gave −3.6%; 192→256 (+33% more) is the natural bracket. Wall-clock concern: ~160-165 s/epoch limits to 11-12 epochs at 30-min cap.
+2. **n_layers=6 on SwiGLU 192** — #3506 failed catastrophically on GELU (−15%), but SwiGLU unlocked capacity. Re-test depth with the new parameterization.
+3. **GEGLU result interpretation** — if GEGLU ≈ SwiGLU, gating dominates (simplified design space); if GEGLU < SwiGLU, SiLU's negative region matters for physics surrogates.
+4. **eta_min=1e-5 + hidden_inner=192 compound** — if eta_min wins on SwiGLU 128, test compound on 192 (frieren's #3654 trajectory was still descending at E13; non-zero eta_min + 192 may recover lost E14).
+5. **Attention dropout** — so far only FFN dropout tested; attention head dropout is orthogonal.
+6. **Log-pressure target** — handles dynamic range across splits.
+7. **Data augmentation** — physics-aware flip or geometric perturbation.

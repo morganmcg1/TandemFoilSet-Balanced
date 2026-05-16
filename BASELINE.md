@@ -2,19 +2,29 @@
 
 ## Current best
 
-### 2026-05-16 03:30 — PR #3608: SwiGLU FFN (param-matched replacement for GELU)
+### 2026-05-16 05:29 — PR #3654: SwiGLU full mlp_ratio=2 (hidden_inner 128→192, +50% FFN params)
 
-- **val_avg/mae_surf_p:** 78.407 (best @ epoch 13 / 14; **−18.2% vs previous best**)
-- **test_avg/mae_surf_p:** 68.375 (**−20.1% vs previous best**)
+- **val_avg/mae_surf_p:** 75.5776 (best @ epoch 13 / 14; **−3.61% vs previous best**)
+- **test_avg/mae_surf_p:** 66.7399 (**−2.39% vs previous best**)
+- **Per-split val mae_surf_p:** single 86.290 | geom_rc 89.762 | geom_cruise 55.041 | re_rand 71.218
+- **Per-split test mae_surf_p:** single 77.887 | geom_rc 77.254 | geom_cruise 47.216 | re_rand 64.602
+- **Changes:** SwiGLU hidden_inner 128→192 (+50% FFN params per block; unconstrained capacity vs param-matched PR #3608).
+- **n_params:** 471,959 (~0.47M; +24% vs PR #3608's 380K)
+- **Wall-clock:** 32.2 min total (~149 s/epoch; hit 30-min cap, epoch 14 not run — curve still descending)
+- **Peak VRAM:** 46.92 GB
+- **Metric artifacts:** `models/model-swiglu-full-mlpratio2-20260516-042703/metrics.{jsonl,yaml}`
+- **Reproduce:** `cd target && python train.py --experiment_name swiglu-full-mlpratio2 --agent charliepai2i24h2-frieren --epochs 14`
+- **Delta vs previous best (#3608):** −2.829 val_avg/mae_surf_p (78.407 → 75.578); −1.635 test (68.375 → 66.740). Strongest gain on single_in_dist (−8.5% val, −6.3% test). geom_camber_cruise test slightly regressed (+2.7%).
+
+### 2026-05-16 03:30 — PR #3608: SwiGLU FFN (param-matched replacement for GELU, superseded)
+
+- **val_avg/mae_surf_p:** 78.407 (best @ epoch 13 / 14; −18.2% vs previous best)
+- **test_avg/mae_surf_p:** 68.375 (−20.1% vs previous best)
 - **Per-split val mae_surf_p:** single 94.301 | geom_rc 89.780 | geom_cruise 56.169 | re_rand 73.379
 - **Per-split test mae_surf_p:** single 83.095 | geom_rc 79.596 | geom_cruise 45.973 | re_rand 64.837
-- **Changes:** GELU FFN replaced by SwiGLU `W2(SiLU(W1(x)) ⊙ V(x))` with hidden_inner=128 (param-matched: 3×(96×128)=36864 params/block = 2×(96×192) baseline FFN). All 5 Transolver blocks use SwiGLU.
-- **n_params:** 379,799 (baseline was ~381k; effectively identical)
-- **Wall-clock:** 30.4 min total (~140 s/epoch, 13 of 14 epochs within cap)
-- **Peak VRAM:** 42.95 GB
+- **Changes:** GELU FFN replaced by SwiGLU `W2(SiLU(W1(x)) ⊙ V(x))` with hidden_inner=128 (param-matched). All 5 Transolver blocks use SwiGLU.
+- **n_params:** 379,799
 - **Metric artifacts:** `models/model-swiglu-ffn-20260516-022733/metrics.{jsonl,yaml}`
-- **Reproduce:** `cd target && python train.py --experiment_name swiglu-ffn --agent charliepai2i24h2-frieren --epochs 14`
-- **Delta vs previous best (#3314):** −17.401 val_avg/mae_surf_p (95.808 → 78.407); −17.203 test (85.578 → 68.375). Every split improved 15-26%. Largest gains on geom_cruise (−26.2% val, −29.1% test) and re_rand (−18.9% val, −23.8% test).
 
 ### 2026-05-16 00:35 — PR #3314: AdamW weight_decay 1e-4 → 3e-4 on decay group (single-axis, superseded)
 

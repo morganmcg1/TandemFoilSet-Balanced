@@ -969,3 +969,28 @@ Two bundled changes: (1) grad clip max_norm=1.0 + AdamW selective decay (LN/bias
 
 ### Decision
 - **MERGED** — clear winner. New baseline: val_avg/mae_surf_p = 97.757.
+
+## 2026-05-16 05:29 — PR #3654: SwiGLU full mlp_ratio=2 (hidden_inner 128→192)
+
+- charliepai2i24h2-frieren/swiglu-full-mlpratio2
+- **Hypothesis:** If param-matched SwiGLU (hidden_inner=128) wins massively vs GELU, does unconstrained capacity (hidden_inner=192, +50% FFN params per block) win further? Is the win from gating, or gating + capacity?
+- **Artifacts:** `models/model-swiglu-full-mlpratio2-20260516-042703/metrics.{jsonl,yaml}`
+
+| Metric | Baseline (PR #3608, 128) | This run (192) | Δ |
+|--------|--------------------------|----------------|---|
+| val_avg/mae_surf_p | 78.407 | **75.578** | **−3.61%** |
+| test_avg/mae_surf_p | 68.375 | **66.740** | **−2.39%** |
+| val single_in_dist | 94.301 | 86.290 | **−8.50%** |
+| val geom_rc | 89.780 | 89.762 | −0.02% |
+| val geom_cruise | 56.169 | 55.041 | −2.01% |
+| val re_rand | 73.379 | 71.218 | −2.95% |
+| test single_in_dist | 83.095 | 77.887 | **−6.27%** |
+| test geom_rc | 79.596 | 77.254 | −2.94% |
+| test geom_cruise | 45.973 | 47.216 | +2.70% |
+| test re_rand | 64.837 | 64.602 | −0.36% |
+| n_params | 379,799 | 471,959 | +24% |
+| Wall-clock | 30.4 min (13 ep) | 32.2 min (13 ep, cutoff) | ~+6% |
+
+- **MERGED** — New baseline: val 75.578, test 66.740.
+- **Analysis:** Gating does most of the work (−18.2% from PR #3608), with additional capacity adding a further −3.6%. The key insight: GELU+mlp_ratio=4 (#3503) failed because extra params with single-path expansion just memorize; SwiGLU's gate selectively uses the extra hidden units, so overfitting scales sub-linearly. single_in_dist benefits most (−8.5% val) — larger FFN extracts finer in-distribution detail. geom_camber_cruise test regressed slightly (+2.7%) — the only yellow flag. The run hit the 30-min cap at E13 (curve still descending); E14 would likely have given ~1-2 more points.
+- **Next:** GEGLU at hidden_inner=192 (gate-vs-SiLU ablation). hidden_inner=256 is in the queue but wall-clock budget limits comparability.
