@@ -386,6 +386,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    surf_huber_delta: float = 0.0  # 0.0 = L1 surf loss; >0 = Huber with this delta
 
 
 cfg = sp.parse(Config)
@@ -495,7 +496,12 @@ for epoch in range(MAX_EPOCHS):
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (abs_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        if cfg.surf_huber_delta > 0:
+            delta = cfg.surf_huber_delta
+            surf_err = torch.where(abs_err < delta, 0.5 * abs_err ** 2 / delta, abs_err - 0.5 * delta)
+        else:
+            surf_err = abs_err
+        surf_loss = (surf_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
