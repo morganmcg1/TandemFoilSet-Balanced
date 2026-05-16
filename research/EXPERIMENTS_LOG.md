@@ -1,5 +1,77 @@
 # SENPAI Research Results — charlie-pai2i-24h-r2
 
+## 2026-05-16 03:30 — PR #3608: SwiGLU FFN (param-matched GELU replacement) [MERGED — MASSIVE WIN]
+- Branch: `charliepai2i24h2-frieren/swiglu-ffn`
+- Student: charliepai2i24h2-frieren
+- Hypothesis: Replace GELU FFN with SwiGLU gating `W2(SiLU(W1(x)) ⊙ V(x))` with param-matched hidden_inner=128. Predicted 0.5-2% val improvement.
+
+### Results table
+
+| Metric | SwiGLU | Baseline 95.808 | Δ |
+|--------|--------|-----------------|---|
+| `val_avg/mae_surf_p` | **78.407** | 95.808 | **−18.2%** (MASSIVE WIN) |
+| `test_avg/mae_surf_p` | **68.375** | 85.578 | **−20.1%** |
+| val single_in_dist | 94.301 | 110.886 | −15.0% |
+| val geom_camber_rc | 89.780 | 105.776 | −15.1% |
+| val geom_camber_cruise | 56.169 | 76.060 | **−26.2%** |
+| val re_rand | 73.379 | 90.510 | −18.9% |
+| test single_in_dist | 83.095 | 97.804 | −15.0% |
+| test geom_camber_rc | 79.596 | 94.519 | −15.8% |
+| test geom_camber_cruise | 45.973 | 64.863 | **−29.1%** |
+| test re_rand | 64.837 | 85.126 | **−23.8%** |
+| n_params | 379,799 | ~381k | param-matched |
+| Wall-clock | 30.4 min | 32 min | −5% |
+| Peak VRAM | 42.95 GB | 40.96 GB | +2% |
+| Best epoch | 13 / 14 | 14 / 14 | — |
+
+### Analysis
+- Prediction dramatically underestimated. 0.5-2% predicted; **18.2% actual**. The multiplicative gating in SwiGLU provides expressive power that GELU's single-path FFN genuinely couldn't express on this dataset.
+- ALL 4 splits improved substantially — not a single-split fluke. The gated mechanism helps both in-distribution (single_in_dist) and out-of-distribution geometry splits.
+- **Biggest gains on geometry-shift splits**: geom_cruise −26.2% val / −29.1% test, re_rand −23.8% test. Multiplicative gating gives better adaptive feature selection for local mesh geometry.
+- **GELU FFN was the bottleneck** — not the schedule, not the regularization, not the capacity. Explains why all prior capacity/regularization experiments made marginal gains: the FFN parameterization itself was holding back the model.
+- Retrospective insight: the mlp_ratio=4 failure (#3503, +5.0%) was NOT about capacity — it was about the *parameterization*. SwiGLU effectively re-introduces 1.5× FFN expansion at matched params, and it wins massively. The prior test failed because single-path expansion with GELU hits diminishing returns; gating does not.
+- Train losses also lower at every epoch — genuine fit improvement, not regularization artifact.
+- Artifacts: `models/model-swiglu-ffn-20260516-022733/metrics.{jsonl,yaml}`
+
+### Decision
+- **MERGED** — new baseline is SwiGLU. All in-flight PRs notified to rebase onto new advisor branch.
+- **New baseline: val_avg/mae_surf_p = 78.407, test = 68.375**
+- Natural follow-ups: (a) full mlp_ratio=2 SwiGLU (hidden_inner=192, +24% params), (b) SwiGLU + dropout/drop-path compound, (c) GEGLU as head-to-head gate comparison.
+
+---
+
+## 2026-05-16 03:25 — PR #3607: FFN dropout p=0.1 [SENT BACK — SwiGLU REBASE + p=0.05]
+- Branch: `charliepai2i24h2-thorfinn/dropout-ffn-p01`
+- Student: charliepai2i24h2-thorfinn
+- Hypothesis: dropout=0.1 on FFN hidden activation should regularize productively (orthogonal to WD).
+
+### Results table
+
+| Metric | dropout=0.1 | Baseline 95.808 | Δ |
+|--------|------------|-----------------|---|
+| `val_avg/mae_surf_p` | **96.412** | 95.808 | +0.63% |
+| `test_avg/mae_surf_p` | 85.118 | 85.578 | **−0.54%** |
+| val single_in_dist | 118.247 | 110.886 | +6.6% (WORSE) |
+| val geom_camber_rc | 104.503 | 105.776 | −1.2% |
+| val geom_camber_cruise | 72.518 | 76.060 | **−4.7%** |
+| val re_rand | 90.381 | 90.510 | −0.1% |
+| test single_in_dist | 101.800 | 97.804 | +4.1% (WORSE) |
+| test geom_camber_rc | 94.074 | 94.519 | −0.5% |
+| test geom_camber_cruise | 60.797 | 64.863 | **−6.3%** |
+| test re_rand | 83.800 | 85.126 | −1.6% |
+| Epochs | 13 / 14 | 14 / 14 | budget-bound |
+
+### Analysis
+- Budget-bound failure: 30-min cap cut at E13, model still descending steeply (E12→E13: −6 pts). Extrapolated E14 ~91-93 would have beaten baseline — but cannot count extrapolation.
+- Wrong-split pattern: single_in_dist regressed +6.6% (WORST regression) while geom_cruise improved −4.7%. Same OOD/in-dist asymmetry as wd=5e-4 (fern #3569). Stochastic deactivation hurts memorization just like L2.
+- However the test-side geom_cruise win (−6.3%) is genuine and interesting.
+- SwiGLU merge while this was in-flight: needs rebase anyway.
+
+### Decision
+- **SENT BACK** for rebase onto SwiGLU baseline + dropout=0.05 retest. The dropout-inside-SwiGLU implementation targets the gated activation before W2.
+
+---
+
 ## 2026-05-16 02:30 — PR #3535: n_head=8 on new baseline [CLOSED — CATASTROPHIC NEGATIVE]
 - Branch: `charliepai2i24h2-askeladd/n-head-8`
 - Student: charliepai2i24h2-askeladd
