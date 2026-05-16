@@ -2,10 +2,45 @@
 
 ## Current Best
 
-**PR #3651 — H38: Weight decay reduction (wd=5e-5) at lr=1e-3 + clip=1.0 (frieren)**
-Merged 2026-05-16. 13 epochs completed (30-min timeout cap; best epoch = final epoch).
+**PR #3629 — H37b: n_head=2 + lr=1e-3 + clip=1.0 stacking test (tanjiro)**
+Merged 2026-05-16. 16 epochs completed (30-min timeout cap; best epoch = 15, LR≈0 by epoch 16).
 
 Primary metric: `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across 4 val splits). Lower is better.
+
+| Metric | Value | Source |
+|--------|-------|--------|
+| val_avg/mae_surf_p | **66.1060** | PR #3629 |
+| val_single_in_dist/mae_surf_p | 74.3956 | PR #3629 |
+| val_geom_camber_rc/mae_surf_p | 78.9959 | PR #3629 |
+| val_geom_camber_cruise/mae_surf_p | 46.4384 | PR #3629 |
+| val_re_rand/mae_surf_p | 64.5940 | PR #3629 |
+| test_avg/mae_surf_p | NaN (⚠ scoring bug) | PR #3629 |
+| test_avg/mae_surf_p (3-split, excl. cruise) | **64.4522** | PR #3629 |
+| test_single_in_dist/mae_surf_p | 63.9533 | PR #3629 |
+| test_geom_camber_rc/mae_surf_p | 73.0967 | PR #3629 |
+| test_re_rand/mae_surf_p | 56.3067 | PR #3629 |
+
+**Configuration:** FiLM cond_dim=11 + Huber δ_vel=0.5/δ_p=0.25 (merged defaults) + CosineAnnealingLR T_max=15 + clip_grad_norm=1.0 + lr=1e-3 + **n_head=2** (head_dim=64) + wd=1e-4 (default — predates H38 finding).
+
+**Context:** Stacks n_head=2 (from H37 isolated test on H20: 72.89) on top of lr=1e-3+clip=1.0 (H32: 69.44) baseline. Predicted ~66.83 by additive decomposition; actual **66.11** — slightly super-additive. n_params 891,469 (+56K vs baseline); peak memory 39.6 GB (vs 44.6 GB). The n_head=8→4→2 trend (head_dim 16→32→64) is monotone improving — invites a single-head (n_head=1, head_dim=128) limit test. **Did NOT use wd=5e-5** — orthogonal H38 finding stacks ON TOP.
+
+**⚠ data/scoring.py NaN bug:** `test_geom_camber_cruise` sample 20 has non-finite GT. File is read-only.
+
+**Artifacts:** `models/model-h37b-nhead2-lr1e3-clip1-20260516-062645/`
+
+**Reproduce:**
+```bash
+cd target/ && python train.py --epochs 50 \
+  --experiment_name h37b-nhead2-lr1e3-clip1 --agent <student> \
+  --n_head 2 --lr 1e-3 --clip_grad_norm 1.0
+# FiLM cond_dim=11, Huber δ_vel=0.5/δ_p=0.25, T_max=15 are merged defaults
+# Note: stacking with wd=5e-5 (H38) has not yet been tested — predicted further gain
+```
+
+## Previous Best (overridden by #3629)
+
+**PR #3651 — H38: Weight decay reduction (wd=5e-5) at lr=1e-3 + clip=1.0 (frieren)**
+Merged 2026-05-16. 13 epochs completed (30-min timeout cap; best epoch = final epoch).
 
 | Metric | Value | Source |
 |--------|-------|--------|
@@ -14,27 +49,11 @@ Primary metric: `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE acr
 | val_geom_camber_rc/mae_surf_p | 84.3542 | PR #3651 Arm B |
 | val_geom_camber_cruise/mae_surf_p | 44.4649 | PR #3651 Arm B |
 | val_re_rand/mae_surf_p | 67.1084 | PR #3651 Arm B |
-| test_avg/mae_surf_p | NaN (⚠ scoring bug) | PR #3651 |
 | test_avg/mae_surf_p (3-split, excl. cruise) | **65.4393** | PR #3651 Arm B |
-| test_single_in_dist/mae_surf_p | 66.5542 | PR #3651 Arm B |
-| test_geom_camber_rc/mae_surf_p | 72.9271 | PR #3651 Arm B |
-| test_re_rand/mae_surf_p | 56.8366 | PR #3651 Arm B |
 
-**Configuration:** FiLM cond_dim=11 + Huber δ_vel=0.5/δ_p=0.25 (merged defaults) + CosineAnnealingLR T_max=15 + clip_grad_norm=1.0 + lr=1e-3 + **wd=5e-5**.
-
-**Context:** AdamW applies `lr × wd × param` per step, so raising lr from 5e-4 → 1e-3 effectively doubled the per-step L2 penalty (wd=1e-4 was tuned at 5e-4). wd=5e-5 restores the original effective regularization strength per step. Arm A (wd=0) also beat baseline by -1.16 but less convincingly. Arm B improved **all 4 val splits** vs H32 (single_in_dist -2.83, cruise -2.80, re_rand -0.74, rc -0.11). Orthogonal to clip — weight decay (parameter-norm penalty) is a different mechanism from gradient clipping (gradient-norm bound).
-
-**⚠ data/scoring.py NaN bug:** `test_geom_camber_cruise` sample 20 has non-finite GT. File is read-only.
+**Configuration:** FiLM cond_dim=11 + Huber δ_vel=0.5/δ_p=0.25 + T_max=15 + clip_grad_norm=1.0 + lr=1e-3 + **wd=5e-5**.
 
 **Artifacts:** `models/model-h38-wd5e5-lr1e3-clip1-20260516-052550/`
-
-**Reproduce:**
-```bash
-cd target/ && python train.py --epochs 50 \
-  --experiment_name h38-wd5e5-lr1e3-clip1 --agent <student> \
-  --weight_decay 5e-5 --lr 1e-3 --clip_grad_norm 1.0
-# FiLM cond_dim=11, Huber δ_vel=0.5/δ_p=0.25, T_max=15 are merged defaults
-```
 
 ## Previous Best (overridden by #3651)
 
