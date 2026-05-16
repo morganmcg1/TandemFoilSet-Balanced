@@ -1,5 +1,56 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-16 20:10 — PR #4036 closed + #4129 assigned — Round-8 askeladd swap
+
+### #4036 askeladd camber flip — **CLOSED** (clear regress)
+
+- **Student:** willowpai2i48h4-askeladd (branch: `willowpai2i48h4-askeladd/askeladd-camber-flip-aug`)
+- **Hypothesis:** z-flip + AoA negation as physical symmetry augmentation should improve OOD camber splits (test_geom_camber_rc=61.16, test_geom_camber_cruise=32.02 vs prior baseline).
+- **Results vs prior baseline #3969 (val=56.44 / test=48.89):**
+
+| Arm | Aug | Gap-flip fix | Epochs | val | Δ val | test | Δ test | W&B |
+|---|---|---|---:|---:|---:|---:|---:|---|
+| Arm A v1 | yes | no | 14 | **67.7624** | **+20.1%** | **58.4707** | **+19.6%** | `gsu0tqkr` |
+| Arm A v2 | yes | yes | 11 (cut) | 78.20 | n/c | 68.50 | n/c | `fup3alpd` |
+| Arm B v2 (control) | no | — | 14 | 56.1254 | −0.6% | 48.3561 | −1.1% | `r0icy2ls` |
+| Arm B v1 (control, cut) | no | — | 11 (cut) | 72.34 | n/c | 62.23 | n/c | `je1bnybj` |
+
+**Per-split test (Arm A v1 14-epoch vs prior baseline):** single_in_dist +19.5%, geom_camber_rc +16.5%, geom_camber_cruise +22.5%, re_rand +21.8%. **Every** split regressed, including the targeted camber OOD splits.
+
+- **Analysis (student's own work, well-reasoned):**
+  - Control reproduces baseline cleanly (-0.6% seed variance), confirming harness is sound.
+  - Single-foil split (where gap=0, so the gap-flip bug doesn't apply) regressed +19.5% — rules out the gap-signedness bug as root cause.
+  - **Root cause: NACA-M camber parameter cannot be flipped** — for cambered foils, the z-flipped sample has a *physically wrong* camber direction relative to the flipped flow. This produces systematic label noise on all training samples involving cambered foils. The architecture has no z-flip equivariance to amortize the bias.
+- **Bonus findings:**
+  - Student discovered a normalization-offset bug in the literal recipe: dim 18 (AoA foil2) has 0.886-std offset, so bare `x * -1` flips about `raw=mean`, not `raw=0`. Corrected to `norm' = -norm - 2·mean/std`. Recorded for future flip-augmentation experiments.
+  - Student documented `gap` (dim 22) is signed (range [-0.8, 1.6]), not unsigned as the assignment said. Recorded for future augmentation specs.
+- **Why closed (not sent back):** Conclusion is sound at multiple epochs and on the single-foil split where the bug is irrelevant. Hard augmentation can't work on this architecture without NACA-M flipping support.
+- **Follow-up suggestion (recorded for round-9 backlog):** Soft equivariance loss `‖f(x) - flip(f(flip(x)))‖` operates on predictions, sidesteps NACA-M asymmetry. Worth trying on next iteration.
+- **Reassigned askeladd to AdamW beta2 sweep (#4129)** on new baseline stack — clean, isolated, optimizer-axis test.
+
+### #4043 nezuko WD sweep — **REDIRECTED** to new baseline
+
+- Student was idle for hours due to `gh API rate limit exceeded` blocking her assignment-poll. Just picked up the assignment at 20:22 UTC.
+- Original assignment targeted #3969 baseline (val=56.44). Posted updated instructions to redirect to **n_hidden=176 + bf16 + epochs=18** stack so result is directly comparable to current best (#4082, val=50.90).
+- Three arms unchanged in structure: wd=1e-3, wd=1e-3 + eta_min=1e-5, wd=3e-4.
+
+### #4129 askeladd AdamW beta2 sweep — **ASSIGNED**
+
+- **Hypothesis:** AdamW's default `beta2=0.999` is calibrated for large-batch dense-gradient regimes. Our small-data (1499 train), small-batch, ~27k-step setup with sparse slice-token attention may benefit from lower beta2 (literature: Liu et al. 2024, Wortsman et al. 2023, ConvNeXt-Femto). Predicts 1-3% val gain primarily from OOD splits.
+- **Arms:**
+  - Arm A: `--adam_beta2 0.95 --n_hidden 176 --use_bf16 --epochs 18` (main test)
+  - Arm B: `--adam_beta2 0.98 --n_hidden 176 --use_bf16 --epochs 18` (conservative midpoint)
+- **Budget:** ~78 min total wall, 45 min per-run cap. Orthogonal to in-flight WD (#4043), width (#4106), depth (#4108), curvature (#4110), epochs (#4111), DSDF-feat (#4112).
+- **Decision criteria:** Merge if any arm beats val=50.90 AND test=43.90. Close if both arms regress >2%.
+
+---
+
+## 2026-05-16 19:30–19:45 — Round-7 Review Wave + Round-8 Launch
+
+(Earlier entries continue below.)
+
+---
+
 ## 2026-05-16 14:25 — PR #3908: SwiGLU mlp_ratio=3 (alphonse) — **MERGED** → new baseline
 
 - **Student:** willowpai2i48h4-alphonse (branch: `willowpai2i48h4-alphonse/swiglu-mlp-ratio-3`)

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 ~19:45 UTC
+- **Last updated:** 2026-05-16 ~20:10 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -79,7 +79,7 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 
 ## Active in-flight PRs (status as of ~19:45 UTC)
 
-### Round-8 active (assigned 19:35–19:45 UTC, all on bf16 stack)
+### Round-8 active (assigned 19:35–20:10 UTC, all on bf16 stack)
 | # | Student | Hypothesis | State |
 |---|---|---|---|
 | **#4106** | fern | Push wider: n_hidden=192 + bf16 + ep18 | WIP |
@@ -87,15 +87,15 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 | **#4110** | frieren | Curvature loss retest with sharpened proxy on new baseline | WIP |
 | **#4111** | tanjiro | Push to epochs=22 on n_hidden=176+bf16 (curve still descending at ep18) | WIP |
 | **#4112** | thorfinn | DSDF-norm as input feature (orthogonal to loss-weighting) | WIP |
+| **#4129** | askeladd | AdamW beta2 sweep (0.95, 0.98) on n_hidden=176+bf16+ep18 | WIP (assigned 20:10) |
 
 ### Round-7 still in-flight (assigned earlier, results pending)
 | # | Student | Hypothesis | State |
 |---|---|---|---|
-| **#4036** | askeladd | Camber flip augmentation | WIP (long-running, GPU stuck at 95961 MiB) |
 | **#4039** | edward | Multi-scale Fourier PE num_freq=8 | WIP |
-| **#4043** | nezuko | AdamW weight_decay sweep + eta_min | WIP (resumed activity 19:30) |
+| **#4043** | nezuko | AdamW weight_decay sweep + eta_min | WIP (redirected 20:08 to new baseline stack) |
 
-### Round-7 results (resolved 19:30 UTC)
+### Round-7 results (resolved 19:30–20:10 UTC)
 | # | Student | Hypothesis | Outcome |
 |---|---|---|---|
 | **#4082** | fern | n_hidden=176 + bf16 + ep18 | **MERGED ~19:32** → new baseline val=50.90 / test=43.90 |
@@ -104,6 +104,7 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 | **#4042** | frieren | Curvature-weighted surface loss | CLOSED — real within-arm signal but absolute regress; retest assigned (#4110) |
 | **#4034** | alphonse | n_layers=6 (fp32, ep14) | CLOSED — under-trained (both arms cut at ep9); retest with bf16 assigned (#4108) |
 | **#4040** | fern | DropPath stochastic depth | CLOSED ~18:35 (val regress +5.1%/+8.8%) |
+| **#4036** | askeladd | Camber flip augmentation | CLOSED ~20:05 (val +20.1% / test +19.6% regress; root cause: NACA-M asymmetry can't be flipped; retest assigned as beta2 sweep #4129) |
 
 ### Prior baseline progression
 | # | Student | Hypothesis | Outcome |
@@ -129,7 +130,7 @@ Normalized DSDF (dims 4-11) across 100 train files / 108M values:
 
 **Why:** raw DSDF is hardcoded to [0.0, 5.0] in dataset preprocessing. Clip=3σ is a no-op. Tighter clip values (2.5, 2.0) would touch the surface-side tail near sharp leading/trailing edges.
 
-## Round-8 assignments (assigned 19:35–19:45 UTC, all build on the new n_hidden=176 + bf16 + ep18 baseline)
+## Round-8 assignments (assigned 19:35–20:10 UTC, all build on the new n_hidden=176 + bf16 + ep18 baseline)
 
 | PR | Student | Hypothesis | Key CLI / change |
 |---|---|---|---|
@@ -138,14 +139,16 @@ Normalized DSDF (dims 4-11) across 100 train files / 108M values:
 | #4110 | frieren | Curvature loss retest with sharpened proxy (squared DSDF-norm) on new baseline | `--n_hidden 176 --use_bf16 --use_curvature_weight --epochs 18`, T=45 (2 arms) |
 | #4111 | tanjiro | Push to epochs=22 on n_hidden=176+bf16 (curve still descending) | `--n_hidden 176 --use_bf16 --epochs 22`, T=55 |
 | #4112 | thorfinn | DSDF-norm as input feature (orthogonal to frieren's loss-weighting) | `--n_hidden 176 --use_bf16 --use_dsdf_norm_feature --epochs 18`, T=45 |
+| #4129 | askeladd | AdamW beta2 sweep (0.95, 0.98) on n_hidden=176+bf16+ep18 | `--adam_beta2 0.95 / 0.98 --n_hidden 176 --use_bf16 --epochs 18`, T=45 (2 arms) |
 
 Deferred to round-9 (backlog):
 - SAM optimizer (rho=0.05) — costly; screen at epochs=10 first
 - Per-block / per-head learning rate ratios for SwiGLU FFN
-- AdamW betas tuning (beta2=0.95 vs default 0.999)
+- Soft equivariance loss `‖f(x) - flip(f(flip(x)))‖` (askeladd's #4036 follow-up — sidesteps NACA-M asymmetry by operating on predictions)
 - Stacking interactions: depth + width, curvature loss + DSDF feature, etc.
 - Mixup-style geometry blending across samples
 - Stronger curvature proxy variants (gradient of DSDF, learned curvature head)
+- EMA of weights, slice_num=96/128 (architecture)
 
 ## Potential next research directions (post-round-8)
 
