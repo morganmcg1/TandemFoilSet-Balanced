@@ -1,6 +1,43 @@
 # Baseline — icml-appendix-willow-pai2i-48h-r3
 
-## Current best (as of 2026-05-16 05:05) — PR #3495: SOAP precond_freq=5
+## Current best (as of 2026-05-16 05:57) — PR #3591: EMA decay=0.99
+
+Six winners merged: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + SOAP optimizer (PR #3283, −31.7%) + SOAP precond_freq=5 (PR #3495, −1.78%) + EMA model weights decay=0.999 (PR #3430, −18.8%) + **EMA decay=0.99** (PR #3591, nezuko, **−3.85% vs previous canonical**).
+
+**Primary ranking metric:**
+- `val_avg/mae_surf_p` = **58.005** (run `1xy36vpn`, nezuko variant-decay0.99, best epoch 14)
+
+**Test (paper-facing):**
+- `test_avg/mae_surf_p_excl_cruise` (3-split mean) = **56.713** (−4.32% vs previous 59.27)
+  - `test_single_in_dist/mae_surf_p` = 65.929
+  - `test_geom_camber_rc/mae_surf_p` = 58.354
+  - `test_re_rand/mae_surf_p` = 45.857
+  - `test_geom_camber_cruise/mae_surf_p` = NaN (pre-existing bug)
+
+**Note on runs:** All 3 sweep arms ran with `precondition_frequency=10` (pre-PR-#3495). Post-merge canonical uses `precondition_frequency=5` (default after PR #3495). Expected compound val with freq=5 + decay=0.99 is approximately 56-57.
+
+**Config (post-merge):**
+- Transolver: n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, dropout=0
+- **SOAP optimizer** (precondition_frequency=5) lr=1e-3, warmup_epochs=3 (LinearLR) → CosineAnnealingLR, weight_decay=1e-4, batch_size=4, surf_weight=10.0
+- 50 epochs, Huber loss (SmoothL1 beta=1.0) `vol_loss + 10*surf_loss`
+- **EMA of model weights** (**ema_decay=0.99**, updated each training step, used for all validation/test evaluation)
+- Wall-clock: ~136 s/epoch
+- `param count = 0.66M`
+
+**Reproduce:**
+```bash
+cd target/ && python train.py \
+  --optimizer soap \
+  --lr 1e-3 --warmup_epochs 3 \
+  --surf_weight 10.0 --seed 42 \
+  --ema_decay 0.99 \
+  --wandb_group ema-decay-sweep \
+  --wandb_run_name variant-decay0.99
+```
+
+---
+
+## Previous best (as of 2026-05-16 05:05) — PR #3495: SOAP precond_freq=5
 
 Five winners merged: **Huber loss** (PR #3155, −18.1%) + **LR warmup 1e-3** (PR #3147, −8.9%) + **SOAP optimizer** (PR #3283, −31.7%) + **EMA of model weights decay=0.999** (PR #3430, −18.8%) + **SOAP precondition_frequency=5** (PR #3495, askeladd, **−1.78% vs previous canonical**).
 
