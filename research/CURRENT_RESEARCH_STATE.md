@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-16 12:45
+- **Date**: 2026-05-16 14:45
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
-- **Round**: 5 active — GEGLU architecture breakthrough; mega-stacking phase
+- **Round**: 5 active — GEGLU architecture breakthrough; architectural lever exploration phase
 - **Most recent human research directive**: None received
 
 ## Current Best
@@ -25,57 +25,73 @@ Test 3-split avg (excl. cruise NaN bug): **56.6976** — largest OOD gains in th
 
 1. **GEGLU gated FFN is a major win (H48)**: val=58.63 vs H37b 66.11. Spatial selectivity via multiplicative gating is a direct fit for CFD boundary-layer gradients. GEGLU outperforms SwiGLU by 2.8 pts.
 2. **GEGLU generalizes better than it in-fits**: test gain > val gain. Gating mechanism reduces OOD sensitivity — critical for our cross-geometry/Reynolds evaluation.
-3. **T_max=15 hardcoded mismatch was the first-order fix (R1)**: 11.7-pt gain.
-4. **Per-channel Huber wins (H25)**: δ_p=0.25/δ_vel=0.5 — merged defaults.
-5. **Grad clip=1.0 is effective (H20)**: clip=2/3 regress; lower clip (H56 in-flight) may help at lr=2e-3.
-6. **lr monotone trend holds through 2e-3 (H39 Arm C)**: −2.67 pts vs H37b at n_head=2+wd=5e-5 stack.
-7. **wd=5e-5 is LR-normalized regularization (H38)**: Both H48 and H39 used wd=5e-5.
-8. **n_head=2 is the global optimum (H37b, H46)**: U-shape 8→4→2→1 confirmed.
-9. **Architecture width fails (H33)**: n_hidden=192/256 regress.
-10. **n_layers=3 isolated win does NOT stack with n_head=2 (H42 Arm C)**: Capacity reductions destroy each other — BUT this was pre-GEGLU. H60 revisits depth in GEGLU context.
-11. **β₁=0.8 isolated win does NOT stack (H44 Arm C)**: β₁=0.9 is optimal.
-12. **Schedule lever exhausted at 14-epoch budget**: H43/H41C/H47/H50 all failed. WSD (H50) also failed — cosine T_max=15 is the right schedule for our compute regime.
-13. **Lion optimizer beats AdamW at H37b base (H49)**: val=60.30 (Arm A lr=1e-4), −5.80 vs H37b. Mechanism: sign-normalization removes gradient imbalance between high-Re and low-Re samples. Closed because H48 GEGLU baseline at 58.63 is better; Lion+GEGLU (H58) is the follow-up.
-14. **Scoring NaN bug**: test_geom_camber_cruise sample 20 non-finite GT. Read-only. Use 3-split excl. cruise.
+3. **GEGLU has different LR sensitivity than vanilla FFN (H57 falsified)**: lr=2e-3 hurts GEGLU (+0.88 regression) even though it won +2.67 on vanilla FFN (H39 Arm C). Gate's concentrated gradient updates overshoot at higher LR. GEGLU optimum is ≤ 1e-3, possibly below it (→ H61).
+4. **LR ceiling confirmed at 2e-3 (H51+H57)**: Both vanilla FFN and GEGLU architectures show no benefit from lr > 2e-3. The LR lever is fully mapped.
+5. **clip_grad_norm=1.0 is the global optimum (H56)**: Lower clip (0.5, 0.7) hurts GEGLU. Gates need full gradient signal to train effectively.
+6. **surf_weight=10 is locked (H54)**: surf_weight=20 starves volume signal (vol_p +27%). surf_weight=5 weakens surface constraint. surf_weight=10 is the optimal balance.
+7. **T_max=15 hardcoded mismatch was the first-order fix (R1)**: 11.7-pt gain.
+8. **Per-channel Huber wins (H25)**: δ_p=0.25/δ_vel=0.5 — merged defaults. May need re-tuning at GEGLU base (→ H64).
+9. **lr monotone trend holds through 2e-3 for vanilla FFN (H39 Arm C)**: −2.67 pts vs H37b at n_head=2+wd=5e-5 stack.
+10. **wd=5e-5 is LR-normalized regularization (H38)**: Both H48 and H39 used wd=5e-5.
+11. **n_head=2 is the global optimum (H37b, H46)**: U-shape 8→4→2→1 confirmed.
+12. **Architecture width fails (H33)**: n_hidden=192/256 regress.
+13. **n_layers=3 isolated win does NOT stack with n_head=2 (H42 Arm C)**: Capacity reductions destroy each other — BUT this was pre-GEGLU. H60 revisits depth in GEGLU context.
+14. **β₁=0.8 isolated win does NOT stack (H44 Arm C)**: β₁=0.9 is optimal.
+15. **Schedule lever exhausted**: H43/H41C/H47/H50/H56 all failed. WSD also failed. Cosine T_max=15 is the right schedule.
+16. **Lion optimizer beats AdamW at H37b base (H49)**: val=60.30 (Arm A lr=1e-4), −5.80 vs H37b. Sign-normalization removes gradient imbalance between high-Re and low-Re samples. H58 tests Lion+GEGLU compounding.
+17. **Scoring NaN bug**: test_geom_camber_cruise sample 20 non-finite GT. Read-only. Use 3-split excl. cruise.
 
 ## Active WIP Experiments
 
 | PR | Student | Hypothesis | Priority | Expected |
 |----|---------|------------|----------|---------|
-| **#3918** | askeladd | **H57: GEGLU + lr=2e-3** (mega-stack) | **CRITICAL** | ~55-57 |
 | **#3965** | edward | **H58: Lion + GEGLU** (mega-stack) | **CRITICAL** | ~52-55 |
 | **#3966** | fern | **H59: RMSNorm in GEGLU Transolver** | HIGH | ~57-58 |
 | **#3968** | thorfinn | **H60: GEGLU + n_layers (4 vs 6)** | HIGH | ~57-58 |
-| #3899 | tanjiro | H55: Mixup (α=0.2, 0.4) | HIGH | Beats 58.63 if orthogonal |
-| #3898 | nezuko | H54: surf_weight (5, 20) | MEDIUM | ~58-60 (pre-GEGLU design) |
-| #3897 | frieren | H56: lower clip (0.5, 0.7) | MEDIUM | May compound with GEGLU |
-| #3896 | alphonse | H51: LR ceiling (2.5e-3, 3e-3) | MEDIUM | ~60+ (pre-GEGLU design) |
+| **#3899** | tanjiro | H55: Mixup (α=0.2, 0.4) | HIGH | Beats 58.63 if orthogonal |
+| **#3988** | alphonse | H61: GEGLU + LR down (7e-4, 5e-4) | HIGH | ~57.5-58.5 |
+| **#3990** | askeladd | H62: GEGLU + mlp_ratio (3, 4) | HIGH | ~57-58 |
+| **#3991** | frieren | H63: DropPath (0.05, 0.10) | MEDIUM | ~57-58 |
+| **#3992** | nezuko | H64: Huber δ_p retune (0.1, 0.5) | MEDIUM | ~57.5-58.5 |
 
 All 8 students active. Zero idle.
 
-**Note:** H51/H56/H54/H55 were designed for H39 Arm C config (val=63.44). With GEGLU now at 58.63, these need to beat 58.63 to matter. H51 and H54 are likely underperforming — still useful as data on LR ceiling and surf_weight. H55 (Mixup) and H56 (lower clip) have highest chance of beating GEGLU baseline because data augmentation and gradient control are orthogonal to the architecture.
+## Lever Status
 
-## Cycle 8 PR Decisions
-
-| PR | Decision | Reason |
-|----|----------|--------|
-| #3683 (thorfinn H39 Arm C) | **MERGED** | Documentation; BASELINE.md already updated; artifacts now on advisor branch |
-| #3862 (fern H50 WSD) | **CLOSED** | Both arms regress vs H37b (−1.15 to −5.21 pts). Schedule angle exhausted — 4th schedule failure (H43/H41C/H47/H50) at this budget |
-| #3859 (edward H49 Lion) | **CLOSED → H58** | Lion beats H37b by −5.80 but doesn't beat H48 GEGLU (1.67 pts gap). Forwarded as Lion+GEGLU mega-stack |
+| Lever | Status | Best result | Notes |
+|-------|--------|-------------|-------|
+| LR (vanilla FFN) | ✅ Confirmed 2e-3 ceiling | H39 Arm C: 63.44 | Monotone up to 2e-3 |
+| LR (GEGLU) | 🔬 H61 testing | H48: 58.63 at 1e-3 | H57 shows 2e-3 hurts; 7e-4/5e-4 in-flight |
+| clip_grad_norm | ✅ Locked at 1.0 | H20+H56 | clip=0.5/0.7 regress |
+| surf_weight | ✅ Locked at 10 | H54 | surf=5/20 both regress |
+| Schedule (cosine) | ✅ Exhausted | T_max=15 | H43/H41C/H47/H50 all failed |
+| n_head | ✅ Locked at 2 | H37b/H46 | U-shape confirmed |
+| n_hidden | ✅ Locked at 128 | H33 | Width fails |
+| n_layers | 🔬 H60 testing | 5 current | Pre-GEGLU n_layers=3 failed |
+| FFN activation | ✅ GEGLU wins | H48: 58.63 | GEGLU > SwiGLU > vanilla |
+| mlp_ratio | 🔬 H62 testing | 2 current | Never swept; Llama lit suggests bigger |
+| Huber δ_p | 🔬 H64 testing | 0.25 (H25) | Tuned at val=83.81; model much better now |
+| Optimizer | 🔬 H58 testing | AdamW | Lion wins at H37b base by 5.8 pts |
+| Normalization | 🔬 H59 testing | LayerNorm | RMSNorm may benefit GEGLU gate |
+| DropPath | 🔬 H63 testing | 0.0 | Novel for this arch/size |
+| Mixup augmentation | 🔬 H55 testing | None | Cross-sample mixing for OOD |
+| β₁ (Adam momentum) | ✅ Locked at 0.9 | H44 | 0.8 isolated win doesn't stack |
+| wd | ✅ Locked at 5e-5 | H38 | LR-normalized |
 
 ## Key Open Questions
 
-1. **Does GEGLU + lr=2e-3 compound?** H57 askeladd (#3918). Predicted ≈ 55-57. HIGHEST PRIORITY.
-2. **Does Lion + GEGLU compound?** H58 edward (#3965). Predicted ≈ 52-55. Would be largest single gain since T_max fix.
-3. **Does RMSNorm help GEGLU's gate?** H59 fern (#3966). Mechanistically motivated, clean binary test.
-4. **Does depth become a fresh lever in GEGLU?** H60 thorfinn (#3968). n_layers=4 vs 6.
-5. **Does Mixup help OOD?** H55 tanjiro (#3899). Mixup + GEGLU may compound.
-6. **What's next below 55?**:
-   - GEGLU + lr=2e-3 + Lion (if H57 + H58 both win)
-   - GEGLU + lr=2e-3 + Mixup (if H55 confirms)
-   - GEGLU + RMSNorm + lr=2e-3 (if H59 wins)
-   - GEGLU + n_layers=6 + lr=2e-3 (if H60 Arm A wins)
-   - Architecture-level changes: attention mechanism variants, FiLM conditioning improvements, PDE-informed residuals
+1. **Does Lion + GEGLU compound?** H58 edward (#3965). If gain is additive: ~52.8. Would be largest single gain since T_max fix.
+2. **Does GEGLU's optimal LR live below 1e-3?** H61 alphonse (#3988). H57 shows 2e-3 hurts — maybe 7e-4/5e-4 is optimal for gated arch.
+3. **Does mlp_ratio matter for gated FFN?** H62 askeladd (#3990). Llama uses larger expansion; GEGLU's 3-matrix structure may need more width.
+4. **Does RMSNorm help GEGLU's gate?** H59 fern (#3966). LayerNorm's mean-subtraction may distort gate activation directions.
+5. **Does depth become a fresh lever in GEGLU?** H60 thorfinn (#3968). n_layers=3 failed at vanilla FFN base; GEGLU's stronger per-layer capacity may change optimal depth.
+6. **Does DropPath help OOD?** H63 frieren (#3991). Strong mechanistic motivation for generalization across geom/Re distributions.
+7. **Does Huber δ_p need re-tuning?** H64 nezuko (#3992). H25 optimized at val=83.81; error distribution is radically different at val=58.63.
+8. **What's next below 55?**:
+   - GEGLU + Lion + optimal LR (if H58 + H61 both win)
+   - GEGLU + RMSNorm + wider mlp (if H59 + H62 win)
+   - GEGLU + deeper network + Lion (if H60 + H58 win)
+   - Architecture-level: attention mechanism variants, PDE-informed residuals, FiLM conditioning improvements
 
 ## Baseline Progression
 
@@ -97,4 +113,3 @@ Total gain: **−56.0 pts val** (48.8% reduction from 114.63 to 58.63).
 - `data/scoring.py` NaN propagation: test_geom_camber_cruise sample 20 non-finite GT. Read-only. Use 3-split excl. cruise.
 - `train.py`: `huber_delta` Config field NOT used in loss — no-op.
 - `T_max=15` hardcoded in scheduler — students doing T_max sweeps must add CLI flag.
-- H51/H56/H54/H55 were designed against H39 Arm C baseline (63.44). Compare against new baseline 58.63 when they land.

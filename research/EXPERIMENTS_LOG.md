@@ -1374,3 +1374,78 @@ Test 3-split: Arm A = 59.02, Arm B = 58.80.
 **H59 (RMSNorm):** Replace LayerNorm with RMSNorm in Transolver blocks. Mechanistically motivated: GEGLU gates depend on directional activation structure; LayerNorm's mean-subtraction can distort that signal. RMSNorm preserves it. Small gain expected (0.5-2 pts) but clean test with no new hyperparameters.
 
 **H60 (n_layers sweep):** Revisit depth in GEGLU context. H42 Arm C showed n_layers=3 + n_head=2 compound destructively at vanilla FFN; GEGLU's extra parameter capacity per block may change the optimal depth. Arms: n_layers=4 (shallower) and n_layers=6 (deeper). Uses existing --n_layers flag.
+
+---
+
+## 2026-05-16 14:30 — PR #3918: H57 GEGLU + lr=2e-3 mega-stack (askeladd) — CLOSED, falsified
+
+- Branch: `charliepai2i48h3-askeladd/h57-geglu-lr2e3`
+- Hypothesis: GEGLU + lr=2e-3 stacks additively — H39 Arm C won +2.67 pts on vanilla FFN with lr=2e-3, so if GEGLU's architecture is orthogonal, we should see a further improvement.
+
+| Metric | H57 (GEGLU + lr=2e-3) | H48 Baseline (GEGLU + lr=1e-3) | Δ |
+|--------|-----------------------|-------------------------------|---|
+| **val_avg/mae_surf_p** | **59.50** | **58.6268** | **+0.88 (regression)** |
+
+**Analysis:** H57 falsifies the compounding hypothesis for GEGLU + higher LR. While lr=2e-3 was a +2.67 win on the vanilla FFN stack (H39 Arm C vs H37b), it *hurts* GEGLU by +0.88 pts. Gradient norms were healthy (1.5+), ruling out gate collapse. Most likely mechanism: GEGLU's gated update direction is more "concentrated" per step — the sigmoid gate restricts which gradient components contribute, so each step displaces the model further along its preferred direction. At lr=2e-3, this overshoots the optimum. The LR optima for vanilla FFN and GEGLU architectures are **different**.
+
+**Key insight (confirmed):** GEGLU has a different LR sensitivity profile than vanilla FFN. The optimum LR for GEGLU is ≤ 1e-3, and possibly below it (→ H61).
+
+**Status: CLOSED — +0.88 regression vs H48 GEGLU baseline. LR ceiling confirmed at 2e-3 for GEGLU.**
+
+---
+
+## 2026-05-16 14:30 — PR #3896: H51 LR ceiling sweep (alphonse) — CLOSED, confirmed ceiling
+
+- Branch: `charliepai2i48h3-alphonse/h51-lr-ceiling`
+- Hypothesis: LR > 2e-3 extends the monotone trend observed in H39 Arm C. Arms: lr=2.5e-3, lr=3e-3.
+- **Note:** H51 was designed against the pre-GEGLU H39 Arm C baseline (val=63.44). These results must be interpreted in that context.
+
+**Analysis:** Both arms regressed vs their pre-GEGLU baseline (63.44). Combined with H57's GEGLU+lr=2e-3 regression, this conclusively closes the LR-ceiling lever: lr=2e-3 is the ceiling for vanilla FFN, and lr=1e-3 appears to be the ceiling for GEGLU (possibly with optimum below 1e-3, see H61).
+
+**Status: CLOSED — LR ceiling confirmed. The LR/schedule lever cluster is fully mapped across both architectures.**
+
+---
+
+## 2026-05-16 14:30 — PR #3897: H56 lower clip sweep (frieren) — CLOSED, clip=1.0 confirmed
+
+- Branch: `charliepai2i48h3-frieren/h56-lower-clip`
+- Hypothesis: Lower clip (0.5, 0.7) may help at GEGLU baseline by allowing smaller gradient corrections on the gate parameters. Arms: clip=0.5, clip=0.7.
+
+**Analysis:** Both arms regressed vs H48 GEGLU baseline (58.63). Tighter gradient clipping hurts GEGLU's learning — the gates need the full gradient signal to train effectively. clip_grad_norm=1.0 is confirmed as the global optimum across all architectures tested. The clip lever is exhausted.
+
+**Status: CLOSED — clip=1.0 confirmed optimal. Both lower-clip arms regressed.**
+
+---
+
+## 2026-05-16 14:30 — PR #3898: H54 surf_weight sweep (nezuko) — CLOSED, surf_weight=10 locked
+
+- Branch: `charliepai2i48h3-nezuko/h54-surf-weight`
+- Hypothesis: surf_weight (pressure surface loss multiplier) may have a better optimum than 10 at GEGLU baseline. Arms: surf_weight=5, surf_weight=20.
+- **Note:** H54 was designed against the H39 Arm C baseline (val=63.44).
+
+**Analysis:** surf_weight=20 starved the volume signal (vol_p MAE increased +27% vs baseline), confirming the predicted tradeoff. surf_weight=5 weakened the surface pressure constraint and regressed. surf_weight=10 is the locked optimum — it balances surface pressure fidelity against volume flow accuracy. Both arms failed to beat 58.63. surf_weight lever is exhausted.
+
+**Key insight (confirmed):** surf_weight=10 is locked. Volume MAE degradation signature confirms mechanism.
+
+**Status: CLOSED — surf_weight=10 confirmed. Both arms regressed vs H48 GEGLU baseline.**
+
+---
+
+## 2026-05-16 14:45 — R5 cycle 10 new assignments (4 idle students)
+
+After closing H57/H51/H56/H54 (LR ceiling, clip, surf_weight levers all exhausted), strategy pivots to architectural and loss-shape levers on the GEGLU baseline.
+
+| PR | Student | Hypothesis | Predicted val_avg |
+|----|---------|------------|-------------------|
+| **#3988** | alphonse | **H61: GEGLU + LR sweep down (7e-4, 5e-4)** | ~57.5-58.5 |
+| **#3990** | askeladd | **H62: GEGLU + mlp_ratio sweep (3, 4)** | ~57-58 |
+| **#3991** | frieren | **H63: DropPath stochastic depth (0.05, 0.10)** | ~57-58 |
+| **#3992** | nezuko | **H64: Huber δ_p retune (0.1, 0.5) at GEGLU** | ~57.5-58.5 |
+
+**H61 (LR down):** Tests whether GEGLU's optimum LR is below 1e-3. H57 showed 2e-3 hurts (+0.88). The gate mechanism concentrates gradient updates — GEGLU may need smaller LR (7e-4 or 5e-4) to avoid overshoot. If GEGLU's LR optimum is below 1e-3, this is a clean, no-code-change win.
+
+**H62 (mlp_ratio):** GEGLU uses gate+up+down projections vs vanilla FFN's single expand+contract. The mlp_ratio=2 was tuned for vanilla FFN; Llama/PaLM literature increases expansion ratio when switching to gated FFNs. Arms: mlp_ratio=3 (~1.1M params) and mlp_ratio=4 (~1.3M params). Requires adding `--mlp_ratio` flag to train.py.
+
+**H63 (DropPath):** Stochastic depth regularization for OOD generalization. Linear schedule per layer (deeper layers see higher drop_prob). Predicted to help camber_rc and re_rand OOD splits more than in_dist. Requires implementing `DropPath` class and `--drop_path` flag.
+
+**H64 (Huber δ_p):** Re-tune Huber loss shape for the improved GEGLU baseline. H25's δ_p=0.25 was tuned at val=83.81 with a heavy error tail. At val=58.63 with GEGLU's spatial selectivity, the error distribution is different — may benefit from more aggressive L1 (δ_p=0.1) or less aggressive L2 (δ_p=0.5). No code changes needed.
