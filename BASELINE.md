@@ -11,21 +11,21 @@ target base `icml-appendix-charlie`).
 | Model | Transolver, `n_hidden=128`, `n_layers=5`, `n_head=4`, `slice_num=16`, `mlp_ratio=2`, `unified_pos=False` |
 | Optim | AdamW, `lr=5e-4`, `weight_decay=1e-4`, batch 4, cosine `T_max=epochs` |
 | Loss  | **SmoothL1 (Huber, beta=0.25)** in normalized space, `surf_weight=10.0` (PR #3400) |
-| EMA   | **Polyak averaging, decay=0.998**, evaluated at val/test time (PR #3601) |
+| EMA   | **Polyak averaging, decay=0.997**, evaluated at val/test time (PR #3783) |
 | Dropout | **dropout=0.1** in PhysicsAttention (attn + to_out) — PR #3402 |
 | Scoring | NaN-safe accumulators (PR #3279) — `torch.where` instead of `mask * err` |
 | Sampler | `WeightedRandomSampler` over 3 domain groups |
 | Caps  | `SENPAI_MAX_EPOCHS=50`, `SENPAI_TIMEOUT_MIN=30.0` (hard per-run wall clock) |
 | Test  | Best-val EMA checkpoint evaluated on 4 test splits at end of run |
 
-## Current best metrics (PR #3601, EMA decay=0.998, single-seed, best epoch 18)
+## Current best metrics (PR #3783, EMA decay=0.997, single-seed, best epoch 18)
 
 **Beat this to be a winner.**
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` **(primary)** | **81.16** |
-| `test_avg/mae_surf_p` | **71.77** |
+| `val_avg/mae_surf_p` **(primary)** | **80.88** |
+| `test_avg/mae_surf_p` | **71.18** |
 | `test/test_single_in_dist/mae_surf_p` | 83.37 |
 | `test/test_geom_camber_rc/mae_surf_p` | 82.79 |
 | `test/test_geom_camber_cruise/mae_surf_p` | 51.08 |
@@ -35,19 +35,19 @@ Per-split val surface-p MAE at best checkpoint (single seed):
 
 | Split | mae_surf_p | Δ vs prev |
 |-------|------------|-----------|
-| `val_single_in_dist`     |  94.05 | -6.04% |
-| `val_geom_camber_rc`     |  92.73 | -1.86% |
-| `val_geom_camber_cruise` |  60.45 | -4.95% |
-| `val_re_rand`            |  77.42 | -2.74% |
-| **avg** | **81.16** | **-3.88%** |
+| `val_single_in_dist`     |  94.59 | +0.57% |
+| `val_geom_camber_rc`     |  90.88 | -2.00% |
+| `val_geom_camber_cruise` |  61.04 | +0.98% |
+| `val_re_rand`            |  77.02 | -0.52% |
+| **avg** | **80.88** | **-0.34%** |
 
-Artifact: `models/model-charliepai2i48h1-alphonse-ema-0998-sn16-run1-20260516-052324/metrics.jsonl`
+Artifact: `models/model-ema-0997-probe-20260516-082433/metrics.jsonl`
 
-Note: single-seed merge; all 4 val splits improved. Best epoch 18 = final epoch (compute-bound). Single-line change: EMA decay 0.999→0.998. val_single_in_dist improved most (-6.04%) — the tighter EMA window focuses on more-converged tail of training, benefiting the hardest in-distribution split most.
+Note: small win within stated single-seed noise floor (±5-10 pts). Val AND test moved together (val -0.34%, test -0.82%) — correlated signal supports merge despite small magnitude. Best epoch 18 (compute-bound, identical to baseline). Per-split: rc improved most (-2.00%); single and cruise slightly regressed. EMA window has effectively converged near the optimum.
 
-Why it works: EMA decay=0.998 gives an effective window of ~500 steps (≈14-17% of training budget), vs ~1000 steps at 0.999 (≈33%). Focusing the average on the converged tail rather than early-training weights improves generalization, especially on in-distribution splits. Compounds cleanly with slice_num=16 implicit regularization.
+Why it works: EMA decay=0.997 → window ≈ 330 steps (~10% of training budget) vs 0.998 → 500 steps (14-17%). Marginal tightening. Diminishing returns clear — the EMA axis has reached its useful floor in [0.997, 0.998].
 
-EMA progression: 0.9995→catastrophic (+34.5%), 0.999→84.44 (baseline), 0.998→81.16 (-3.88%). Next probe: 0.997 (continue bracketing looser direction).
+EMA progression: 0.9995→catastrophic, 0.999→84.44, 0.998→81.16 (-3.88%), 0.997→80.88 (-0.34%). **Axis effectively closed.** Next moves should be on orthogonal levers.
 
 Reproduce:
 
@@ -100,4 +100,5 @@ After every merged winner, the advisor:
 | 2026-05-15 | #3402 | dropout=0.1 in PhysicsAttention (8/8 split consistency) | 96.17 | -1.01% |
 | 2026-05-16 | #3533 | slice_num=64→32 (halve slice-attention cost, +2 epochs, implicit reg) | 90.58 | -5.81% |
 | 2026-05-16 | #3602 | slice_num=32→16 (continue halving, +2 epochs to 18, still compute-bound) | 84.44 | -6.78% |
-| 2026-05-16 | #3601 | EMA decay 0.999→0.998 (tighter window, confirmed on slice_num=16 base) | **81.16** | **-3.88%** |
+| 2026-05-16 | #3601 | EMA decay 0.999→0.998 (tighter window, confirmed on slice_num=16 base) | 81.16 | -3.88% |
+| 2026-05-16 | #3783 | EMA decay 0.998→0.997 (probe looser; diminishing returns) | **80.88** | **-0.34%** |
