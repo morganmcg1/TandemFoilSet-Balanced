@@ -1,8 +1,9 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 11:25 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-16 11:45 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
+- **Rate limit blackout:** GH API exhausted, resets 12:21 UTC. Two strong pre-clip-stack results identified locally during blackout window (see below).
 
 ## Current research focus
 
@@ -16,10 +17,15 @@
 
 Grad clip=1.0 (direction normalization at ~96-100% clip rate) merged as the 7th axis. All experiments now must include `--grad_clip_norm 1.0` to beat the new baseline.
 
-### 🔥 Two high-priority signals running on stale stacks — predicted to need rebase
+### 🔥 Strong pre-clip-stack signals identified locally (awaiting rate limit reset to send back)
 
-- **🔥 T_max=20 (thorfinn #3390 R2):** Running on FiLM stack WITHOUT clip. Predicted ~87-92 in absolute (won't beat 81.660). If paired Δ positive → rebase with clip. Tanjiro R1 predicted T_max=20 could reach ~80-85 on full stack.
-- **🔥 SF-AdamW (alphonse #3594 R2):** Running on FiLM stack WITHOUT clip. R1 showed −20.75%. If paired Δ reproduces → rebase with clip. Could be transformative.
+- **🔥🔥 n_hidden=192 (nezuko #3492 R2):** Results committed at commit `88d013a` — Arm A 97.232, Arm B 89.252, **paired Δ −8.21% val_avg, −8.00% test_avg**. PR not yet marked ready_for_review (rate-limit blackout). Send-back drafted at `/tmp/sendback_3492_capacity.md` — rebase with clip in both arms. If even half the paired Δ survives, this drops us into mid-70s.
+- **n_layers=4 (fern #3758 seed-2):** Result committed at `4ba1483` — Arm B seed=2 val_avg=88.441 (better than pre-clip baseline 89.784). Combined with R1 seed-1 paired Δ −1.21%, the depth hypothesis is real. Send-back drafted at `/tmp/sendback_3758_seed2.md` — rebase with clip in both arms.
+
+### Other high-priority signals running on stale stacks
+
+- **🔥 T_max=20 (thorfinn #3390 R2):** Pod actively training (GPU 100%) on commit ff96c64. Likely no clip flag in command. If paired Δ positive → rebase with clip. Tanjiro R1 predicted T_max=20 could reach ~80-85 on full stack.
+- **🔥 SF-AdamW (alphonse #3594 R2):** Pod actively training (GPU 99%) on commit 9e6264b. Likely no clip flag in command. R1 showed −20.75%. If paired Δ reproduces → rebase with clip. Could be transformative.
 
 ### Confirmed closed axes
 
@@ -30,16 +36,16 @@ Grad clip=1.0 (direction normalization at ~96-100% clip rate) merged as the 7th 
 
 ### Key in-flight experiments
 
-| Student | PR | Hypothesis | Status | vs 81.660 baseline |
-|---------|----|-----------|--------|--------------------|
-| tanjiro | #3906 | Clip threshold sweep {0.25, 1.0, 4.0} | ✅ Just assigned | Primary — optimizing the clip axis |
-| thorfinn | #3390 | T_max=20 on FiLM stack (no clip) | Running | Will need rebase if paired Δ > 0 |
-| alphonse | #3594 | SF-AdamW on FiLM stack (no clip) | Running | Will need rebase if paired Δ > 0 |
-| nezuko | #3492 | n_hidden=192 on FiLM stack (no clip) | Running | Will need rebase if paired Δ > 0 |
-| askeladd | #3777 | SDF input features (no clip) | Running (pod restarted) | Will need rebase if paired Δ > 0 |
-| frieren | #3829 | Per-block FiLM heads (no clip) | Running | Will need rebase if paired Δ > 0 |
-| edward | #3830 | Lookahead optimizer (no clip) | Running | Will need rebase if paired Δ > 0 |
-| fern | #3758 | n_layers=4 seed-2 confirm (no clip) | Running seed-2 | Likely fail abs; if seed-2 < 89.784 → note depth win, close vs 81.660 |
+| Student | PR | Hypothesis | Status (11:45 UTC) | Action |
+|---------|----|-----------|--------------------|--------|
+| tanjiro | #3906 | Clip threshold sweep {0.25, 1.0, 4.0} | Training (GPU 100%) on clipthresh-r1 | Wait |
+| nezuko | #3492 | n_hidden=192 on FiLM stack (no clip) | **Results committed; paired Δ −8.21%; awaiting mark-ready (rate limit)** | Send back for clip rebase 🔥 |
+| fern | #3758 | n_layers=4 seed-2 confirm (no clip) | **In review (seed-2: 88.441)** | Send back for clip rebase |
+| thorfinn | #3390 | T_max=20 on FiLM stack (no clip) | Training (GPU 100%) | Wait for results |
+| alphonse | #3594 | SF-AdamW on FiLM stack (no clip) | Training (GPU 99%) | Wait for results |
+| edward | #3830 | Lookahead optimizer (no clip) | Training (GPU 99%) | Wait for results |
+| frieren | #3829 | Per-block FiLM heads (no clip) | Training (GPU 99%) | Wait for results |
+| askeladd | #3777 | SDF input features (no clip) | Idle/restarted (GPU 0%) | Verify training resumes |
 
 **Primary metric:** `val_avg/mae_surf_p` (lower is better)
 
