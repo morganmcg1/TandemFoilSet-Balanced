@@ -16,6 +16,7 @@ Lower is better. Per-split diagnostic metrics (`{split}/mae_surf_{Ux,Uy,p}`,
   flipped in **PR #3440**)
   `loss = vol_loss + surf_weight * surf_loss`, `surf_weight=10.0`
 - Optimizer: AdamW, `lr=5e-4`, `weight_decay=1e-3` (**updated from PR #3630** — wd=1e-3 wins clean 3-arm monotonic sweep on truly-stacked base)
+- **Fourier L=4** (`--pos_enc_num_freqs 4`) beats L=8 on all splits — **updated from PR #3600**. Default still `pos_enc_num_freqs=8`, must pass `--pos_enc_num_freqs 4` explicitly.
 - Schedule: `SequentialLR(LinearLR warmup → CosineAnnealingLR)`,
   `warmup_epochs=3`, `eta_min=1e-6` (**merged from PR #3150**)
 - **Gradient clipping**: `clip_grad_norm_(max_norm=0.5)` — **default is now 0.5**
@@ -63,8 +64,36 @@ A confirmation arm with all three levers stacked (`--mlp_type geglu --pos_enc_mo
 Compared to the published 81.48/72.68 (which lacked bf16+Fourier), the truly-stacked baseline is **−3.9 val / −4.6 test**. Stacking does compose. The new effective baseline for advisor decisions is **val=77.57 / test=68.77** (from d66p6r3s) — any PR must beat this number.
 
 **To beat baseline going forward**:
-- val_avg/mae_surf_p < **72.59** (PR #3630 wd_1e-3_stacked, run zmahpm3e)
-- test_avg/mae_surf_p < **66.45** (same run)
+- val_avg/mae_surf_p < **69.98** (PR #3600 fourier_L4, run 9nliedqj)
+- test_avg/mae_surf_p < **62.47** (same run)
+
+---
+
+## 2026-05-16 — PR #3600: Fourier L sweep — **MERGED ⭐ (new val AND test best, L=4 wins)**
+
+- **val_avg/mae_surf_p: 69.98** (NEW BEST, −2.61 vs 72.59 prior best, −11.50 vs published 81.48)
+- **test_avg/mae_surf_p: 62.47** (NEW BEST, −3.98 vs 66.45 prior best, −10.21 vs published 72.68)
+- **W&B run:** 9nliedqj (fourier_L4, `pos_enc_num_freqs=4`)
+- **Sweep control:** jsjancp5 (fourier_L8_ctrl, val=73.75, test=66.02)
+- **Within-sweep Δ (L4 vs L8 ctrl):** val −3.77, test −3.55 — clean, consistent across all 4 test splits
+- **Surface MAE (test, fourier_L4, run 9nliedqj):**
+  - test_single_in_dist mae_surf_p = 74.88
+  - test_geom_camber_rc mae_surf_p = 71.01
+  - test_geom_camber_cruise mae_surf_p = 43.83
+  - test_re_rand mae_surf_p = 60.17
+- **best_epoch:** 17 / 31.1 min
+- **Config used:** wd=1e-4 (sweep ran before PR #3630 wd=1e-3 merged — L=4 with wd=1e-3 expected to be further better)
+- **Reproduce (add --weight_decay 1e-3 for current best config):**
+  ```
+  cd target/
+  python train.py --pos_enc_num_freqs 4 --weight_decay 1e-3 \
+    --mlp_type geglu --pos_enc_mode fourier_basic --amp_dtype bf16 \
+    --wandb_group fourier-L-sweep-stacked --wandb_name L4_wd1e3 --epochs 50
+  ```
+
+Notes: Counter-intuitive result — lower L (fewer frequency bands) wins on all 4 test splits. Fern's analysis: at this model scale and mesh density, L=4's simpler frequency basis generalizes better OOD; L=8 may be overfitting to high-frequency training artifacts. The within-sweep Δ (3.77 val, 3.55 test) is reliable despite using wd=1e-4 — L effect is orthogonal to wd. A follow-up with L=4 + wd=1e-3 is the highest-priority reproduce arm. Also: fourier_rich (12 bands) may now be dominated by fourier_basic with L<8; nezuko #3879 tests fourier_rich and could be redirected to L=2 or L=4 sweep instead.
+
+**Operational follow-up needed:** Flip `pos_enc_num_freqs` Config default `8` → `4`.
 
 ---
 
