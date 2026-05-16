@@ -452,6 +452,7 @@ class Config:
     grad_clip_norm: float = 1.0  # 0 or negative disables clipping
     eta_min: float = 1e-5    # CosineAnnealingLR LR floor
     lr_T_max: int = 0  # 0 = use MAX_EPOCHS; >0 = override
+    vol_p_weight: float = 1.0  # per-channel weight on p in vol_loss; 1.0 = unchanged
 
 
 cfg = sp.parse(Config)
@@ -583,7 +584,8 @@ for epoch in range(MAX_EPOCHS):
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        vol_ch_w = torch.tensor([1.0, 1.0, cfg.vol_p_weight], device=sq_err.device, dtype=sq_err.dtype)
+        vol_loss = (sq_err * vol_ch_w * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
