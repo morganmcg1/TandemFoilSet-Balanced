@@ -237,7 +237,7 @@ class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False, use_film=False,
-                 re_feature_idx=13,
+                 re_feature_idx=13, film_cond_dim=1,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -245,6 +245,7 @@ class Transolver(nn.Module):
         self.unified_pos = unified_pos
         self.use_film = use_film
         self.re_feature_idx = re_feature_idx
+        self.film_cond_dim = film_cond_dim
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
 
@@ -262,7 +263,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
-                use_film=use_film,
+                use_film=use_film, cond_dim=film_cond_dim,
             )
             for i in range(n_layers)
         ])
@@ -292,13 +293,13 @@ class Transolver(nn.Module):
         x = data["x"]
         re_cond = None
         if self.use_film:
-            # log(Re) is feature index 13, same value for every real node in a
-            # sample. pad_collate pads with zeros at the end, so row 0 is
-            # always a real node and reading it directly avoids the padding
-            # contamination that mean(dim=1) would suffer (padding rows have
-            # normalised value -mean/std ≈ -19 for log(Re), which would
-            # dominate the mean for samples with lots of padding).
-            re_cond = x[:, 0, self.re_feature_idx:self.re_feature_idx + 1]
+            # Conditioning vector read from row 0 (always a real node — pad_collate
+            # pads with zeros at the end), avoiding padding contamination. With
+            # film_cond_dim=1 this is just log(Re); film_cond_dim=5 adds AoA-foil1
+            # and NACA1 (camber, position, thickness); film_cond_dim=9 further adds
+            # AoA-foil2 and NACA2 (zero for single-foil samples).
+            re_cond = x[:, 0,
+                        self.re_feature_idx:self.re_feature_idx + self.film_cond_dim]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx, re_cond=re_cond)
@@ -493,6 +494,7 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     smooth_l1_beta: float = 0.05  # quadratic-to-linear transition in normalized y space
+    film_cond_dim: int = 1  # FiLM conditioning vector width (1=Re only, 5=Re+geom1, 9=Re+geom1+geom2)
 
 
 cfg = sp.parse(Config)
@@ -531,6 +533,7 @@ model_config = dict(
     slice_num=64,
     mlp_ratio=2,
     use_film=True,
+    film_cond_dim=cfg.film_cond_dim,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -618,6 +621,28 @@ for epoch in range(MAX_EPOCHS):
                     f"{re_cond_dbg.cpu().tolist()}  re_mean_(buggy) = "
                     f"{re_mean_dbg.cpu().tolist()}"
                 )
+                # Multi-signal FiLM debug: show the full conditioning vector
+                # shape and per-dim mean across the batch so we can verify
+                # we're picking up the right features (Re, AoA, NACA).
+                cond_dim = model_config.get("film_cond_dim", 1)
+                cond_vec_dbg = x_aug[:, 0, 13:13 + cond_dim]
+                feature_names = [
+                    "log_Re", "AoA1", "NACA1_M", "NACA1_P", "NACA1_T",
+                    "AoA2", "NACA2_M", "NACA2_P", "NACA2_T",
+                ][:cond_dim]
+                per_dim_mean = cond_vec_dbg.float().mean(0).tolist()
+                per_dim_std = (cond_vec_dbg.float().std(0).tolist()
+                               if cond_vec_dbg.shape[0] > 1
+                               else [0.0] * cond_dim)
+                print(
+                    f"  [FiLM-multi debug] cond_vec shape: {tuple(cond_vec_dbg.shape)} "
+                    f"(film_cond_dim={cond_dim})"
+                )
+                for i, name in enumerate(feature_names):
+                    print(
+                        f"    dim={13 + i}  {name:<10s}  "
+                        f"mean={per_dim_mean[i]:+.4f}  std={per_dim_std[i]:.4f}"
+                    )
                 wandb.log({
                     "debug/re_cond_min": re_cond_dbg.min().item(),
                     "debug/re_cond_max": re_cond_dbg.max().item(),
@@ -625,6 +650,11 @@ for epoch in range(MAX_EPOCHS):
                     "debug/re_cond_mean": re_cond_dbg.mean().item(),
                     "debug/re_mean_buggy_min": re_mean_dbg.min().item(),
                     "debug/re_mean_buggy_max": re_mean_dbg.max().item(),
+                    "debug/film_cond_dim": cond_dim,
+                    **{f"debug/cond_{feature_names[i]}_mean": per_dim_mean[i]
+                       for i in range(cond_dim)},
+                    **{f"debug/cond_{feature_names[i]}_std": per_dim_std[i]
+                       for i in range(cond_dim)},
                     "global_step": global_step,
                 })
 
