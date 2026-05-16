@@ -363,6 +363,7 @@ def write_experiment_summary(
         "n_freqs": cfg.n_freqs,
         "fourier_base": cfg.fourier_base,
         "lr_t_max": cfg.lr_t_max,
+        "lr_warmup_epochs": cfg.lr_warmup_epochs,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -408,6 +409,7 @@ class Config:
     n_freqs: int = 0  # 0 disables Fourier positional features (raw x,z); >0 enables sin/cos at base^k * pi
     fourier_base: float = 2.0
     lr_t_max: int | None = None  # override cosine T_max; defaults to MAX_EPOCHS if None
+    lr_warmup_epochs: int = 0  # linear LR warmup epochs (0 disables); composes with cosine via SequentialLR
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -463,7 +465,21 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 cosine_t_max = cfg.lr_t_max if cfg.lr_t_max is not None else MAX_EPOCHS
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cosine_t_max)
+if cfg.lr_warmup_epochs > 0:
+    warmup_sched = torch.optim.lr_scheduler.LinearLR(
+        optimizer,
+        start_factor=1e-6,
+        end_factor=1.0,
+        total_iters=cfg.lr_warmup_epochs,
+    )
+    cosine_sched = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cosine_t_max)
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[warmup_sched, cosine_sched],
+        milestones=[cfg.lr_warmup_epochs],
+    )
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cosine_t_max)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
