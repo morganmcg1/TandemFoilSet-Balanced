@@ -1,6 +1,43 @@
 # Baseline — icml-appendix-willow-pai2i-48h-r3
 
-## Current best (as of 2026-05-16 12:00) — PR #3612: Cauchy loss c=1.0
+## Current best (as of 2026-05-16 14:55) — PR #3868: Huber beta=0.1
+
+Nine winners merged: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + SOAP optimizer (PR #3283, −31.7%) + SOAP precond_freq=5 (PR #3495, −1.78%) + EMA model weights decay=0.999 (PR #3430, −18.8%) + EMA decay=0.99 (PR #3591, −3.85%) + Huber beta=0.5 (PR #3316, −6.05%) + Cauchy loss c=1.0 (PR #3612, −3.67%) + **Huber beta=0.1** (PR #3868, fern, **−3.77% vs previous canonical**).
+
+**Primary ranking metric:**
+- `val_avg/mae_surf_p` = **50.5133** (run `3yejzgk1`, fern variant-beta010, best epoch 14)
+
+**Test (paper-facing):**
+- `test_avg/mae_surf_p_excl_cruise` (3-split mean) = **49.8493** (−2.68% vs previous 51.220)
+  - `test_single_in_dist/mae_surf_p` = 56.7466
+  - `test_geom_camber_rc/mae_surf_p` = 53.1346
+  - `test_re_rand/mae_surf_p` = 39.6666
+  - `test_geom_camber_cruise/mae_surf_p` = NaN (pre-existing bug)
+
+**Config (post-merge):**
+- Transolver: n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, dropout=0
+- **SOAP optimizer** (precondition_frequency=5) lr=1e-3, warmup_epochs=3 (LinearLR) → CosineAnnealingLR, weight_decay=1e-4, batch_size=4, surf_weight=10.0
+- 50 epochs, **Huber loss (huber_beta=0.1, cauchy_c=0.0)**; `vol_loss + 10*surf_loss`
+- **EMA of model weights** (ema_decay=0.99, updated each training step)
+- Wall-clock: ~32 min / arm (hit 30-min cap; best epoch 14)
+- `param count = 0.66M`
+
+**Reproduce:**
+```bash
+cd target/ && python train.py \
+  --optimizer soap \
+  --precondition_frequency 5 \
+  --lr 1e-3 --warmup_epochs 3 \
+  --huber_beta 0.1 \
+  --surf_weight 10.0 --seed 42 \
+  --ema_decay 0.99 \
+  --wandb_group huber-beta-finer-sweep \
+  --wandb_run_name variant-beta010
+```
+
+---
+
+## Previous best (as of 2026-05-16 12:00) — PR #3612: Cauchy loss c=1.0
 
 Eight winners merged: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + SOAP optimizer (PR #3283, −31.7%) + SOAP precond_freq=5 (PR #3495, −1.78%) + EMA model weights decay=0.999 (PR #3430, −18.8%) + EMA decay=0.99 (PR #3591, −3.85%) + Huber beta=0.5 (PR #3316, −6.05%) + **Cauchy loss c=1.0** (PR #3612, edward, **−3.67% vs previous canonical**).
 
@@ -26,6 +63,7 @@ Eight winners merged: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147
 ```bash
 cd target/ && python train.py \
   --optimizer soap \
+  --precondition_frequency 5 \
   --lr 1e-3 --warmup_epochs 3 \
   --cauchy_c 1.0 \
   --surf_weight 10.0 --seed 42 \
