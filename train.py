@@ -140,6 +140,61 @@ class FiLMLayer(nn.Module):
         return x * (1.0 + gamma.unsqueeze(1)) + beta.unsqueeze(1)
 
 
+# Surface-refinement input feature indices into normalized x (24-dim).
+# coords (0,1) + log_Re (13) + AoA1 (14) + NACA1 (15-17) + AoA2 (18) +
+# NACA2 (19-21) + gap (22) = 12 features. Stagger (23) intentionally omitted
+# per the PR spec; n_feat must match SurfaceRefinementMLP construction.
+SURF_FEAT_IDXS = list(range(0, 2)) + [13] + list(range(14, 23))
+
+
+class SurfaceRefinementMLP(nn.Module):
+    """Residual MLP refining surface-node predictions post-Transolver.
+
+    Zero-init the output projection so the refinement starts as a no-op
+    (identity start) — the baseline prediction is unchanged at init and the
+    MLP can only learn corrections that improve the surface metric.
+    """
+
+    def __init__(self, n_pred: int = 3, n_feat: int = 12, hidden: int = 64):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_pred + n_feat, hidden),
+            nn.GELU(),
+            nn.Linear(hidden, n_pred),
+        )
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, pred_surf: torch.Tensor, x_surf_feat: torch.Tensor) -> torch.Tensor:
+        # pred_surf: (S, n_pred), x_surf_feat: (S, n_feat) → (S, n_pred)
+        return self.net(torch.cat([pred_surf, x_surf_feat], dim=-1))
+
+
+def apply_surface_refinement(
+    pred: torch.Tensor,
+    x_norm: torch.Tensor,
+    is_surface: torch.Tensor,
+    mask: torch.Tensor,
+    surf_refine_mlp: nn.Module,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """Add a residual refinement to surface-node predictions.
+
+    Returns (pred_refined, delta) where delta is the (S, n_pred) residual
+    applied to active surface nodes (None if no active surface nodes).
+    Uses a full-shape sparse delta + non-in-place add so the prediction is
+    differentiable through both the Transolver and the refinement MLP.
+    """
+    active_surf = mask & is_surface
+    if not active_surf.any():
+        return pred, None
+    surf_pred = pred[active_surf]
+    surf_feat = x_norm[active_surf][:, SURF_FEAT_IDXS]
+    delta = surf_refine_mlp(surf_pred, surf_feat)
+    full_delta = torch.zeros_like(pred)
+    full_delta[active_surf] = delta
+    return pred + full_delta, delta
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -311,12 +366,16 @@ class Transolver(nn.Module):
 # ---------------------------------------------------------------------------
 
 def evaluate_split(model, fourier_encoder, loader, stats, surf_weight,
-                   smooth_l1_beta, device) -> dict[str, float]:
+                   smooth_l1_beta, device, surf_refine_mlp=None) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    If ``surf_refine_mlp`` is provided, a residual correction is applied to
+    surface-node predictions before loss and MAE computation (matching the
+    training-time refinement).
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -345,6 +404,11 @@ def evaluate_split(model, fourier_encoder, loader, stats, surf_weight,
             ff = fourier_encoder(x_norm[..., :2])
             x_aug = torch.cat([x_norm, ff], dim=-1)
             pred = model({"x": x_aug})["preds"]
+
+            if surf_refine_mlp is not None:
+                pred, _ = apply_surface_refinement(
+                    pred, x_norm, is_surface, mask, surf_refine_mlp
+                )
 
             sq_err = F.smooth_l1_loss(pred, y_norm, beta=smooth_l1_beta, reduction="none")
             vol_mask = mask & ~is_surface
@@ -545,9 +609,24 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+# Surface-refinement residual MLP: takes (pred_surf, surf_feats) → 3-channel
+# correction added to surface-node predictions. Zero-init output → identity
+# start, matches baseline at init. Refined params join the optimizer below.
+surf_refine_mlp = SurfaceRefinementMLP(
+    n_pred=3, n_feat=len(SURF_FEAT_IDXS), hidden=64,
+).to(device)
+n_refine_params = sum(p.numel() for p in surf_refine_mlp.parameters())
+print(
+    f"Surface refinement MLP: {n_refine_params} params "
+    f"(n_feat={len(SURF_FEAT_IDXS)}, hidden=64, zero-init output)"
+)
+
 # SWA: wrap a deep copy of the model so per-batch weight averages start
 # accumulating once cfg.swa_start_epoch is reached. Default simple averaging.
 swa_model = AveragedModel(model)
+# Mirror SWA for the refinement MLP so the SWA-evaluated network has
+# matched-epoch (model, refine) weights — required for consistent eval.
+swa_refine_mlp = AveragedModel(surf_refine_mlp)
 swa_n_updates = 0
 print(
     f"SWA: averaging starts at 1-indexed epoch {cfg.swa_start_epoch + 1} "
@@ -560,7 +639,9 @@ print(f"Fourier encoder: {n_fourier_params} learnable freq parameters "
       f"(init: {[round(f, 3) for f in fourier_encoder.freqs.tolist()]})")
 
 optimizer = torch.optim.AdamW(
-    list(model.parameters()) + list(fourier_encoder.parameters()),
+    list(model.parameters())
+    + list(fourier_encoder.parameters())
+    + list(surf_refine_mlp.parameters()),
     lr=cfg.lr, weight_decay=cfg.weight_decay,
 )
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
@@ -575,6 +656,9 @@ run = wandb.init(
         **asdict(cfg),
         "model_config": model_config,
         "n_params": n_params,
+        "n_refine_params": n_refine_params,
+        "surf_refine_n_feat": len(SURF_FEAT_IDXS),
+        "surf_refine_idxs": SURF_FEAT_IDXS,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     },
@@ -643,7 +727,10 @@ for epoch in range(MAX_EPOCHS):
                     "global_step": global_step,
                 })
 
-        pred = model({"x": x_aug})["preds"]
+        pred_raw = model({"x": x_aug})["preds"]
+        pred, delta = apply_surface_refinement(
+            pred_raw, x_norm, is_surface, mask, surf_refine_mlp,
+        )
         sq_err = F.smooth_l1_loss(pred, y_norm, beta=cfg.smooth_l1_beta, reduction="none")
 
         vol_mask = mask & ~is_surface
@@ -652,14 +739,43 @@ for epoch in range(MAX_EPOCHS):
         surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
+        # Diagnostics: did the refinement MLP actually move predictions, and
+        # did that movement reduce the surface-loss vs. the raw Transolver
+        # output? Computed on the active surface nodes (delta is None only if
+        # no surface nodes are active in this batch — extremely rare).
+        if delta is not None:
+            with torch.no_grad():
+                surf_idx = surf_mask  # (B, N) bool
+                y_surf = y_norm[surf_idx]  # (S, 3)
+                pred_raw_surf = pred_raw[surf_idx]  # (S, 3)
+                pred_ref_surf = pred[surf_idx]  # (S, 3)
+                surf_loss_pre = F.smooth_l1_loss(
+                    pred_raw_surf, y_surf, beta=cfg.smooth_l1_beta, reduction="mean",
+                )
+                surf_loss_post = F.smooth_l1_loss(
+                    pred_ref_surf, y_surf, beta=cfg.smooth_l1_beta, reduction="mean",
+                )
+                delta_norm = delta.norm(dim=-1).mean()
+                refine_log = {
+                    "train/surf_delta_norm": delta_norm.item(),
+                    "train/surf_loss_pre_refine": surf_loss_pre.item(),
+                    "train/surf_loss_post_refine": surf_loss_post.item(),
+                    "train/surf_refine_loss_fraction": (
+                        surf_loss_post / surf_loss_pre.clamp(min=1e-8)
+                    ).item(),
+                }
+        else:
+            refine_log = {}
+
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         if epoch >= cfg.swa_start_epoch:
             swa_model.update_parameters(model)
+            swa_refine_mlp.update_parameters(surf_refine_mlp)
             swa_n_updates += 1
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({"train/loss": loss.item(), **refine_log, "global_step": global_step})
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -671,9 +787,11 @@ for epoch in range(MAX_EPOCHS):
 
     # --- Validate ---
     model.eval()
+    surf_refine_mlp.eval()
     split_metrics = {
         name: evaluate_split(model, fourier_encoder, loader, stats,
-                             cfg.surf_weight, cfg.smooth_l1_beta, device)
+                             cfg.surf_weight, cfg.smooth_l1_beta, device,
+                             surf_refine_mlp=surf_refine_mlp)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -710,7 +828,12 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        # Bundle main-model + refinement-MLP state so test-time eval can
+        # reconstruct the full prediction pipeline from a single file.
+        torch.save({
+            "model": model.state_dict(),
+            "surf_refine_mlp": surf_refine_mlp.state_dict(),
+        }, model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
@@ -739,11 +862,13 @@ if swa_active:
     # per the SWA recipe — early-returns inside torch when no BN exists.
     update_bn(train_loader, swa_model, device=device)
     swa_model.eval()
+    swa_refine_mlp.eval()
 
     print("Evaluating SWA model on validation splits...")
     swa_val_metrics = {
         name: evaluate_split(swa_model, fourier_encoder, loader, stats,
-                             cfg.surf_weight, cfg.smooth_l1_beta, device)
+                             cfg.surf_weight, cfg.smooth_l1_beta, device,
+                             surf_refine_mlp=swa_refine_mlp)
         for name, loader in val_loaders.items()
     }
     swa_val_avg = aggregate_splits(swa_val_metrics)
@@ -761,7 +886,10 @@ if swa_active:
     wandb.summary.update(swa_val_log)
 
     swa_model_path = model_dir / "swa_checkpoint.pt"
-    torch.save(swa_model.module.state_dict(), swa_model_path)
+    torch.save({
+        "model": swa_model.module.state_dict(),
+        "surf_refine_mlp": swa_refine_mlp.module.state_dict(),
+    }, swa_model_path)
     print(f"Saved SWA checkpoint to {swa_model_path}")
 
 # --- Test evaluation + artifact upload ---
@@ -783,8 +911,11 @@ if best_metrics:
     for i, (init, final, delta) in enumerate(zip(init_freqs, final_freqs, freq_deltas)):
         print(f"  freq_{i}: init={init:.4f}  final={final:.4f}  Δrel={delta*100:+.2f}%")
 
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+    ckpt = torch.load(model_path, map_location=device, weights_only=True)
+    model.load_state_dict(ckpt["model"])
+    surf_refine_mlp.load_state_dict(ckpt["surf_refine_mlp"])
     model.eval()
+    surf_refine_mlp.eval()
 
     test_metrics = None
     test_avg = None
@@ -797,7 +928,8 @@ if best_metrics:
         }
         test_metrics = {
             name: evaluate_split(model, fourier_encoder, loader, stats,
-                                 cfg.surf_weight, cfg.smooth_l1_beta, device)
+                                 cfg.surf_weight, cfg.smooth_l1_beta, device,
+                                 surf_refine_mlp=surf_refine_mlp)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
@@ -818,7 +950,8 @@ if best_metrics:
             print("\nEvaluating SWA model on held-out test splits...")
             swa_test_metrics = {
                 name: evaluate_split(swa_model, fourier_encoder, loader, stats,
-                                     cfg.surf_weight, cfg.smooth_l1_beta, device)
+                                     cfg.surf_weight, cfg.smooth_l1_beta, device,
+                                     surf_refine_mlp=swa_refine_mlp)
                 for name, loader in test_loaders.items()
             }
             swa_test_avg = aggregate_splits(swa_test_metrics)
