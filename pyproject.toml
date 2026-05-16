@@ -17,6 +17,7 @@ dependencies = [
     "tqdm",
     "rich",
     "pyyaml",
+    "schedulefree",
 ]
 
 [build-system]
