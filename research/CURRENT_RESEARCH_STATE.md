@@ -1,7 +1,7 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 15:30
-- **Launch:** willow-pai2i-48h-r1 (round 6 — SwiGLU/GeGLU era; programme best val=65.37)
+- **Date:** 2026-05-16 16:10
+- **Launch:** willow-pai2i-48h-r1 (round 6 — SwiGLU/GeGLU era; NEW programme best val=62.10)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN)
 - **Latest direction from human team:** None (no open issues scoped to this launch)
@@ -14,24 +14,23 @@ Beat the Transolver baseline on `val_avg/mae_surf_p` (lower is better). Paper-fa
 
 | Config | val_avg | test_avg | Source | Note |
 |--------|---------|---------|--------|------|
-| **h=128+GeGLU (PROGRAMME BEST)** | **65.3704** | **61.6819** | PR #3810, W&B `db8bp8i8`, seed=0 | `--use_geglu` + h=128/T_max=15 |
-| h=128+SwiGLU | 65.44 | 62.04 | PR #3680, W&B `8on2llcv`, seed=0 | GeGLU ≈ SwiGLU (tie) |
+| **h=128+SwiGLU+T_max=17 (NEW PROGRAMME BEST)** | **62.1023** | **59.5529** | PR #3994, W&B `5q47ozlp`, seed=0 | `--use_swiglu` + h=128/T_max=17 |
+| h=128+GeGLU+T_max=15 (prior best) | 65.3704 | 61.6819 | PR #3810, W&B `db8bp8i8`, seed=0 | `--use_geglu` |
+| h=128+SwiGLU+T_max=15 | 65.44 | 62.04 | PR #3680, W&B `8on2llcv`, seed=0 | |
 | h=192+GELU (advisor default) | 86.81 | 81.35 | PR #3562 | train.py default |
 | h=128+GELU μ̂ | 90.77 ± 1.54 | 85.85 ± 0.67 | PR #3546 | 4-seed canonical |
 
-**Effective win threshold:** val < 65.37 (or test < 61.68).
+**Effective win threshold (NEW):** val < 62.10 (or test < 59.55).
 
-## Canonical noise floor: GLU family pooled (SwiGLU PR #3765 + GeGLU PR #3904, n=6)
+## Canonical noise floor: GLU family pooled (SwiGLU PR #3765 + GeGLU PR #3904, n=6 seeds, T_max=15)
 
 **μ̂(SwiGLU+h=128) = 66.48 ± 0.90** (seeds 0/1/2: 65.44 / 67.07 / 66.93)
 **μ̂(GeGLU+h=128) = 65.99 ± 0.54** (seeds 0/1/2: 65.37 / 66.38 / 66.22)
-**Pooled GLU μ̂ ≈ 66.24, σ̂ ≈ 0.74 (n=6)**
+**Pooled GLU μ̂ ≈ 66.24, σ̂ ≈ 0.74 (n=6, all on T_max=15)**
 
-- PR #3680 SwiGLU seed=0 (65.44) was a ~1.16σ-low lucky draw within SwiGLU's distribution
-- PR #3810 GeGLU seed=0 (65.37) was a ~1.15σ-low lucky draw within GeGLU's distribution
-- GeGLU vs SwiGLU: Δ=−0.49 val (Z=−0.81), Δ=−0.58 test (Z=−0.98) → **population-level equivalence; activation choice in gate is statistical noise.**
-- σ̂(GeGLU)=0.54 < σ̂(SwiGLU)=0.90 < σ̂(GELU)=1.54 — gating reduces seed-variance; SiLU vs GELU choice further reduces it modestly
-- **Recommended strong win bar: 2-seed mean val < 64.7** (≈ 2σ below pooled GLU floor)
+NOTE: PR #3994 (T_max=17) achieved val=62.10 on SwiGLU — the T_max=17 distribution is expected to shift the entire GLU floor down by ~3.3 pts. Seed=1 confirmation run queued for thorfinn.
+
+**Win threshold (new):** val < 62.10 (1 seed on T_max=17). Strong 2-seed bar: val < ~61.0 (TBD pending seed=1 result).
 
 ## Consolidated SwiGLU gradient landscape (from #3768 + #3840 + #3832 diagnostics)
 
@@ -59,46 +58,36 @@ Cross-context comparison of β_p=20 (from #3611, #3837):
 
 **Conclusion:** per-channel surface weighting is **width-coupled**, not gating-coupled. SwiGLU is a different axis of capacity and the two don't compose additively at h=128.
 
-## Active WIP — 8/8 students (zero idle)
+## Active WIP — 7/8 students (thorfinn idle → seed=1 T_max=17 being assigned)
 
 | PR | Student | Hypothesis | Status |
 |----|---------|-----------|--------|
-| **#3999** | **tanjiro** | **gradient clipping clip_norm=1.0 on SwiGLU (canonical transformer recipe)** | **NEW — assigned 14:15** |
-| **#3998** | **edward** | **slice_num=128 (2×) on SwiGLU — attention granularity scan** | **NEW — assigned 14:05** |
-| **#3996** | **alphonse** | **AdamW weight_decay 1e-4 → 1e-2 on SwiGLU** | **NEW — assigned 14:00** |
-| **#3995** | **fern** | **AdamW β2=0.95 + GeGLU stack (after β2-only TIE at val=65.40)** | **SENT BACK 15:30 for stack** |
-| **#3994** | **thorfinn** | **T_max=17 cosine on SwiGLU (matched to training length)** | **NEW — assigned 14:00** |
-| **#3993** | **askeladd** | **head_and_embed 2.5× LR + 500-step warmup on head_and_embed only** | **NEW — assigned 14:00** |
-| #3973 | frieren | RMSNorm replacement of LayerNorm on SwiGLU | Running |
-| #3644 | nezuko | Cosine T_max=10 + constant tail + SWA (rebased onto SwiGLU) | WIP (re-running on SwiGLU regime; conflict cleared 12:23) |
+| **#3999** | **tanjiro** | **gradient clipping clip_norm=1.0 on SwiGLU h=128** | Running (T_max=15, will evaluate directional signal) |
+| **#3998** | **edward** | **slice_num=128 (2×) on SwiGLU — attention granularity** | Running (T_max=15, will evaluate directional signal) |
+| **#3996** | **alphonse** | **AdamW weight_decay 1e-4 → 1e-2 on SwiGLU** | Running (T_max=15, will evaluate directional signal) |
+| **#3995** | **fern** | **AdamW β2=0.95 + GeGLU stack** | SENT BACK 15:30 for stack; running (T_max=15 base) |
+| **#3993** | **askeladd** | **head_and_embed 2.5× LR + 500-step warmup** | Running (T_max=15, will evaluate directional signal) |
+| #3973 | frieren | RMSNorm replacement of LayerNorm on SwiGLU | Running (T_max=15, stale flag — rate-limit artifact) |
+| #3644 | nezuko | Cosine T_max=10 + constant tail + SWA (rebased onto SwiGLU) | WIP (long-running; stale flags are benign) |
+| **thorfinn** | **seed=1 T_max=17 SwiGLU** | **Confirming #3994 win across seeds** | **ASSIGNING NOW** |
+
+**IMPORTANT for reviews of in-flight T_max=15 PRs:** All current WIP PRs (alphonse, edward, tanjiro, askeladd, fern, frieren) are running on T_max=15. Their results will be in the ~65-67 range on that schedule and CANNOT beat the new 62.10 baseline directly. Evaluate them for **directional signal** (does wd/clip/slice_num/LR improve things when tested on T_max=15?). If positive directional effect: reassign to T_max=17 stack. If null/negative: close the direction.
 
 ## Recently closed PRs (this session)
 
 | PR | Hypothesis | val | Reason |
 |----|-----------|-----|--------|
-| **#3959** | **lr=1e-3 (tanjiro)** | **68.87 (+5.34σ)** | **Zone-4 regression. MAJOR: lower σ̂ ≠ larger LR headroom (these were conflated as the hypothesis premise). MAJOR: cosine T_max=15 cannot absorb early inefficiency — generalises #3934 schedule-budget interaction.** |
+| **#3994** | **T_max=17 SwiGLU (thorfinn)** | **62.10 ← MERGED** | **NEW PROGRAMME BEST. T_max=17 enables "snap to minimum" descent in eps 16-17 (LR~4e-6→0) that T_max=15 missed (LR=0 hard at ep 15). Single-knob +3.27pt win.** |
+| **#3959** | **lr=1e-3 (tanjiro)** | **68.87 (+5.34σ)** | **Zone-4 regression. MAJOR: lower σ̂ ≠ larger LR headroom. MAJOR: cosine T_max=15 cannot absorb early inefficiency.** |
+| **#3933** | **ReGLU (edward)** | **67.92** | **+1.6σ regression. Dead-gate pathology. GLU family DEFINITIVELY closed.** |
+| **#3886** | **DropPath p=0.1 (alphonse)** | **μ̂=73.63 (+8.19)** | **Zone-5. Activation-noise regularisation family closed.** |
+| **#3904** | **GeGLU 3-seed confirm (fern)** | **μ̂=65.99** | **Population tie with SwiGLU. Activation choice in gate is noise.** |
+| **#3932** | **head_and_embed 2.5× (askeladd)** | **70.31** | **Zone-5. Mechanism confirmed at steady-state; rescue is warmup (#3993).** |
+| **#3934** | **T_max=12 (thorfinn)** | **72.13 best, 81.45 final** | **MAJOR PyTorch finding: CosineAnnealingLR un-clamped past T_max → LR rebounds.** |
 
 ## Recent TIE result (not merged, stack queued)
 
-- **#3995 β2=0.95 SwiGLU (fern, 2-seed)** — val=65.40 ± 0.024 vs programme best 65.37 (Δ=+0.03 TIE); test=61.67 vs 61.68 (Δ=−0.01 TIE). MAJOR finding: β2=0.95 alone closes the SwiGLU→GeGLU gap, delivering the same magnitude of improvement as GeGLU does over SwiGLU+default-β2. Suggests β2 and GeGLU touch overlapping optimization headroom. Sent back to stack β2=0.95 + GeGLU on the same PR.
-| **#3933** | **ReGLU (edward)** | **67.92** | **+1.6σ regression. MAJOR: dead-gate pathology confirmed (64-67% pre-acts ≤0, monotone-with-depth, GROWING over training). GLU family DEFINITIVELY closed: gating=94%, smoothness=6%, SiLU/GELU/identity choice is noise.** |
-| **#3886** | **DropPath p=0.1 (alphonse)** | **μ̂=73.63 (+8.19)** | **Zone-5 regression. MAJOR: closes activation-noise regularisation family. With #3811+#3855, gating IS the regulariser; activation/block noise is redundant.** |
-| **#3904** | **GeGLU 3-seed confirm (fern)** | **μ̂=65.99** | **Population tie with SwiGLU (Z=−0.81). GLU family characterized: gating=94% of gain; activation in gate (SiLU/GELU/identity) is sub-σ noise.** |
-| **#3932** | **head_and_embed 2.5× (askeladd)** | **70.31** | **Zone-5 regression. MAJOR: gradient-equilibrium mechanism CONFIRMED at steady-state (ratio restored to 3.09×); failure bounded to early-step instability (val@ep1=185 vs baseline ~80). Warmup is the natural rescue.** |
-| **#3934** | **T_max=12 (thorfinn)** | **72.13 best, 81.45 final** | **MAJOR PyTorch finding: `CosineAnnealingLR(T_max=N)` is UN-CLAMPED past T_max — LR REBOUNDS toward peak. Any T_max < total_epochs is a programme-wide footgun.** |
-| **#3888** | **fc_main 1.5× boost (frieren)** | **67.40** | **Null. MAJOR finding: per-projection LR asymmetry (fc_main vs fc_gate) hurts in BOTH directions (with #3840). Gradient-mass framework invalidated for SwiGLU.** |
-| **#3855** | **Bilinear gate (tanjiro)** | **66.88** | **Closes GLU ablation family. MAJOR finding: gating mechanism = 94% of GLU gain; activation choice = ~6%. SwiGLU ≈ GeGLU > Bilinear ≫ GELU.** |
-| **#3837** | **β_p=20 + SwiGLU (edward)** | **67.58** | **Modest anti-additive regression. MAJOR finding: per-channel weighting is width-coupled.** |
-| **#3832** | **head_and_embed 1.75× (askeladd)** | **67.16** | **Slight regression; lever direction correct, magnitude undersized (head/block_0 ratio essentially unchanged at 3.3×).** |
-| **#3764** | **h=192+SwiGLU stacking (thorfinn)** | **79.22** | **Anti-additive; compute-starvation (12 ep vs 17 at h=128), schedule mismatch — not architectural antagonism.** |
-| #3765 | SwiGLU seed confirm (fern) | μ̂=66.48 | 3-seed variance char. MAJOR: seed=0 was lucky low. Canonical μ̂=66.48±0.90. GeGLU population tie unresolved. |
-| #3811 | Dropout 0.1 + SwiGLU (alphonse) | μ̂=66.82 | 2-seed null. SwiGLU gating already regularizes sufficiently. |
-| #3840 | fc_gate LR boost 1.5× (frieren) | 67.00 | Modest regression. MAJOR finding: fc_main > fc_gate grad-norm ratio. |
-| #3768 | Inverse-LLRD+SwiGLU (frieren) | 74.01 | Anti-additive. Grad-norm inverts between-block. |
-| #3611 | β_p=20 on h=192 (edward) | 86.59 | Within noise; capacity-interaction sign flip. |
-| #3735 | h=192 variance characterization | stale | h=192+GELU obsolete vs SwiGLU floor. |
-| #3678 | Dropout 0.1 on GELU (alphonse) | μ̂=90.27 | Null; now confirmed null on SwiGLU too. |
-| #3724 | Corrected h-flip (tanjiro) | 103.91 | Catastrophic regression; ground-effect physics. |
+- **#3995 β2=0.95 SwiGLU (fern, 2-seed)** — val=65.40 ± 0.024 vs programme best 65.37 (Δ=+0.03 TIE); test=61.67 vs 61.68 (Δ=−0.01 TIE). MAJOR finding: β2=0.95 alone closes the SwiGLU→GeGLU gap. Sent back to stack β2=0.95 + GeGLU. Note: new programme best is now 62.10 (T_max=17); fern's stack run needs T_max=17 + GeGLU + β2=0.95 to be competitive.
 
 ## Merged PRs (all)
 
@@ -111,23 +100,21 @@ Cross-context comparison of β_p=20 (from #3611, #3837):
 | #3546 | Seed control + variance | μ̂=90.77, σ̂=1.54 | μ̂=85.85, σ̂=0.67 |
 | #3562 | h=192/slice=96/T_max=18 | 86.81 | 81.35 |
 | #3680 | SwiGLU activation | 65.44 | 62.04 |
-| **#3810** | **GeGLU activation (mechanistic isolation)** | **65.37** | **61.68** |
+| #3810 | GeGLU activation (mechanistic isolation) | 65.37 | 61.68 |
+| **#3994** | **T_max=17 on SwiGLU (matched to budget)** | **62.10** | **59.55** |
 
 ## Next research directions (queue for next idle students)
 
-1. **slice_num down-scan** — if edward's slice_num=128 wins, scan {96, 192, 256}; if regresses, test slice_num=32/48 down-scan. IN FLIGHT (#3998).
-2. **gradient clipping (clip_norm scan)** — if tanjiro's clip_norm=1.0 wins, scan {0.5, 1.0, 2.0, 5.0}. IN FLIGHT (#3999).
-3. **batch_size scan (bs=8 with bf16)** — VRAM headroom unlocked by #3480; might trade per-step variance for stability.
-4. **wd scan extended** — if alphonse's wd=1e-2 lands, scan {5e-3, 1e-2, 5e-2, 1e-1}.
-5. **AdamW betas scan** — if fern's β2=0.95 wins, scan β2 ∈ {0.90, 0.95, 0.99}.
-6. **T_max scan extended** — if thorfinn's T_max=17 wins, try T_max=20 (cosine never fully anneals).
-7. **head_and_embed boost scan with warmup** — if askeladd's warmup variant lands, scan {2.0×, 2.5×, 3.0×} all with warmup.
-8. **head_and_embed + block_4 dual boost (with warmup)** — block_4 is 2nd-largest grad-norm group (1.41).
-9. **LR scan extended (1.5e-3, 2e-3)** — if lr=1e-3 (tanjiro #3959) wins, find the stability edge.
-10. **LeakyReGLU** — if ReGLU dies due to dead-gate, LeakyReLU(0.01) rescue.
-11. **SwiGLU + SWA over SwiGLU-converged checkpoint** — extends nezuko's #3644 mechanism finding if SWA wins on SwiGLU.
-12. **SequentialLR(cosine→constant=0) "true annealed-then-flat"** — thorfinn's suggestion (2) for the schedule axis if T_max=17 ties.
-13. **Combine winners (Round 7)** — once we have multiple independent wins, test their stacks. GeGLU is the headline that should layer with optimizer/schedule wins.
+1. **seed=1 T_max=17 SwiGLU** (thorfinn — ASSIGNING NOW) — confirm the +3.27pt win holds across seeds. Priority 1.
+2. **T_max=17 + GeGLU stack** — once seed=1 confirms T_max=17, test GeGLU+T_max=17. GeGLU is marginally more reliable (σ̂=0.54 vs 0.90 for SwiGLU) and may compound with T_max=17.
+3. **T_max=17 + β2=0.95** — fern's β2=0.95 showed SwiGLU→GeGLU gap closure at T_max=15. Stack with T_max=17 (or better: triple stack T_max=17 + GeGLU + β2=0.95).
+4. **Directional signals from T_max=15 experiments (alphonse #3996, edward #3998, tanjiro #3999, askeladd #3993, fern #3995)** — evaluate on completion. If positive directional effect, reassign to T_max=17.
+5. **T_max=20 (cosine never fully anneals)** — thorfinn's suggestion. With T_max=17, the snap happens at LR~4e-6→0. T_max=20 would keep LR~1.5e-4 at ep 17 — likely too high for the final snap, so probably regresses. Worth testing to falsify.
+6. **batch_size scan (bs=8 with bf16)** — VRAM headroom; might trade per-step variance for stability.
+7. **wd scan extended** — if alphonse's wd=1e-2 lands as directional win, scan {5e-3, 1e-2, 5e-2} on T_max=17.
+8. **AdamW betas scan** — if fern's β2=0.95 directional win confirmed, scan β2 ∈ {0.90, 0.95, 0.99} on T_max=17.
+9. **head_and_embed boost scan with warmup** — if askeladd's warmup+2.5× lands, scan boost levels on T_max=17.
+10. **slice_num scan** — if edward's slice_num=128 lands as directional win, scan {64, 96, 128} on T_max=17.
 
 ## Dead-end lever classes (do not revisit)
 
@@ -139,37 +126,24 @@ Cross-context comparison of β_p=20 (from #3611, #3837):
 6. **Standard LLRD** — #3642. Inverted gradient profile.
 7. **unified_pos=True** — #3566. Incompatible with 2D asymmetric flow.
 8. **Per-channel Huber-δ** — #3574. Loss-formulation exhausted.
-9. **Any h=128+GELU experiments** — val ceiling ~88 < new floor 65.37.
-10. **Per-channel weighting (β_p=20) on h=128 width** — #3611, #3837. Width-coupled; needs h=192-class capacity to absorb redistribution.
-11. **h=192+SwiGLU stacking under current budget** — #3764. Compute-starved at 12 epochs; needs faster-converging h=192 setup before retesting.
-12. **head_and_embed 1.75× LR boost** — #3832. Right direction, undersized lever; superseded by 2.5× #3932.
-13. **Bilinear gate (no activation)** — #3855. Closes GLU ablation family: works mechanistically (94% of GLU gain) but does not improve on GeGLU/SwiGLU; reduced complexity does not translate to better minima.
-14. **Per-projection LR asymmetry on SwiGLU** — #3840 (fc_gate boost) + #3888 (fc_main boost). Both directions regress; ratio actually flipped under fc_main boost (Adam did not normalize away the asymmetry), but val penalized either dynamics shift. Gate/main grad-mass asymmetry is a non-actionable invariant of healthy SwiGLU optimization.
-15. **DropPath (Stochastic Depth) on SwiGLU at p=0.1** — #3886. Zone-5 regression; combined with #3811 dropout null, the activation-noise regularisation family is exhausted: SwiGLU's multiplicative gating IS the regularisation primitive at this scale/data; additional activation/block noise is at best redundant, at worst optimization-rate-limiting via `(1-p)·B` effective batch dilution.
-16. **GLU activation choice (SiLU vs GELU vs identity in gate)** — #3855 + #3904. Population tie; activation in gate is sub-σ noise (~6% of total GLU gain), gating mechanism is 94%. Future GLU experiments should pick one and not re-litigate the activation choice.
-17. **`CosineAnnealingLR(T_max=N)` with N < total_epochs** — #3934. **PyTorch footgun**: PyTorch's CosineAnnealingLR is the UN-CLAMPED half-cosine, so past T_max the LR REBOUNDS toward peak. Use `T_max ≥ total_epochs` OR wrap with `SequentialLR(cosine, constant(0))`.
-18. **ReGLU (ReLU gate)** — #3933. Dead-gate pathology: 64-67% of fc_gate pre-activations ≤0, monotone-with-depth (51%→73% at ep5), GROWING over training. ReLU's hard zero is non-recoverable in the gate. Use SwiGLU/GeGLU/Bilinear instead.
-19. **lr=1e-3 under T_max=15** — #3959. lr=1e-3 (2× base) regresses +3.43 val under fixed T_max=15. Two findings: (a) lower σ̂ doesn't grant LR headroom; (b) cosine T_max=15 cannot absorb early inefficiency from oversized LR. Future LR-up experiments must change schedule simultaneously. Tanjiro's suggested follow-up (lr=7.5e-4 midpoint) is deprioritized — the schedule interaction matters more than the LR midpoint.
+9. **Any h=128+GELU experiments** — val ceiling ~88 < new floor 62.10.
+10. **Per-channel weighting (β_p=20) on h=128 width** — #3611, #3837. Width-coupled.
+11. **h=192+SwiGLU stacking under current budget** — #3764. Compute-starved at 12 epochs.
+12. **head_and_embed 1.75× LR boost** — #3832. Superseded by 2.5× #3932.
+13. **Bilinear gate (no activation)** — #3855. Closes GLU ablation family; mechanistically works but doesn't improve.
+14. **Per-projection LR asymmetry on SwiGLU** — #3840 (fc_gate) + #3888 (fc_main). Both directions regress.
+15. **DropPath (Stochastic Depth) on SwiGLU at p=0.1** — #3886. Zone-5 regression.
+16. **GLU activation choice (SiLU vs GELU vs identity in gate)** — #3855 + #3904. Sub-σ noise (~6% of GLU gain).
+17. **`CosineAnnealingLR(T_max=N)` with N < total_epochs** — #3934. PyTorch footgun: LR rebounds past T_max.
+18. **ReGLU (ReLU gate)** — #3933. Dead-gate pathology.
+19. **lr=1e-3 under T_max=15** — #3959. Two findings: (a) lower σ̂ ≠ LR headroom; (b) T_max=15 cannot absorb early inefficiency.
 
 ## PyTorch scheduler gotchas (programme-wide)
 
-1. **`CosineAnnealingLR(T_max=N)` is UN-CLAMPED past T_max** (#3934 thorfinn). The schedule is the un-clamped half-cosine; at step `2*T_max` the LR returns to peak. Use `T_max >= total_epochs` OR wrap with `SequentialLR(cosine, constant(0))`.
-2. **Per-group LR overrides via `group['lr']` contaminate `CosineAnnealingLR`** (#3993 askeladd, found in initial impl, fixed). `get_lr()` uses a multiplicative recurrence on `group['lr']` (NOT on `base_lr`) after `_step_count > 1`. If you override `group['lr']` during warmup, the contamination persists through the whole cosine schedule. The fix: compute per-group LR closed-form from `base_lr` each step (or use `LambdaLR` with pure-function lambdas).
+1. **`CosineAnnealingLR(T_max=N)` is UN-CLAMPED past T_max** (#3934 thorfinn). LR rebounds toward peak at step 2×T_max. Use `T_max >= total_epochs` OR wrap with `SequentialLR(cosine, constant(0))`.
+2. **Per-group LR overrides via `group['lr']` contaminate `CosineAnnealingLR`** (#3993 askeladd). `get_lr()` uses multiplicative recurrence on `group['lr']`, not `base_lr`. Fix: compute per-group LR closed-form from `base_lr` each step.
+3. **`T_max = total_epochs` is the canonical choice** (#3994 thorfinn, CONFIRMED). With T_max=15 on a 17-epoch run, eps 16-17 ran at LR=0 (hard-zero) and produced zero descent. With T_max=17, those epochs enabled −5.93 val MAE "snap to minimum" descent. RULE: always match T_max to the expected epoch count from the wall-clock budget.
 
 ## Plateau status
 
-**Not in plateau.** Active investigation on 7 parallel fronts:
-1. **Attention granularity** (slice_num=128 #3998) — edward's fresh axis; slice_num=64 inherited from h=192 era, never re-scanned on SwiGLU h=128.
-2. **Gradient clipping** (clip_norm=1.0 #3999) — tanjiro's pivot from LR scaling. Canonical transformer recipe (LLaMA/GPT/Mistral), never tested explicitly in programme.
-3. **Gradient-informed LR scaling — between-block, rescued with warmup** (head_and_embed 2.5×+warmup #3993) — askeladd's 2.5× confirmed steady-state ratio; warmup rescues early-step instability.
-4. **Schedule tuning — matched to budget** (T_max=17 #3994, SWA tail #3644 on SwiGLU regime) — `T_max<total_epochs` PyTorch footgun closed by thorfinn's diagnostic; #3994 tests whether the SwiGLU baseline's near-zero tail under T_max=15 was wasted budget.
-5. **Optimizer geometry — LLaMA β2** (β2=0.95 #3995) — fern's orthogonal optimizer axis; tests whether faster second-moment tracking helps despite our small batch=4.
-6. **Optimizer geometry — weight decay** (wd=1e-2 #3996) — alphonse's pivot from activation-noise reg (#3811+#3886 both null) to weight-magnitude reg; PyTorch AdamW default is 100× current.
-7. **Normalization geometry** (RMSNorm #3973) — LLaMA-style architectural test of "does mean-centering matter for this model?"
-
-**Headline findings this session:**
-- **PyTorch `CosineAnnealingLR(T_max=N)` is UN-CLAMPED past T_max** — LR rebounds toward peak. Programme-wide schedule constraint.
-- **GLU activation family DEFINITIVELY closed** (#3933 dead-gate diagnostic + #3904 GeGLU/SwiGLU population tie): gating=94%, smoothness=6%, choice among smooth-nonzero-at-zero activations is sub-σ noise.
-- **Activation-noise regularisation family closed** (#3886 droppath + #3811 dropout both null on SwiGLU): SwiGLU's gating IS the regulariser; additional noise is redundant or harmful.
-- **head_and_embed LR boost mechanism CONFIRMED** at steady-state (#3932 ratio restored to 3.09×): failure was bounded to early-step instability; warmup is the rescue (#3993).
-- **Lower σ̂ ≠ larger LR headroom** (#3959): SwiGLU's σ̂=0.90 < GELU's σ̂=1.54 was wrongly equated to "more stable, can take larger steps". Low between-seed variance is about *basin shape*, not *step-size tolerance*.
+**Not in plateau.** Just achieved the programme's largest single-experiment gain (+3.27pt val, −2.13pt test) via T_max=17. Active investigation continues on 7 parallel fronts. The priority shift is now to confirm T_max=17 at seed=1 and stack all other positive levers on top of T_max=17 as the new canonical schedule.

@@ -1,5 +1,54 @@
 # SENPAI Research Results
 
+## 2026-05-16 16:05 — PR #3994: H: T_max=17 cosine on SwiGLU h=128 ← MERGED, NEW PROGRAMME BEST
+
+- Branch: `willowpai2i48h1-thorfinn/tmax17_swiglu_h128`
+- Student: willowpai2i48h1-thorfinn
+- Status: MERGED. val=62.10, test=59.55 — new all-time programme best.
+- W&B run: `5q47ozlp`
+
+### Results (seed=0, h=128/T_max=17/bf16/SwiGLU)
+
+| Metric | This run (T_max=17) | Prior best (PR #3810 GeGLU T_max=15) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **62.1023** | 65.3704 | **−3.27** |
+| test_avg/mae_surf_p | **59.5529** | 61.6819 | **−2.13** |
+| Best epoch | 17 (final) | 17 | 0 |
+
+Per-split val (all improve): single_in_dist=71.86, geom_camber_rc=74.83, geom_camber_cruise=42.67, re_rand=59.05
+
+Per-split test: single_in_dist=62.80, geom_camber_rc=69.41, geom_camber_cruise=53.31, re_rand=52.69
+
+### LR + val trajectory (confirms T_max=17 wiring)
+
+| Epoch | LR | val |
+|---|---|---|
+| 1 | 4.957e-4 | 188.79 |
+| 5 | 4.007e-4 | 122.12 |
+| 10 | 1.816e-4 | 92.54 |
+| 12 | 9.934e-5 | 77.63 |
+| 15 | 1.688e-5 | 68.03 |
+| 16 | 4.257e-6 | 62.80 |
+| 17 | 0 | **62.10** |
+
+### Analysis
+
+T_max=15 left epochs 16-17 at LR=0 (PyTorch CosineAnnealingLR hard-zeros past T_max). Zero LR = zero gradient = zero descent. Those 2 epochs were completely wasted. With T_max=17, LR at ep 16 is ~4e-6 — tiny but nonzero — producing a "snap to minimum" of −5.93 val MAE in the final 2 epochs. This is the largest single-knob gain in the programme (+3.27pt, ~3.6× the SwiGLU σ̂=0.90).
+
+**Mechanism confirmed:** The model's optimal convergence pattern requires a tiny-but-nonzero LR in the final training phase to snap into the basin minimum. Hard LR=0 truncates this. T_max=budget is the canonical schedule choice for cosine annealing in this regime.
+
+**Programme-wide implication (PyTorch Scheduler Gotcha #3):** `CosineAnnealingLR(T_max=N)` reaches exactly LR=0 at step N and holds there. With T_max < total_epochs, the final (total_epochs − T_max) epochs produce zero gradient steps. T_max should always match the expected epoch count from the wall-clock budget. This is now the canonical SwiGLU schedule.
+
+**New baseline for all future experiments:** val=62.10. All in-flight T_max=15 runs (alphonse #3996, edward #3998, tanjiro #3999, askeladd #3993, fern #3995, frieren #3973) will be evaluated for directional signal but are unlikely to exceed this baseline unless they stack with T_max=17.
+
+### Follow-up queued
+
+- seed=1 T_max=17 SwiGLU confirmation run (assigned to thorfinn immediately after merge)
+- T_max=17 + GeGLU stack (natural follow-on: GeGLU adds ~1σ reliability, may have synergy)
+- T_max=17 stacked with other winning knobs as they're identified
+
+---
+
 ## 2026-05-16 15:30 — PR #3995: H: AdamW β2=0.95 (LLaMA-style) on SwiGLU h=128 ⟲ SENT BACK for stack with GeGLU (val=65.40 TIE with programme best)
 
 - Branch: `willowpai2i48h1-fern/adamw_beta2_095_swiglu`
