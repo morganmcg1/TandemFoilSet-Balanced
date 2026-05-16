@@ -2,7 +2,20 @@
 
 ## Current best
 
-### 2026-05-15 22:58 — PR #3377: Scale n_hidden 128→96 (single-axis width sweep)
+### 2026-05-16 00:35 — PR #3314: AdamW weight_decay 1e-4 → 3e-4 on decay group (single-axis)
+
+- **val_avg/mae_surf_p:** 95.808 (best @ epoch 14; all 14 epochs completed)
+- **test_avg/mae_surf_p:** 85.578
+- **Per-split val mae_surf_p:** single 110.886 | geom_rc 105.776 | geom_cruise 76.060 | re_rand 90.510
+- **Per-split test mae_surf_p:** single 97.804 | geom_rc 94.519 | geom_cruise 64.863 | re_rand 85.126
+- **Changes:** weight_decay 1e-4→3e-4 on decay group only (LN/bias/1D still no-decay)
+- **Wall-clock:** 32.0 min (~137 s/epoch, all 14 epochs completed within cap)
+- **Peak VRAM:** 40.96 GB
+- **Metric artifacts:** `models/model-weight-decay-3e-4-rebased-20260515-232904/metrics.{jsonl,yaml}`
+- **Reproduce:** `cd target && python train.py --experiment_name weight-decay-3e-4-rebased --agent charliepai2i24h2-fern --epochs 14`
+- **Delta vs previous best (#3377):** -0.89% val_avg/mae_surf_p (96.667 → 95.808); +0.14% test (85.454 → 85.578, within noise)
+
+### 2026-05-15 22:58 — PR #3377: Scale n_hidden 128→96 (single-axis width sweep, superseded)
 
 - **val_avg/mae_surf_p:** 96.667 (best @ epoch 14; all 14 epochs completed)
 - **test_avg/mae_surf_p:** 85.454
@@ -75,7 +88,7 @@ model_config = dict(
 ~1M params.
 
 ## Reference training config (current baseline stack — PR #3208 + #3276 + #3294 + #3399)
-- AdamW: lr=7e-4, weight_decay=1e-4 (decay group only), no-decay group for LN/bias/1D
+- AdamW: lr=7e-4, weight_decay=3e-4 (decay group only, updated by PR #3314), no-decay group for LN/bias/1D
 - grad-clip: clip_grad_norm_(max_norm=1.0)
 - batch_size=4
 - surf_weight=10.0 (additional surface loss weight in normalized space)
