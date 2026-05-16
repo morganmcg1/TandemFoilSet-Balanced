@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-16 16:50
+- **Date**: 2026-05-16 17:28
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
-- **Round**: 5 active — Lion optimizer compounding phase (H58 rebase pending; H67-H73 in-flight; H65 closed)
+- **Round**: 5 active — Lion optimizer compounding phase (H58 rebase started 17:24Z; H67-H73 in-flight)
 - **Most recent human research directive**: None received
 
 ## Current Best
@@ -49,11 +49,7 @@ Test 3-split avg (excl. cruise NaN bug): **54.5026**
 
 | PR | Student | Hypothesis | Priority | Expected |
 |----|---------|------------|----------|---------|
-| **#3965** | edward | **H58 REBASE: Lion + GEGLU + RMSNorm verification** | **CRITICAL** | ~45-47 (rebase ongoing) |
-| **#3988** | alphonse | H61: GEGLU + LR down (7e-4, 5e-4) at AdamW | MEDIUM | ~56.5-57 |
-| **#3990** | askeladd | H62: GEGLU + mlp_ratio (3, 4) | MEDIUM | ~56-57 |
-| **#3991** | frieren | H63: DropPath (0.05, 0.10) | MEDIUM | ~56-57 |
-| **#3992** | nezuko | H64: Huber δ_p retune (0.1, 0.5) | MEDIUM | ~56.5-57 |
+| **#3965** | edward | **H58 REBASE: Lion + GEGLU + RMSNorm verification** | **CRITICAL** | ~45-47 (rebase started 17:24Z) |
 | **#4020** | alphonse | **H67: Lion + GEGLU + RMSNorm compound** | **CRITICAL** | ~45-48 |
 | **#4022** | askeladd | **H68: Lion β₂ sweep (0.95, 0.999)** | **HIGH** | ~46-48 |
 | **#4023** | fern | **H69: Lion + linear LR warmup** | **HIGH** | ~45-47 |
@@ -62,9 +58,11 @@ Test 3-split avg (excl. cruise NaN bug): **54.5026**
 | **#4048** | thorfinn | **H72: slice_num=96 + RMSNorm compound** | **HIGH** | ~56.0-56.5 |
 | **#4055** | tanjiro | **H73: Lion + slice_num=96 compound** | **CRITICAL** | ~45-47 |
 
-All 8 students WIP. Zero idle. **H65 closed** (EMA negative, both arms regressed — Polyak averaging needs longer budget than wall allows).
+All 8 students WIP, 7 Lion-track + 1 slice/RMSNorm + 1 EMA-closed. Tanjiro actively training at 17:27Z (GPU 99%, 52GB). Other 6 pods completed branch checkout, train.py modified, about to launch.
 
-**Rate-limit note:** All 8 pods were blocked 15:30-16:22Z on shared GitHub API rate limit. Pods are recovering — edward's confirmed back at 16:23Z. H67-H71 students may still be picking up their assignments.
+**Closed this round:** H61 (LR-down GEGLU), H62 (mlp_ratio), H63 (DropPath), H64 (Huber δ_p retune), H65 (EMA).
+
+**Rate-limit note:** Edward's pod cleared rate-limit at 17:24:44Z (after 50min wait). Other pods recovered earlier (~17:21Z) and are launching training.
 
 ## Lever Status
 
