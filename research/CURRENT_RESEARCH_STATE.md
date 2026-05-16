@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 11:05
+- **Date:** 2026-05-16 11:50
 - **Launch:** willow-pai2i-48h-r1 (round 6 — SwiGLU/GeGLU era; programme best val=65.37)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN)
@@ -29,41 +29,58 @@ Beat the Transolver baseline on `val_avg/mae_surf_p` (lower is better). Paper-fa
 - σ̂=0.90 < σ̂(GELU)=1.54 — SwiGLU is *more* consistent, not less
 - GeGLU programme best (65.37, single-seed) lies −1.23σ from SwiGLU μ̂ → **within noise; population-level equivalence unresolved**
 - **Recommended strong win bar: 2-seed mean val < 64.7** (= 2σ below SwiGLU μ̂)
-- GeGLU multi-seed confirmation → fern PR #3904 (just assigned)
+- GeGLU multi-seed confirmation → fern PR #3904
 
-## Consolidated SwiGLU gradient landscape (from #3768 + #3840 diagnostics)
+## Consolidated SwiGLU gradient landscape (from #3768 + #3840 + #3832 diagnostics)
 
 **Between blocks:** head_and_embed (3.48) > block_4 (1.41) > block_0 (1.12) > middle blocks (~0.17)
 **Within each block:** fc_main > fc_gate (ratio gate:main = 0.6-0.75, all blocks, all epochs)
 
 Dominant learning: (1) input/output ends of network, (2) value path within each block. Gate is a stable modulator with smaller gradient mass.
 
-**Implications for LR scaling:**
-- ✓ head_and_embed boost (#3832) — targeting the between-block bottleneck
-- ✗ fc_gate boost (#3840) — wrong target (gate is not the bottleneck)
-- → fc_main boost (#3888) — correct within-block target (value path dominates)
+**Implications for LR scaling (confirmed by #3832):**
+- head_and_embed 1.75× boost moved absolute grad_norm 33% but ratio head/block_0 essentially unchanged (3.1×→3.3×). Lever direction correct, magnitude undersized.
+- Gradient-equilibrium argument implies ~3.1× as the equilibrium target.
+- → head_and_embed 2.5× (#3932) — geometric midpoint between "undersized 1.75×" and "equilibrium 3.1×"
+- → fc_main 1.5× (#3888) — corrected within-block target
+- ✗ fc_gate boost (#3840) — wrong within-block target
+
+## Per-channel weighting × architecture: a mechanistic map
+
+Cross-context comparison of β_p=20 (from #3611, #3837):
+
+| Width | Activation | β_p=20 effect | Mechanism |
+|-------|-----------|---------------|-----------|
+| h=128 | GELU | rc regress +3.3 | channel saturation |
+| h=192 | GELU | rc improve −2.41 | width-based absorption (extra channels redistribute mass) |
+| **h=128** | **SwiGLU** | **rc partial-improve −0.36** | SwiGLU per-token gating provides *some* of the absorption but not enough |
+
+**Conclusion:** per-channel surface weighting is **width-coupled**, not gating-coupled. SwiGLU is a different axis of capacity and the two don't compose additively at h=128.
 
 ## Active WIP — 8/8 students (zero idle)
 
 | PR | Student | Hypothesis | Status |
 |----|---------|-----------|--------|
-| #3764 | thorfinn | h=192+SwiGLU stacking | Running (rate-limit poll delay, picked up 11:22 UTC) |
-| **#3904** | **fern** | **GeGLU seed confirm (seeds 1+2)** | **NEW — assigned 11:00** |
-| #3832 | askeladd | head_and_embed LR boost 1.75× on SwiGLU | Running |
-| **#3886** | **alphonse** | **DropPath (Stochastic Depth) on SwiGLU** | **NEW — assigned 10:40** |
-| **#3888** | **frieren** | **fc_main LR boost 1.5× within SwiGLU** | **NEW — assigned 10:45** |
-| #3837 | edward | β_p=20 + SwiGLU stacking at h=128 | Running |
-| #3644 | nezuko | Cosine T_max=10 + constant tail + SWA | WIP (rebasing) |
+| **#3934** | **thorfinn** | **T_max=12 cosine on SwiGLU h=128** | **NEW — assigned 11:48** |
+| **#3933** | **edward** | **ReGLU activation (close GLU family)** | **NEW — assigned 11:48** |
+| **#3932** | **askeladd** | **head_and_embed 2.5× LR boost on SwiGLU** | **NEW — assigned 11:48** |
+| #3904 | fern | GeGLU seed confirm (seeds 1+2) | Running |
+| #3888 | frieren | fc_main LR boost 1.5× within SwiGLU | Running |
+| #3886 | alphonse | DropPath (Stochastic Depth) on SwiGLU | Running |
 | #3855 | tanjiro | Bilinear gate (no activation) | Running |
+| #3644 | nezuko | Cosine T_max=10 + constant tail + SWA (rebased onto SwiGLU) | WIP (re-running on SwiGLU regime) |
 
 ## Recently closed PRs (this session)
 
 | PR | Hypothesis | val | Reason |
 |----|-----------|-----|--------|
-| **#3765** | **SwiGLU seed confirm (fern)** | **μ̂=66.48** | **3-seed variance char. MAJOR: seed=0 was lucky low. Canonical μ̂=66.48±0.90. GeGLU population tie unresolved.** |
-| **#3811** | **Dropout 0.1 + SwiGLU (alphonse)** | **μ̂=66.82** | **2-seed null. SwiGLU gating already regularizes sufficiently. OOD-asymmetric help hypothesis rejected.** |
-| **#3840** | **fc_gate LR boost 1.5× (frieren)** | **67.00** | **Modest regression. MAJOR finding: fc_main > fc_gate grad-norm ratio 0.6-0.75. Gate is not the within-block bottleneck.** |
-| #3768 | Inverse-LLRD+SwiGLU (frieren) | 74.01 | Anti-additive. MAJOR finding: grad-norm inverts between-block. |
+| **#3837** | **β_p=20 + SwiGLU (edward)** | **67.58** | **Modest anti-additive regression. MAJOR finding: per-channel weighting is width-coupled.** |
+| **#3832** | **head_and_embed 1.75× (askeladd)** | **67.16** | **Slight regression; lever direction correct, magnitude undersized (head/block_0 ratio essentially unchanged at 3.3×).** |
+| **#3764** | **h=192+SwiGLU stacking (thorfinn)** | **79.22** | **Anti-additive; compute-starvation (12 ep vs 17 at h=128), schedule mismatch — not architectural antagonism.** |
+| #3765 | SwiGLU seed confirm (fern) | μ̂=66.48 | 3-seed variance char. MAJOR: seed=0 was lucky low. Canonical μ̂=66.48±0.90. GeGLU population tie unresolved. |
+| #3811 | Dropout 0.1 + SwiGLU (alphonse) | μ̂=66.82 | 2-seed null. SwiGLU gating already regularizes sufficiently. |
+| #3840 | fc_gate LR boost 1.5× (frieren) | 67.00 | Modest regression. MAJOR finding: fc_main > fc_gate grad-norm ratio. |
+| #3768 | Inverse-LLRD+SwiGLU (frieren) | 74.01 | Anti-additive. Grad-norm inverts between-block. |
 | #3611 | β_p=20 on h=192 (edward) | 86.59 | Within noise; capacity-interaction sign flip. |
 | #3735 | h=192 variance characterization | stale | h=192+GELU obsolete vs SwiGLU floor. |
 | #3678 | Dropout 0.1 on GELU (alphonse) | μ̂=90.27 | Null; now confirmed null on SwiGLU too. |
@@ -84,14 +101,14 @@ Dominant learning: (1) input/output ends of network, (2) value path within each 
 
 ## Next research directions (queue for next idle students)
 
-1. **Bilinear gate (no activation)** — tanjiro #3855 running. Closes the GLU ablation family.
-2. **ReGLU (ReLU gate)** — if bilinear regresses, tests smooth gate necessity.
-3. **fc_main LR boost** — frieren #3888 running. Corrected within-block target.
-4. **head_and_embed LR boost** — askeladd #3832 running. Between-block bottleneck.
-5. **β_p=20 + SwiGLU** — edward #3837 running. Capacity-interaction lever stacking.
-6. **DropPath on SwiGLU** — alphonse #3886 running. Block-granularity regularization.
-7. **T_max scan on SwiGLU/GeGLU** — optimal cosine for gated-FFN convergence.
-8. **SwiGLU + SWA** — nezuko #3644 rebasing.
+1. **head_and_embed 3.0× LR boost** — if 2.5× wins or is undersized, push to equilibrium ratio.
+2. **head_and_embed + block_4 dual boost** — block_4 is 2nd-largest grad-norm group (1.41), might benefit from concurrent boost.
+3. **T_max scan extended** — if T_max=12 wins, scan T_max ∈ {10, 12, 14} for the sweet spot.
+4. **LeakyReGLU** — if ReGLU dies due to dead-gate, LeakyReLU(0.01) rescue.
+5. **Higher base LR (1e-3) on SwiGLU h=128** — lower seed variance suggests stability headroom for higher LR.
+6. **RMSNorm vs LayerNorm swap** — modern LLaMA-style. Param-matched, single-knob test of normalization geometry.
+7. **Combine winners (Round 7)** — if multiple PRs win independently, test their stacks.
+8. **SwiGLU + SWA over SwiGLU-converged checkpoint** — extends nezuko's mechanism finding if her #3644 SWA wins on SwiGLU.
 
 ## Dead-end lever classes (do not revisit)
 
@@ -104,10 +121,14 @@ Dominant learning: (1) input/output ends of network, (2) value path within each 
 7. **unified_pos=True** — #3566. Incompatible with 2D asymmetric flow.
 8. **Per-channel Huber-δ** — #3574. Loss-formulation exhausted.
 9. **Any h=128+GELU experiments** — val ceiling ~88 < new floor 65.37.
+10. **Per-channel weighting (β_p=20) on h=128 width** — #3611, #3837. Width-coupled; needs h=192-class capacity to absorb redistribution.
+11. **h=192+SwiGLU stacking under current budget** — #3764. Compute-starved at 12 epochs; needs faster-converging h=192 setup before retesting.
+12. **head_and_embed 1.75× LR boost** — #3832. Right direction, undersized lever; superseded by 2.5× #3932.
 
 ## Plateau status
 
-**Not in plateau.** Active investigation on 3 parallel fronts:
-1. **GLU ablation family** (bilinear #3855, ReGLU queued) — mechanistic science on gating.
-2. **Gradient-informed LR scaling** (head_and_embed #3832, fc_main #3888) — frieren's inversion finding points at bottlenecks.
-3. **Lever stacking** (β_p+SwiGLU #3837, DropPath+SwiGLU #3886, SWA+SwiGLU #3644).
+**Not in plateau.** Active investigation on 4 parallel fronts:
+1. **GLU ablation family** (bilinear #3855, ReGLU #3933) — mechanistic science on gating activation choice.
+2. **Gradient-informed LR scaling** (head_and_embed 2.5× #3932, fc_main 1.5× #3888) — frieren's inversion finding points at bottlenecks; #3832 confirms lever direction.
+3. **Schedule tuning** (T_max=12 #3934, SWA tail #3644 on SwiGLU regime) — aligning cosine to actual budget on h=128/gated-FFN.
+4. **Regularization layered with gating** (DropPath #3886) — block-granularity, complementary to SwiGLU's per-token gates.

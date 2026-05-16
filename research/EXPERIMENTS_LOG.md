@@ -1,5 +1,117 @@
 # SENPAI Research Results
 
+## 2026-05-16 11:44 — PR #3837: H: β_p=20 + SwiGLU h=128 ✗ CLOSED (modest anti-additive regression val=67.58)
+
+- Branch: `willowpai2i48h1-edward/betap20_swiglu_h128`
+- Student: willowpai2i48h1-edward
+
+### Results (W&B `zqr53e5y`, seed=0, h=128/T_max=15/bf16/SwiGLU + surf_weight_p=20)
+
+| Metric | SwiGLU #3680 | β_p=20 + SwiGLU | Δ |
+|--------|:------------:|:---------------:|:---:|
+| **val_avg/mae_surf_p** | **65.4439** | **67.5843** | **+2.14** |
+| **test_avg/mae_surf_p** | **62.0357** | **63.4148** | **+1.38** |
+
+### Critical mechanistic finding: per-channel weighting is width-coupled
+
+Cross-context comparison of β_p=20 across model variants:
+
+| Config | val rc Δ | test rc Δ | Verdict |
+|--------|:--------:|:---------:|:-------:|
+| β_p=20 on h=128+GELU (#3611) | regress +3.3 | n/a | regression |
+| β_p=20 on h=192+GELU (#3611) | improve −1.30 | improve −2.41 | win |
+| **β_p=20 on h=128+SwiGLU (this PR)** | **regress +1.59** | **improve −0.36** | **mild partial recovery** |
+
+The realized β/α ratio (2.66 by epoch 15) matches what h=192+GELU produced (~2.5). SwiGLU is not changing the gradient-distribution mechanics — it's strictly a per-token feature selector, not a per-channel rebalancer. Test rc shows only **partial** absorption (-0.36) under SwiGLU vs **meaningful** absorption (-2.41) under h=192+GELU. The absorption mechanism is **width-specific** (more channels to absorb redistributed mass), not generic excess capacity.
+
+### Per-channel unweighted surface losses (best epoch 15)
+| Channel | Loss | Note |
+|---|---:|---|
+| Ux | 0.00197 | smallest |
+| Uy | 0.00252 | mid |
+| p | 0.00588 | dominant (×2.4 over Uy) |
+
+p is intrinsically harder; β=20 concentrates gradient mass on p but starves Ux/Uy at h=128. SwiGLU's gating was already doing per-token p-selection implicitly. The two levers don't compose additively.
+
+### Closure rationale
+
+Val=67.58 (+2.14) within seed noise of SwiGLU floor 66.48±0.90 — at lower edge of "modest regression" zone. Per-channel weighting requires h=192-class width to stack with SwiGLU. Adding to dead-end lever classes: "per-channel weighting is width-coupled; SwiGLU's gating does not substitute for width-driven absorption."
+
+### Follow-up: PR #3933 edward ReGLU
+
+Reassigned edward to close the GLU ablation family (SwiGLU/GeGLU/Bilinear/ReGLU) — isolates whether the *gating mechanism* or *smoothness near zero* matters.
+
+---
+
+## 2026-05-16 11:44 — PR #3832: H: head_and_embed LR boost 1.75× on SwiGLU ✗ CLOSED (slight regression val=67.16 — lever direction correct, magnitude undersized)
+
+- Branch: `willowpai2i48h1-askeladd/head_embed_lr_boost_175`
+- Student: willowpai2i48h1-askeladd
+
+### Results (W&B `5n405b7w`, seed=0, h=128/T_max=15/bf16/SwiGLU + head_and_embed LR=8.75e-4)
+
+| Metric | SwiGLU #3680 | head_and_embed 1.75× | Δ |
+|--------|:------------:|:--------------------:|:---:|
+| **val_avg/mae_surf_p** | **65.44** | **67.16** | **+1.72** |
+| **test_avg/mae_surf_p** | **62.04** | **62.63** | **+0.59** |
+
+### Critical diagnostic: lever direction correct, magnitude undersized
+
+Per-group grad_norm at epoch 5 (vs frieren's #3768 baseline):
+
+| Group | This run | Baseline #3768 | Δ |
+|-------|:--------:|:--------------:|:---:|
+| block_0 | 0.71 | 1.12 | −37% |
+| block_1 | 0.44 | 0.18 | +144% (mid-block doubling — side-effect of head_and_embed boost) |
+| block_2 | 0.37 | 0.17 | +118% |
+| block_3 | 0.32 | 0.16 | +100% |
+| block_4 | 1.42 | 1.41 | ≈0% |
+| **head_and_embed** | **2.32** | **3.48** | **−33% (absolute drop)** |
+| **Ratio head/block_0** | **3.27×** | **3.11×** | **essentially unchanged** |
+
+The 1.75× boost moved the right group (absolute grad_norm dropped 33%), but the *relative* head/block_0 ratio is essentially unchanged. Gradient-equilibrium argument implies the actual target multiplier is ~3.1× (geometric ratio of grad norms).
+
+### Closure rationale
+
+Val=67.16 slight regression at zone-boundary. Lever direction confirmed correct (right group moved); magnitude was undersized.
+
+### Follow-up: PR #3932 askeladd head_and_embed 2.5×
+
+Reassigned askeladd to test the magnitude correction at 2.5× (geometric midpoint between "undersized" 1.75× and "equilibrium" 3.1×). Direct continuation of this PR's diagnostic.
+
+---
+
+## 2026-05-16 11:44 — PR #3764: H: h=192+SwiGLU stacking ✗ CLOSED (anti-additive val=79.22, compute-starved at h=192)
+
+- Branch: `willowpai2i48h1-thorfinn/h192_swiglu_stacking`
+- Student: willowpai2i48h1-thorfinn
+
+### Results (W&B `wglblj8x`+`jeec5juh`, 2 seeds, h=192/T_max=18/SwiGLU)
+
+| Metric | h=128+SwiGLU #3680 | h=192+SwiGLU 2-seed | Δ |
+|--------|:------------------:|:-------------------:|:---:|
+| **val_avg/mae_surf_p** | **65.44** | **79.22** | **+13.78** |
+| **test_avg/mae_surf_p** | **62.04** | **75.32** | **+13.28** |
+
+### Compute starvation, not architectural antagonism
+
+| Config | Epochs in 30-min budget | T_max | Cosine progress at wall-clock cap |
+|--------|:------:|:------:|:---:|
+| h=128+SwiGLU (#3680) | 17 | 15 | fully annealed (lr→0 by ep 15) |
+| **h=192+SwiGLU (this PR)** | **12** | **18** | **~67% complete (lr≈1.7e-4 at cap)** |
+
+Best epoch = last completed → cosine schedule never fully annealed. Gating effect *does* partially transfer (h=192+SwiGLU beats h=192+GELU by −7.59 val / −6.03 test), but the compute starvation dominates.
+
+### Closure rationale
+
+Val=79.22 anti-additive regression in zone "close" by decision tree. Student's diagnosis is correct: schedule mismatch + budget starvation, not architectural failure.
+
+### Follow-up: PR #3934 thorfinn T_max=12 SwiGLU h=128
+
+Applying thorfinn's own closing insight: the cosine schedule isn't tuned to actual training-length budget. T_max=12 on h=128 gives 5 epochs of near-zero-LR tail (implicit weight averaging), tests whether the schedule is the bottleneck on the h=128 frontier.
+
+---
+
 ## 2026-05-16 11:00 — PR #3765: H: SwiGLU h=128 seed confirm ✗ CLOSED (val=66.48 mean, doesn't beat 65.37 best — but CRITICAL variance characterization)
 
 - Branch: `willowpai2i48h1-fern/h128-swiglu-seed-confirm`
