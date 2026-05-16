@@ -1,8 +1,9 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 22:00 UTC
+- **Last updated:** 2026-05-16 22:10 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
-- **Most recent direction from human researcher team:** None (no open issues at 22:00 UTC)
+- **Most recent direction from human researcher team:** None (no open issues at 22:10 UTC)
+- **PENDING WIN (rebase-in-flight):** PR #4142 (nezuko Lookahead k=5 α=0.5 on slice=8) hit val=53.6164 / test=53.5143 — beats new alphonse baseline by −5.0% / −3.3%. Sent back for rebase due to argparse conflict with alphonse's β2 changes. Result is the biggest single optimizer-axis win in the programme; expecting confirmation post-rebase.
 
 ## Current best baseline (after alphonse #4067 merge — plateau BROKEN)
 
@@ -52,7 +53,7 @@ After 8 consecutive closes since fern's #4062 merge at 18:40 UTC, **alphonse's �
 | **#4163** | **fern** | mesh rotation aug ±15° + horizontal flip | New slice=16+β2=0.95 baseline | Data: targets dominant OOD-camber residual via rotation symmetry |
 | **#4162** | **alphonse** | β2=0.95 + slice=8 compounding test | New slice=16+β2=0.95 baseline | Critical: does the β2 axis compound with slice=8 too? |
 | #4151 | thorfinn | Layer-wise LR decay (factor=0.85) | Old slice=8 baseline | Optimizer: per-layer LR scaling (BERT/ViT proven) |
-| #4142 | nezuko | Lookahead optimizer (k=5, α=0.5) | Old slice=8 baseline | Optimizer: in-training k-step averaging |
+| **#4142** | **nezuko** | **Lookahead k=5 α=0.5 (REBASE-IN-FLIGHT)** | Old slice=8 baseline | **Optimizer: confirmed val=53.62 / test=53.51 — biggest single optimizer-axis win. Sent back for rebase + reconfirm; expecting clean merge after re-run** |
 
 **NOTE**: 2 carryover PRs (#4151 thorfinn LLRD, #4142 nezuko Lookahead) were submitted against the **OLD slice=8 baseline (val=56.8954)**, but the merged baseline is now slice=16 + β2=0.95 (val=56.4260). The merge decision tree applies on review:
 - If result beats val=56.4260 AND test=55.3387 → MERGE
@@ -143,7 +144,9 @@ Plateau is broken; we're back in confident-progress mode. Highest-impact next ex
 - Lookahead k=5 α=0.5 (nezuko #4142)
 
 ### Pending follow-ups (queue for round-16)
-- If β2=0.95+slice=8 wins: β2 sweep on slice=8 stack at {0.90, 0.99}
+- **Highest priority: slice=8 + Lookahead + β2=0.95 compounding triple** (depends on nezuko rebase confirming)
+- **k bracket on Lookahead**: k=10 (less aggressive variance reduction), α=0.3 (gentler slow pull) — nezuko's own suggestions; bracket toward saturation
+- If β2=0.95+slice=8 wins (alphonse #4162): β2 sweep on slice=8 stack at {0.90, 0.99}
 - If mesh aug wins: smaller θ sweep ({5°, 10°, 15°}) + larger flip
 - If bs=8 wins: bs=16 sweep
 - If β1=0.85 wins: sweep β1 ∈ {0.8, 0.85, 0.9, 0.95}

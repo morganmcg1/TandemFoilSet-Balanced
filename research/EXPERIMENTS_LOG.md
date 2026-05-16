@@ -1,5 +1,30 @@
 # SENPAI Research Results
 
+## 2026-05-16 22:10 — PR #4142 (nezuko Lookahead): MAJOR WIN, sent back for rebase
+
+### Sent-back: PR #4142 (nezuko) — Lookahead(k=5, α=0.5) on slice=8 stack
+
+**This is the biggest single optimizer-axis win in the programme history**, contingent on a clean post-rebase confirmation. Result against the OLD slice=8 baseline AND against the new alphonse baseline:
+
+| Metric | This run (`8dfoshvi`) | New alphonse baseline | Δ vs new baseline |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **53.6164** | 56.4260 | **−2.81 (−4.98%)** |
+| `test_3split/mae_surf_p` | **53.5143** | 55.3387 | **−1.82 (−3.30%)** |
+
+**All 4 val splits improved**:
+- val_single_in_dist: 64.108 (−1.66% vs new baseline 65.188)
+- val_geom_camber_rc: 65.622 (**−2.25%** vs new baseline 67.131 — dominant residual reduced further)
+- val_geom_camber_cruise: 32.903 (−13.24% vs new baseline 37.922 — huge OOD-camber-cruise improvement)
+- val_re_rand: 51.832 (−6.55% vs new baseline 55.464)
+
+**W&B verification (8dfoshvi)**: val_avg matches exactly; per-split test values match exactly (57.13/59.92/43.49); test_3split = (57.13+59.92+43.49)/3 = 53.514 ✓.
+
+**Mechanism**: Lookahead pulls fast→slow weights every 5 steps (75 syncs per epoch at slice=8). The slow weights live in a smoothed region of parameter space throughout training, not just at the end (where SWA's post-hoc averaging needed a converged tail we don't have). Composes with EMA decay=0.99 at a different time-scale. Specifically explains the cruise improvement (−13%): Lookahead's smoothing absorbed the loss-landscape variance that previously made val_geom_camber_cruise the most unstable split.
+
+**Action taken**: SENT BACK FOR REBASE. The PR was submitted against the OLD slice=8 baseline; the advisor branch has since updated with alphonse's β2=0.95 winner (PR #4067). Merge conflict in train.py argparse + optimizer-setup regions. Nezuko will rebase, confirm both Lookahead and β2=0.95 CLI flags coexist, re-run with the exact same command (no β2 change — keep slice=8, no β2=0.95, isolate Lookahead win), and resubmit. After the rebased win confirms, the obvious next compounding test is slice=8 + Lookahead + β2=0.95 (next round).
+
+**Why we ARE NOT merging without rebase**: protocol — re-running on the merged stack catches any subtle interaction with the new β2 flag, ensures the win is reproducible end-to-end, and avoids landing code that compiled against a stale train.py.
+
 ## 2026-05-16 22:00 — 3 carryover closures (#4141, #4102, #4101) + 3 new assignments (#4170, #4171, #4172)
 
 After the alphonse #4067 merge, the 3 carryover PRs that had been submitted against the old slice=8 baseline came in. None beat the new baseline (val=56.4260). All 3 closed; corresponding students reassigned to fresh orthogonal axes on the new slice=16+β2=0.95 stack.
