@@ -1,93 +1,105 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 06:10
-- **Launch:** willow-pai2i-48h-r1 (round 5/6; new all-time best just merged — PR #3562)
+- **Date:** 2026-05-16 07:45
+- **Launch:** willow-pai2i-48h-r1 (round 6 — SwiGLU era; new all-time best 65.44)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
-- **Budget per run:** 30 min wall clock, 50 epochs max (~18 epochs achievable in bf16 at bs=4 h=128; ~13 epochs at h=192)
-- **Latest direction from human team:** None (no open issues as of 06:10)
+- **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/SwiGLU, ~13ep at h=192+SwiGLU)
+- **Latest direction from human team:** None (no open issues as of 07:45)
 
 ## Research contract
 
-Beat the Transolver baseline on `val_avg/mae_surf_p` (lower is better). Paper-facing metric: `test_avg/mae_surf_p` (all 4 splits valid since PR #3309).
+Beat the Transolver baseline on `val_avg/mae_surf_p` (lower is better). Paper-facing metric: `test_avg/mae_surf_p`.
 
-## Current best baseline
+## Current best baselines
 
-| Metric | Value | Source |
-|---|---|---|
-| **val_avg/mae_surf_p (new all-time best)** | **86.8095** | PR #3562, W&B `hzxs6zx9` |
-| **test_avg/mae_surf_p (paper-facing)** | **81.3514** | PR #3562 |
-| **h=192 informal 4-run mean** | ~89.70 (σ̂≈2.97) | PR #3562 informal |
-| **h=128 canonical μ̂** | 90.77 ± σ̂=1.54 | PR #3546 (old config) |
-| **Win threshold (h=192, TBD)** | val < μ̂(h=192) − σ̂(h=192) | Pending PR #3735 variance char |
+| Config | val_avg | test_avg | Source | Note |
+|--------|---------|---------|--------|------|
+| **h=128+SwiGLU (PROGRAMME BEST)** | **65.44** | **62.04** | PR #3680, W&B `8on2llcv`, seed=0 | Requires `--use_swiglu` + h=128/T_max=15 override |
+| h=192+GELU (advisor default) | 86.81 | 81.35 | PR #3562 | Current train.py default |
+| h=128+GELU μ̂ (canonical) | 90.77 ± 1.54 | 85.85 ± 0.67 | PR #3546 | Old 4-seed canonical |
 
-⚠️ **The h=192 win threshold is not yet calibrated.** PR #3735 (askeladd) will establish μ̂ and σ̂ for the new architecture. Until then, use val < 86.81 as the point-estimate threshold and val < 89.2 as the rough distributional threshold.
+**⚠️ Two unresolved questions before declaring a new canonical:**
+1. **Seed reproducibility**: val=65.44 is single seed=0 — fern #3765 running seeds 1+2 to confirm
+2. **h=192 stacking**: does SwiGLU compound with capacity? — thorfinn #3764
+
+**Effective win threshold** (pending seed confirmation): val < 65.44 on the h=128+SwiGLU or h=192+SwiGLU config.
 
 ## Merged PRs (all)
 
 | PR | Hypothesis | val_avg | test_avg |
 |----|-----------|---------|---------|
 | #3159 | Huber loss δ=0.1 | 112.90 | 115.76 |
-| #3309 | NaN fix (cruise test) | 112.83 | 106.60 |
+| #3309 | NaN fix | 112.83 | 106.60 |
 | #3317 | Cosine T_max=15 | 91.33 | 88.43 |
-| #3480 | bf16 autocast (bs=4) | 87.91 | 83.38 |
+| #3480 | bf16 autocast | 87.91 | 83.38 |
 | #3546 | Seed control + variance | μ̂=90.77, σ̂=1.54 | μ̂=85.85, σ̂=0.67 |
-| **#3562** | **h=192/slice=96/T_max=18** | **86.81 ← BEST** | **81.35 ← BEST** |
+| #3562 | h=192/slice=96/T_max=18 | 86.81 | 81.35 |
+| **#3680** | **SwiGLU activation** | **65.44** | **62.04** |
 
 ## Active WIP — 8/8 students (zero idle)
 
 | PR | Student | Hypothesis | Status |
 |----|---------|-----------|--------|
-| #3735 | askeladd | **h=192 4-seed σ̂ variance characterization** | **NEW — assigned 06:05** |
-| #3678 | alphonse | Dropout attn_drop=proj_drop=0.1, 2-seed | WIP |
-| #3611 | edward | Per-channel surf weight β_p=20 (REBASE on h=192) | **SENT BACK for rebase + retest on h=192** |
-| #3680 | thorfinn | SwiGLU activation in MLP blocks (h=128) | WIP |
-| #3644 | nezuko | Cosine T_max=10 + constant LR tail + SWA | **SENT BACK for rebase** (CONFLICTING) |
-| #3721 | fern | DropPath / Stochastic Depth rate=0.1 | WIP (h=128 config) |
-| #3722 | frieren | Inverse-LLRD (γ_inv=1.176, boost bottom block) | WIP (h=128 config) |
-| #3724 | tanjiro | Corrected h-flip (flip pos_z+AoA+Uy, preserve camber) | WIP (h=128 config) |
+| #3764 | thorfinn | **h=192+SwiGLU stacking** | **NEW — assigned 07:30** |
+| #3765 | fern | **SwiGLU h=128 seed confirm (seeds 1+2)** | **NEW — assigned 07:32** |
+| #3768 | frieren | **Inverse-LLRD+SwiGLU stacking** | **NEW — assigned 07:40** |
+| #3735 | askeladd | h=192 4-seed σ̂ variance char | WIP (running) |
+| #3678 | alphonse | Dropout 0.1 on h=128+GELU (2-seed) | **STALE — nudged for status** |
+| #3611 | edward | Per-channel β_p=20 (rebasing onto h=192) | WIP (rebasing) |
+| #3724 | tanjiro | Corrected h-flip aug | WIP |
+| #3644 | nezuko | Cosine T_max=10 + constant tail + SWA | WIP (rebasing) |
 
-**Note:** PRs #3680, #3721, #3722, #3724 were designed for h=128. If they beat val < 89.2 on h=128, they're directionally promising and should be retested on h=192 as a stacking confirmation before merging.
+## Recently closed PRs
 
-## Immediate priorities (next review cycle)
+| PR | Hypothesis | val | Reason |
+|----|-----------|-----|--------|
+| #3721 | DropPath rate=0.1 | 92.06 | Regression on h=128 GELU; regularization not the bottleneck |
+| #3722 | Inverse-LLRD γ_inv=1.176 | 88.03 | 1σ win on GELU but far above SwiGLU 65.44. Queued as #3768 on SwiGLU. |
+| #3642 | LLRD γ=0.85 | 92.45 | Inverted gradient profile; block_0 needs highest LR |
+| #3566 | unified_pos=True | 102.63 | Encoding mismatch in 2D asymmetric flow |
+| #3574 | Per-channel Huber-δ | 91.78 | Loss-formulation lever exhausted |
 
-1. **PR #3735 askeladd** — h=192 σ̂ characterization. Infrastructure; always merges. Sets the new win threshold.
-2. **PR #3678 alphonse** — dropout 0.1 on h=128. If val < 89.2, send back for retest on h=192 or merge + queue h=192 retest.
-3. **PR #3680 thorfinn** — SwiGLU. Same logic as alphonse.
-4. **PR #3611 edward** — per-channel β_p=20 on h=192. Rebase pending.
-5. **PR #3644 nezuko** — constant-tail SWA. Rebase pending.
-6. **PRs #3721, #3722, #3724** — DropPath, inverse-LLRD, corrected h-flip on h=128.
+## SwiGLU discovery — key implications
 
-## Dead-end lever classes (do not revisit)
+The SwiGLU result (val 90.77→65.44, −27.9%) reframes the entire programme:
 
-1. **Naive horizontal-flip symmetry** — #3542, #3563. Dataset NOT z-symmetric.
-2. **SWA/EMA on cosine T_max=15 frozen tail** — #3580, #3521. Tail LR≈0 makes SWA≈best-by-val.
+1. **The FFN nonlinearity was the dominant unexplored lever.** All prior work (loss shape, LR schedule, weight averaging, regularization) operated within the old GELU regime. The activation class was untouched.
+
+2. **Selective gating is ideally matched to CFD pressure.** Pressure fields have sharp spatial gradients (boundary layers, wake regions). SwiGLU's gate learns to suppress "irrelevant" tokens (far-field, wake) and amplify "relevant" ones (surface boundary layer) per-step. GELU cannot do this.
+
+3. **Param parity is exact.** The 2/3 hidden-dim factor (171 vs 256) preserves n_params=663K vs 663K. This is not a capacity gain — it's purely an architectural expressiveness gain.
+
+4. **All prior h=128+GELU experiments are now sub-threshold.** PRs that showed gains vs GELU μ̂=90.77 (inverse-LLRD 88.03, h=192 89.70) are below the new floor. Future experiments compare to 65.44.
+
+## Immediate next priorities
+
+1. **#3765 fern seed confirmation** — CRITICAL. Must confirm val=65.44 is reproducible before any follow-on work.
+2. **#3764 thorfinn h=192+SwiGLU** — determines the canonical production config.
+3. **#3768 frieren inverse-LLRD+SwiGLU** — lever stacking test.
+4. **#3735 askeladd h=192 variance** — less critical now (h=192+GELU may not be the best config), but still useful for calibration.
+
+## Next research directions (post SwiGLU confirmation)
+
+1. **Wider SwiGLU (h=192/256+SwiGLU)** — stacking gating with capacity, testing #3764.
+2. **SwiGLU + dropout** — if alphonse #3678 shows dropout helps GELU, test dropout+SwiGLU.
+3. **SwiGLU + per-channel surf weight β_p=20** — stacking edward's #3611 lever with the new activation.
+4. **SwiGLU + corrected h-flip** — test tanjiro's #3724 on the SwiGLU baseline.
+5. **SwiGLU + constant-tail SWA** — once nezuko #3644 finishes rebase, test SWA on SwiGLU.
+6. **GeGLU / ReGLU alternatives** — other gating variants (Geometric Linear Unit, ReLU-gated) may outperform SwiGLU on specific splits.
+7. **Per-layer SwiGLU** — selective gating in only some blocks (e.g., only bottom 2 or 3 layers where geometry encoding is primary).
+8. **T_max scan on SwiGLU** — optimal cosine schedule may differ under the new activation's convergence profile.
+
+## Dead-end lever classes (do not revisit in GELU regime)
+
+1. **Naive horizontal-flip** — #3542, #3563. Dataset NOT z-symmetric.
+2. **SWA/EMA on frozen tail** — #3580, #3521. Needs non-frozen tail.
 3. **Uniform surf_weight scan** — #3428, #3174, #3522.
-4. **Cosine warmup** — #3175. Cosine T_max already provides soft warmup.
-5. **High-batch (bs=8)** — #3460. Starves optimizer updates.
-6. **LLRD standard (top-to-bottom decay)** — #3642. Transolver gradients inverted vs BERT.
-7. **unified_pos=True** — #3566. Incompatible with 2D asymmetric-flow Transolver.
-8. **Per-channel Huber-δ tightening** — #3574. Loss-formulation lever exhausted.
-
-## Key insights (cumulative)
-
-1. **bf16 is canonical** (#3480) — 18ep/30min, 32.9GB VRAM at h=128.
-2. **Noise floor σ̂=1.54** (#3546) — win at h=128 needs val < 89.2; noise floor for h=192 TBD (#3735).
-3. **Dataset NOT z-symmetric** (#3542) — falsifies naive h-flip. Only cruise is symmetric.
-4. **SWA/EMA dead on frozen tail** (#3580, #3521) — need non-frozen tail first.
-5. **LLRD gradient inversion** (#3642) — block_0 has highest grad norm in Transolver; standard LLRD starves it.
-6. **unified_pos encoding mismatch** (#3566) — replaces directional coords with radial; incompatible.
-7. **Loss-shape lever exhausted** (#3574) — δ and surf_weight scans converge to baseline.
-8. **Capacity scaling wins** (#3562) — h=192/slice=96 unlocks real gain. bf16 VRAM freed this slot.
-
-## Next research directions (post round 6)
-
-1. **Stack h=192 + winners from h=128 experiments** — once dropout, SwiGLU, DropPath results land, winners should be retested at h=192 to confirm stacking.
-2. **h=256 scaling** — if h=192 σ̂ confirms the gain is real, try h=256 (check VRAM: 49 GB at h=192 → estimate ~70 GB at h=256, within 96 GB limit).
-3. **h=192 + T_max=20 or longer** — epoch 13 best at timeout suggests under-trained. A longer run budget (2 GPUs per student?) or T_max=20 with 30min cap might help.
-4. **Per-domain normalization** — not yet tested on either h=128 or h=192.
-5. **Gradient-norm-proportional per-block LR** — frieren's deeper follow-up from #3642 diagnostics.
-6. **Constant-tail SWA (nezuko #3644)** — after rebase; still worth testing.
+4. **LLRD standard** — #3642. Inverted gradient profile in Transolver.
+5. **unified_pos=True** — #3566. Incompatible with 2D asymmetric flow.
+6. **Per-channel Huber-δ** — #3574. Loss-formulation exhausted.
+7. **DropPath** — #3721. Regularization not bottleneck; gating (SwiGLU) was.
+8. **Any h=128+GELU experiments** — val ceiling ~88 < new floor 65.44.
 
 ## Plateau status
 
-**Not in plateau.** PR #3562 delivered a genuine new all-time best (val −1.1pt, test −2.0pt). Multiple orthogonal lever classes still in flight (regularization, architecture, optimization, data aug). The h=192 capacity unlock opens a new scaling frontier. Next natural question: how far does capacity scaling go?
+**Decidedly not in plateau.** SwiGLU represents the first major architectural insight in this programme — switching from GELU to gated linear units gave a 28% relative val improvement. The SwiGLU era is just beginning; the programme is now exploring what stacks with gating.

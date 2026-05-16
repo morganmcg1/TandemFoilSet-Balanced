@@ -993,3 +993,68 @@ W&B runs: `ecpuvmr3`, `w37awicb`, `df7d07td` | Best epoch: 17
 **Directionally positive on h=128** — 3-seed mean 88.60 is below canonical μ̂=90.77 (−2.17pt, ~1.4σ) and the best run (86.25) beats the prior all-time best (87.91). However, high σ̂=2.63 means the best run is likely a lucky seed. The mean does NOT beat the prior baseline point estimate (88.60 > 87.91), so this is directional but not conclusive.
 
 **Sent back for retest on the new h=192 baseline** (val=86.81, test=81.35) — #3562 merged just before this review. Per-channel surf weight is an orthogonal loss change that should be tested against the current best architecture, not the old one. If β_p=20 helps on h=192, it compounds the gains; if not, the lever is exhausted.
+
+---
+
+## 2026-05-16 07:30 — PR #3680: H: SwiGLU activation in Transolver MLP blocks ✓ MERGED — NEW PROGRAMME ALL-TIME BEST
+
+- **Branch:** willowpai2i48h1-thorfinn/swiglu_activation
+- **Student:** willowpai2i48h1-thorfinn
+- **Hypothesis:** Replace standard GELU MLP with SwiGLU (gated linear unit, Shazeer 2020). SwiGLUMlp uses 2/3 hidden ratio (171 vs 256) for param parity, adds multiplicative gate: `fc_out(fc_main(x) * SiLU(fc_gate(x)))`.
+
+### Results (run 8on2llcv, seed=0, h=128/slice=64/T_max=15)
+
+| Metric | h=128+GELU μ̂ | h=192+GELU | **SwiGLU+h=128** | Δ vs μ̂ | Δ vs h=192 |
+|---|---:|---:|---:|---:|---:|
+| **val_avg/mae_surf_p** | 90.77 | 86.81 | **65.44** | −25.33 (−27.9%) | −21.37 (−24.6%) |
+| **test_avg/mae_surf_p** | 85.85 | 81.35 | **62.04** | −23.81 (−27.7%) | −19.31 (−23.7%) |
+
+Per-split (best epoch 17):
+
+| Split | val | test |
+|---|---:|---:|
+| single_in_dist | 75.90 | 66.09 |
+| geom_camber_rc | 78.66 | 71.55 |
+| geom_camber_cruise | 45.74 | 55.55 |
+| re_rand | 61.46 | 54.96 |
+| **avg** | **65.44** | **62.04** |
+
+W&B run: `8on2llcv` | n_params=663,429 (vs 663,040 GELU, param-matched) | best_epoch=17 | T_max=15
+
+### W&B Verification (independently verified by advisor)
+
+- Training trajectory: 188.79 → 65.44 over 17 epochs, clean monotonic descent
+- No NaN/inf in 6,381 training steps
+- Grad norms: step1=4.33, mid=1.51, final=3.60, max=16.80 — healthy, no spikes
+- Config confirmed: use_swiglu=True, h=128, slice=64, mlp_ratio=2, T_max=15, seed=0
+
+### Analysis
+
+**Category-redefining result.** A 25-point val improvement from a single activation function change. Mechanism: SwiGLU's multiplicative gate `SiLU(fc_gate(x))` allows the FFN to selectively suppress irrelevant spatial features. The high-frequency pressure field in 2D CFD benefits enormously from selective feature propagation — GELU passes all activations uniformly scaled, while SwiGLU can zero out non-relevant components per spatial location.
+
+**Why so large for this task specifically:** CFD pressure prediction requires high spatial-frequency discrimination between regions with very different boundary conditions (near-wall vs far-field, suction vs pressure side of the foil). The gate enables adaptive feature suppression that is ideally matched to this class of structured-but-heterogeneous spatial predictions.
+
+**Code change:** single file, 43 lines added to train.py. SwiGLUMlp class + opt-in flag `--use_swiglu`. Backward-compatible (default off). After merge, h=192/T_max=18 is still the default. SwiGLU requires `--use_swiglu` flag plus h=128/T_max=15 override to reproduce.
+
+**Open questions driving next experiments:**
+1. **Does SwiGLU stack with h=192?** (thorfinn #3764)
+2. **Is val=65.44 seed-reproducible?** (fern #3765 — 2 more seeds)
+3. **Does inverse-LLRD compound with SwiGLU?** (frieren #3768)
+
+---
+
+## 2026-05-16 07:30 — PR #3721: H: DropPath rate=0.1 ✗ CLOSED (regression)
+
+- **Branch:** willowpai2i48h1-fern/droppath-stochastic-depth
+- **Student:** willowpai2i48h1-fern
+- val_avg/mae_surf_p: 92.06 (above h=128 μ̂=90.77 and far above SwiGLU 65.44)
+- **Closed.** Stochastic depth regularization not the bottleneck for Transolver. SwiGLU established representational capacity (selective gating) as the dominant lever, not regularization.
+
+---
+
+## 2026-05-16 07:30 — PR #3722: H: Inverse-LLRD γ_inv=1.176 ✗ CLOSED (below old threshold but above new SwiGLU baseline)
+
+- **Branch:** willowpai2i48h1-frieren/inverse-llrd-bottom-boost
+- **Student:** willowpai2i48h1-frieren
+- val_avg/mae_surf_p: 88.03 (below old μ̂-1σ=89.2 threshold, but >> SwiGLU 65.44)
+- **Closed.** Directionally positive on h=128+GELU (1σ below μ̂) but baseline moved to 65.44. Mechanistic finding (block_0 highest grad norm, LR boost helps) is valid and queued as follow-up on SwiGLU config (frieren #3768).
