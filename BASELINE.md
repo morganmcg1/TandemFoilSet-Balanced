@@ -35,6 +35,37 @@ Lower is better. Per-split diagnostic metrics (`{split}/mae_surf_{Ux,Uy,p}`,
 ✅ **Fourier positional encoding default as of PR #3348.** `pos_enc_mode=fourier_basic`, L=8 auto-applies.
 ✅ **bf16 AMP default correct as of PR #3330.** 1.33× per-epoch speedup auto-applies.
 
+## 2026-05-16 — PR #3370: Gated MLPs (GeGLU) in TransolverBlocks — **MERGED ⭐⭐ (new val AND test best)**
+
+- **val_avg/mae_surf_p: 81.48** (NEW BEST, −2.06 vs 83.54 prior bf16+Fourier best)
+- **test_avg/mae_surf_p: 72.68** (NEW BEST, −0.34 vs 73.02 prior best)
+- **W&B run:** 8ile1q1j (geglu_fourier_charb)
+- **Within-PR control:** uc36jzun (vanilla_charb on raw, val=104.51, test=94.05)
+- **Surface MAE (test, geglu_fourier_charb, run 8ile1q1j):**
+  - test_single_in_dist mae_surf_p = 88.58
+  - test_geom_camber_rc mae_surf_p = 76.18
+  - test_geom_camber_cruise mae_surf_p = 55.78
+  - test_re_rand mae_surf_p = 70.17
+- **best_epoch:** 12 / 13
+- **Reproduce (use `--mlp_type geglu` lever; default still vanilla):**
+  ```
+  cd target/
+  python train.py --mlp_type geglu \
+    --wandb_group glu-mlp-fourier-charb --wandb_name geglu_fourier_charb --epochs 50
+  ```
+
+**Caveat:** Run 8ile1q1j was on the no-bf16 base (bf16 #3330 merged AFTER tanjiro's run).
+After this merge, the advisor head includes GeGLU lever + bf16 default + Fourier L=8. A bare
+`python train.py --mlp_type geglu` will now run GeGLU+bf16+Fourier — expected val ~70-73
+(GeGLU's −14.7% gain on Charb+clip base applied to current bf16+Fourier baseline 83.54).
+The published 81.48 should be treated as a conservative lower bound; the actual merged config
+is likely better. A sanity confirmation arm is queued.
+
+**Operational follow-up needed:** Flip `mlp_type` Config default `"vanilla"` → `"geglu"` so bare
+`python train.py` gets the win automatically.
+
+---
+
 ## 2026-05-16 — PR #3330: bf16 AMP mixed precision — **MERGED ⭐⭐ (new val AND test best)**
 
 - **val_avg/mae_surf_p: 83.54** (NEW BEST, −13.93 vs 97.47 prior best, −14.3%)
