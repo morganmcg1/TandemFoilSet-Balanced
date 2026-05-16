@@ -477,6 +477,7 @@ class Config:
     coord_noise_std: float = 0.01  # Gaussian noise std on normalized (x,z) coords during training
     mlp_ratio: int = 2  # FFN expansion ratio; SwiGLU inner = round_to_mult(hidden*mlp_ratio*2/3, 8)
     use_bf16: bool = False  # bf16 autocast (activations only; params/optimizer stay fp32)
+    n_hidden: int = 160  # Transolver hidden dim (embedding/attention/FFN base width)
 
 
 cfg = sp.parse(Config)
@@ -510,7 +511,7 @@ model_config = dict(
     space_dim=2,  # unchanged; only used as input-dim split for preprocess MLP
     fun_dim=ENCODED_X_DIM - 2,  # so fun_dim + space_dim == ENCODED_X_DIM
     out_dim=3,
-    n_hidden=160,
+    n_hidden=cfg.n_hidden,
     n_layers=5,
     n_head=4,
     slice_num=64,
