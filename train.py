@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -92,6 +93,37 @@ class SwiGLU(nn.Module):
 
     def forward(self, x):
         return self.W2(F.silu(self.W1(x)) * self.V(x))
+
+
+class RFFEmbedding(nn.Module):
+    """Tancik-style Random Fourier Features for 2D positions.
+
+    γ(p) = [cos(2π σ B p), sin(2π σ B p)] with B ∈ R^{D×2} drawn once from
+    N(0,1) at init using ``seed``. σ may be fixed or learnable via
+    ``log_sigma`` parameter (sigma = exp(log_sigma) for positivity).
+    """
+
+    def __init__(self, n_freqs: int = 32, sigma: float = 3.0, seed: int = 42,
+                 learnable: bool = False):
+        super().__init__()
+        gen = torch.Generator().manual_seed(seed)
+        B = torch.randn(n_freqs, 2, generator=gen)
+        self.register_buffer("B", B)
+        self.learnable = learnable
+        self.n_freqs = n_freqs
+        if learnable:
+            self.log_sigma = nn.Parameter(torch.tensor(math.log(float(sigma))))
+        else:
+            self.register_buffer("sigma_fixed", torch.tensor(float(sigma)))
+
+    def current_sigma(self) -> torch.Tensor:
+        return torch.exp(self.log_sigma) if self.learnable else self.sigma_fixed
+
+    def forward(self, pos: torch.Tensor) -> torch.Tensor:
+        # pos: [..., 2] -> features: [..., 2*n_freqs]
+        sigma = self.current_sigma()
+        proj = 2.0 * math.pi * sigma * (pos @ self.B.t())
+        return torch.cat([torch.cos(proj), torch.sin(proj)], dim=-1)
 
 
 class PhysicsAttention(nn.Module):
@@ -193,18 +225,33 @@ class Transolver(nn.Module):
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
-                 ffn_type="gelu", ffn_hidden_inner=None):
+                 ffn_type="gelu", ffn_hidden_inner=None,
+                 rff_mode: str = "none", n_rff_freqs: int = 32,
+                 rff_sigma: float = 3.0, rff_seed: int = 42):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
 
+        self.rff_mode = rff_mode
+        if rff_mode == "none":
+            self.rff = None
+            rff_dim = 0
+        elif rff_mode in ("fixed", "learnable"):
+            self.rff = RFFEmbedding(
+                n_freqs=n_rff_freqs, sigma=rff_sigma, seed=rff_seed,
+                learnable=(rff_mode == "learnable"),
+            )
+            rff_dim = 2 * n_rff_freqs
+        else:
+            raise ValueError(f"Unknown rff_mode: {rff_mode}")
+
         if self.unified_pos:
-            self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
+            self.preprocess = MLP(fun_dim + ref**3 + rff_dim, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
         else:
-            self.preprocess = MLP(fun_dim + space_dim, n_hidden * 2, n_hidden,
+            self.preprocess = MLP(fun_dim + space_dim + rff_dim, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
 
         self.n_hidden = n_hidden
@@ -232,6 +279,9 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        if self.rff is not None:
+            pos = x[..., :2]  # (x, z) coords (normalized space)
+            x = torch.cat([x, self.rff(pos)], dim=-1)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
@@ -393,6 +443,10 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    rff_mode: str = "none"   # "none" | "fixed" | "learnable"
+    rff_sigma: float = 3.0   # σ for fixed mode, init for learnable mode
+    n_rff_freqs: int = 32
+    rff_seed: int = 42
 
 
 cfg = sp.parse(Config)
@@ -432,6 +486,10 @@ model_config = dict(
     mlp_ratio=2,
     ffn_type="swiglu",
     ffn_hidden_inner=192,
+    rff_mode=cfg.rff_mode,
+    n_rff_freqs=cfg.n_rff_freqs,
+    rff_sigma=cfg.rff_sigma,
+    rff_seed=cfg.rff_seed,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -551,6 +609,9 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    rff_sigma_value = None
+    if model.rff is not None:
+        rff_sigma_value = float(model.rff.current_sigma().item())
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -561,11 +622,13 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
+        "rff_sigma": rff_sigma_value,
     })
+    sigma_str = f"  rff_sigma={rff_sigma_value:.4f}" if rff_sigma_value is not None else ""
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p={avg_surf_p:.4f}{tag}{sigma_str}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
