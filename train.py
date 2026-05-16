@@ -466,6 +466,7 @@ class Config:
     loss_type: str = "l1"  # mse | l1 | huber — l1 won 12.9% over huber, locking it in
     num_freq: int = 4  # Fourier positional-encoding frequencies (Tancik 2020); 4 won vs 8
     coord_noise_std: float = 0.01  # Gaussian noise std on normalized (x,z) coords during training
+    use_onecycle: bool = False  # OneCycleLR (Smith & Topin 2019, arXiv:1708.07120); cfg.lr is base, max_lr = 2*lr
 
 
 cfg = sp.parse(Config)
@@ -516,12 +517,30 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN=SwiGLU inner={ffn_inn
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 
 warmup_epochs = 2
-def lr_lambda(epoch):
-    if epoch < warmup_epochs:
-        return 0.1 + 0.9 * (epoch + 1) / warmup_epochs  # 0.1 -> 1.0 over warmup
-    progress = (epoch - warmup_epochs) / max(MAX_EPOCHS - warmup_epochs, 1)
-    return 0.5 * (1 + math.cos(math.pi * progress))  # cosine to 0 after warmup
-scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+if cfg.use_onecycle:
+    # OneCycleLR (Smith & Topin 2019): super-convergence via per-batch LR cycling.
+    # max_lr = 2*lr, initial_lr = max_lr/div_factor = max_lr/10, min_lr ≈ max_lr/1e4.
+    # cycle_momentum=False keeps AdamW betas fixed; only LR is cycled.
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=cfg.lr * 2,
+        epochs=MAX_EPOCHS,
+        steps_per_epoch=len(train_loader),
+        pct_start=0.3,
+        anneal_strategy="cos",
+        div_factor=10,
+        final_div_factor=1e4,
+        cycle_momentum=False,
+    )
+    scheduler_name = "onecycle"
+else:
+    def lr_lambda(epoch):
+        if epoch < warmup_epochs:
+            return 0.1 + 0.9 * (epoch + 1) / warmup_epochs  # 0.1 -> 1.0 over warmup
+        progress = (epoch - warmup_epochs) / max(MAX_EPOCHS - warmup_epochs, 1)
+        return 0.5 * (1 + math.cos(math.pi * progress))  # cosine to 0 after warmup
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    scheduler_name = "linear_warmup_then_cosine"
 
 GRAD_CLIP_MAX_NORM = 1.0
 
@@ -541,7 +560,7 @@ run = wandb.init(
         "val_samples": {k: len(v) for k, v in val_splits.items()},
         "warmup_epochs": warmup_epochs,
         "grad_clip_max_norm": GRAD_CLIP_MAX_NORM,
-        "scheduler": "linear_warmup_then_cosine",
+        "scheduler": scheduler_name,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -601,10 +620,13 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=GRAD_CLIP_MAX_NORM)
         optimizer.step()
+        if cfg.use_onecycle:
+            scheduler.step()
         global_step += 1
         wandb.log({
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
+            "train/lr_batch": optimizer.param_groups[0]["lr"],
             "global_step": global_step,
         })
 
@@ -612,7 +634,8 @@ for epoch in range(MAX_EPOCHS):
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
+    if not cfg.use_onecycle:
+        scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
