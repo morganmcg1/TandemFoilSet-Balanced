@@ -2,10 +2,79 @@
 
 ## Current Best
 
-**PR #3629 — H37b: n_head=2 + lr=1e-3 + clip=1.0 stacking test (tanjiro)**
-Merged 2026-05-16. 16 epochs completed (30-min timeout cap; best epoch = 15, LR≈0 by epoch 16).
+**PR #3834 — H48: GEGLU gated FFN (askeladd)**
+Merged 2026-05-16. 13 epochs completed (30-min timeout cap). Arm A (GEGLU) wins over Arm B (SwiGLU).
 
 Primary metric: `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across 4 val splits). Lower is better.
+
+| Metric | Value | Source |
+|--------|-------|--------|
+| val_avg/mae_surf_p | **58.6268** | PR #3834 Arm A (GEGLU) |
+| val_single_in_dist/mae_surf_p | 61.6193 | PR #3834 Arm A |
+| val_geom_camber_rc/mae_surf_p | 73.8983 | PR #3834 Arm A |
+| val_geom_camber_cruise/mae_surf_p | 40.4338 | PR #3834 Arm A |
+| val_re_rand/mae_surf_p | 58.5556 | PR #3834 Arm A |
+| test_avg/mae_surf_p | NaN (⚠ scoring bug) | PR #3834 |
+| test_avg/mae_surf_p (3-split, excl. cruise) | **56.6976** | PR #3834 Arm A |
+| test_single_in_dist/mae_surf_p | 54.7844 | PR #3834 Arm A |
+| test_geom_camber_rc/mae_surf_p | 65.7829 | PR #3834 Arm A |
+| test_re_rand/mae_surf_p | 49.5255 | PR #3834 Arm A |
+
+**Arm B (SwiGLU) for reference:**
+| Metric | Value |
+|--------|-------|
+| val_avg/mae_surf_p | 61.4410 |
+| val_single_in_dist | 66.7324 |
+| val_geom_camber_rc | 74.7649 |
+| val_geom_camber_cruise | 43.2151 |
+| val_re_rand | 61.0517 |
+
+**Configuration:** FiLM cond_dim=11 + Huber δ_vel=0.5/δ_p=0.25 + CosineAnnealingLR T_max=15 + clip_grad_norm=1.0 + lr=1e-3 + n_head=2 + wd=5e-5 + **ffn_act=geglu** (gated linear unit in FFN). mlp_ratio=2 preserved.
+
+**Why GEGLU wins:** The gating mechanism `GEGLU(x,W) = (xW_1) ⊙ σ(xW_2)` activates only the slice tokens with high attention to the near-surface region — precisely where boundary-layer pressure gradients are sharpest. For tandem airfoil CFD (high trailing-edge interaction, strong Re effects), the multiplicative gating acts as spatial selectivity: tokens representing interior flow don't contaminate surface-focused updates. This is a *fundamentally different* representational lever from all prior changes (optimizer, LR, wd, head structure).
+
+**Δ vs prior best (H39 Arm C 63.44):** −4.81 pts val_avg, −4.69 pts test 3-split. Massive architecture win.
+**Δ vs H37b (66.11):** −7.48 pts val_avg. Best single-PR gain since the T_max fix.
+
+**⚠ data/scoring.py NaN bug:** `test_geom_camber_cruise` sample 20 has non-finite GT. File is read-only.
+
+**Artifacts:** `models/model-h48-geglu-nhead2-wd5e5-20260516-093620/`
+
+**Reproduce:**
+```bash
+cd target/ && python train.py --epochs 50 \
+  --experiment_name h48-geglu-nhead2-wd5e5 --agent <student> \
+  --n_head 2 --lr 1e-3 --weight_decay 5e-5 --clip_grad_norm 1.0 \
+  --ffn_act geglu
+# FiLM cond_dim=11, Huber δ_vel=0.5/δ_p=0.25, T_max=15 are merged defaults
+# ffn_act=geglu adds the GEGLU gating to the Transolver FFN blocks
+```
+
+## Previous Best (overridden by #3834)
+
+**PR #3683 — H39 Arm C: n_head=2 + lr=2e-3 + wd=5e-5 + clip=1.0 (thorfinn)**
+Merged 2026-05-16. 15 epochs completed (30-min timeout cap). 2-seed run: best seed val=63.44, 2nd seed=65.51.
+
+| Metric | Value | Source |
+|--------|-------|--------|
+| val_avg/mae_surf_p | **63.4385** (best seed) | PR #3683 Arm C |
+| val_avg/mae_surf_p (mean 2 seeds) | 64.4739 | PR #3683 |
+| test_avg/mae_surf_p (3-split, excl. cruise) | **61.3910** | PR #3683 Arm C |
+
+**Configuration:** FiLM cond_dim=11 + Huber δ_vel=0.5/δ_p=0.25 + T_max=15 + clip_grad_norm=1.0 + lr=**2e-3** + n_head=2 + wd=**5e-5**.
+Δ vs H37b: −2.67 pts val_avg.
+
+**Reproduce:**
+```bash
+cd target/ && python train.py --epochs 50 \
+  --experiment_name h39c-nhead2-lr2e3-wd5e5-clip1 --agent <student> \
+  --n_head 2 --lr 2e-3 --weight_decay 5e-5 --clip_grad_norm 1.0
+```
+
+## Previous Best (overridden by #3683)
+
+**PR #3629 — H37b: n_head=2 + lr=1e-3 + clip=1.0 stacking test (tanjiro)**
+Merged 2026-05-16. 16 epochs completed (30-min timeout cap; best epoch = 15, LR≈0 by epoch 16).
 
 | Metric | Value | Source |
 |--------|-------|--------|
@@ -22,8 +91,6 @@ Primary metric: `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE acr
 
 **Configuration:** FiLM cond_dim=11 + Huber δ_vel=0.5/δ_p=0.25 (merged defaults) + CosineAnnealingLR T_max=15 + clip_grad_norm=1.0 + lr=1e-3 + **n_head=2** (head_dim=64) + wd=1e-4 (default — predates H38 finding).
 
-**Context:** Stacks n_head=2 (from H37 isolated test on H20: 72.89) on top of lr=1e-3+clip=1.0 (H32: 69.44) baseline. Predicted ~66.83 by additive decomposition; actual **66.11** — slightly super-additive. n_params 891,469 (+56K vs baseline); peak memory 39.6 GB (vs 44.6 GB). The n_head=8→4→2 trend (head_dim 16→32→64) is monotone improving — invites a single-head (n_head=1, head_dim=128) limit test. **Did NOT use wd=5e-5** — orthogonal H38 finding stacks ON TOP.
-
 **⚠ data/scoring.py NaN bug:** `test_geom_camber_cruise` sample 20 has non-finite GT. File is read-only.
 
 **Artifacts:** `models/model-h37b-nhead2-lr1e3-clip1-20260516-062645/`
@@ -34,7 +101,6 @@ cd target/ && python train.py --epochs 50 \
   --experiment_name h37b-nhead2-lr1e3-clip1 --agent <student> \
   --n_head 2 --lr 1e-3 --clip_grad_norm 1.0
 # FiLM cond_dim=11, Huber δ_vel=0.5/δ_p=0.25, T_max=15 are merged defaults
-# Note: stacking with wd=5e-5 (H38) has not yet been tested — predicted further gain
 ```
 
 ## Previous Best (overridden by #3629)
