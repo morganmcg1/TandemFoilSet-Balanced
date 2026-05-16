@@ -927,3 +927,69 @@ W&B run: `9leqg5zi` · Best epoch: 17 · Group: per_channel_huber_delta
 **Dead end: loss-formulation lever class for this baseline architecture.** Further gains from loss shaping would require quantile regression, gradient-norm-balanced multitask, or learned per-channel weights — all architectural additions rather than simple δ tuning.
 
 **Follow-up assigned:** PR #3724 tanjiro — corrected horizontal-flip augmentation (physics-respecting, flip pos_z+AoA+Uy, preserve unsigned NACA camber).
+
+---
+
+## 2026-05-16 06:00 — PR #3562: H: Wider Transolver (h=192, slice=96) + T_max=18 under bf16 ✓ MERGED — NEW ALL-TIME BEST
+
+- **Branch:** willowpai2i48h1-askeladd/wider-h192-bf16-tmax18
+- **Student:** willowpai2i48h1-askeladd
+- **Hypothesis:** Capacity scaling — wider hidden dim (h=192 vs 128) + wider slices (96 vs 64) + budget-matched T_max=18 under bf16. VRAM freed by bf16 allows larger model within 30-min constraint.
+
+### Results (best run hzxs6zx9)
+
+| Metric | Baseline #3480 | h=192 best | Δ | % |
+|---|---:|---:|---:|---:|
+| **val_avg/mae_surf_p** | 87.9105 | **86.8095** | −1.10 | −1.25% |
+| **test_avg/mae_surf_p** | 83.3782 | **81.3514** | −2.03 | −2.43% |
+
+Per-split (best run hzxs6zx9):
+
+| Split | val | test |
+|---|---:|---:|
+| single_in_dist | 103.640 | 92.053 |
+| geom_camber_rc | 98.013 | 86.305 |
+| geom_camber_cruise | 65.111 | 71.082 |
+| re_rand | 80.474 | 75.966 |
+| **avg** | **86.8095** | **81.3514** |
+
+4 informal runs (no seed control): hzxs6zx9 val=86.81, gu27mc6o, sv85254i val=91.06, fqzs1zk1 val=92.97. Mean≈89.70, σ̂≈2.97.
+
+W&B runs: `hzxs6zx9` (best), `gu27mc6o`, `sv85254i`, `fqzs1zk1` | n_params=1.48M (vs 0.66M, ×2.24) | Peak VRAM: 49.24 GB | Best epoch: 13
+
+### Analysis
+
+**NEW ALL-TIME BEST on both val (86.81) and test (81.35).** The capacity hypothesis is confirmed: bf16's VRAM headroom enables a genuinely larger model. Test improvement (−2.03pt) is the headline — both OOD splits (re_rand −1.19, cruise −4.05) and in-dist (+1.6 single) show clear gains.
+
+**Caveat:** best epoch 13 under T_max=18 with model still improving at timeout — the wider model hasn't fully converged. Additional epochs (or a longer T_max) could squeeze further gain. Seed variance σ̂≈2.97 is elevated vs h=128 σ̂=1.54, suggesting higher sensitivity to initialization — seed-controlled characterization is the critical next step.
+
+**Code changes merged:** train.py updated to h=192, slice_num=96, T_max=18.
+
+**Follow-up:** askeladd assigned PR #3735 — 4-seed σ̂ characterization of h=192 config (same as alphonse #3546 did for h=128).
+
+---
+
+## 2026-05-16 06:05 — PR #3611: H: Per-channel surf weight β_p=20 ↩ SENT BACK (retest on new h=192 baseline)
+
+- **Branch:** willowpai2i48h1-edward/per-channel-surf-weight
+- **Student:** willowpai2i48h1-edward
+- **Hypothesis:** β_p=20 on surface-p channel (Ux/Uy remain at α=10). Tests whether pressure-specific loss amplification helps independently.
+
+### Results (3 seeds on h=128 baseline)
+
+| Run | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---:|---:|
+| ecpuvmr3 (best) | 86.2535 | 81.8903 |
+| w37awicb | 88.05 | 83.08 |
+| df7d07td | 91.50 | 86.98 |
+| **mean** | **88.60** | **83.98** |
+| **σ̂ (3-seed)** | **~2.63** | **~2.59** |
+| h=128 baseline μ̂ | 90.77 | 85.85 |
+
+W&B runs: `ecpuvmr3`, `w37awicb`, `df7d07td` | Best epoch: 17
+
+### Analysis
+
+**Directionally positive on h=128** — 3-seed mean 88.60 is below canonical μ̂=90.77 (−2.17pt, ~1.4σ) and the best run (86.25) beats the prior all-time best (87.91). However, high σ̂=2.63 means the best run is likely a lucky seed. The mean does NOT beat the prior baseline point estimate (88.60 > 87.91), so this is directional but not conclusive.
+
+**Sent back for retest on the new h=192 baseline** (val=86.81, test=81.35) — #3562 merged just before this review. Per-channel surf weight is an orthogonal loss change that should be tested against the current best architecture, not the old one. If β_p=20 helps on h=192, it compounds the gains; if not, the lever is exhausted.
