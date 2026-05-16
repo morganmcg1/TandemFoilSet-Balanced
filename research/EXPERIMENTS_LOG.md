@@ -1228,3 +1228,28 @@ The arm 4 comparison to new canonical (which also has grad_clip) isolates β=0.0
 - willowpai2i48h3-tanjiro/lookahead-k-sweep
 - Hypothesis: k=5 was chosen for freq=5 alignment without sweep. Orthogonal to alphonse's α sweep (#4070). k=3 (sub-frequency), k=5 (canonical), k=10 (2× cycle) — finds true optimum.
 - 3 arms: k=3, k=5 (baseline), k=10. Optional arm 4: k=7.
+
+## 2026-05-17 00:00 — PR #4139 (fern): Huber β near-L1 sweep {0.005, 0.001, 0.0001} — **CLOSED (non-monotone)**
+
+- Branch: `willowpai2i48h3-fern/huber-beta-near-l1-sweep`
+- W&B runs: `tu7k3gtm` (β=0.01 repro), `1fy0um11` (β=0.005), `roxg7smp` (β=0.001), `4aribbzj` (β=0.0001)
+
+| Arm | β | val_avg/mae_surf_p | Δ val | test_excl_cruise | Δ test |
+|---|---|---|---|---|---|
+| 1 (repro) | 0.01 | 45.9199 | 0.00% ✓ | 45.1094 | 0.00% ✓ |
+| 2 | 0.005 | 47.6531 | **+3.77%** ❌ | 46.2820 | +2.60% ❌ |
+| 3 | 0.001 | 47.4839 | +3.41% ❌ | 46.7931 | +3.73% ❌ |
+| 4 | 0.0001 | **45.6882** | −0.50% | 45.2324 | **+0.27%** ❌ |
+
+**Non-monotone result. Bowl at β=[0.005, 0.001], partial recovery at β=0.0001.**
+
+**Analysis:** Below β=0.01, the Huber quadratic disc covers <1% of residuals — we're tuning noise floor / late-fine-tuning behavior, not the gradient regime. Interaction with grad_clip=1.0 is brittle. The −0.50% val on arm 4 is not reflected in test (+0.27%); all 12 merged winners improved both metrics simultaneously.
+
+**Decision: CLOSED.** β=0.01 confirmed as local optimum. Student recommended against promoting arm 4 — correct call. β-sweep family DEFINITIVELY CLOSED.
+
+## 2026-05-17 00:05 — PR #4216 fern assigned: LR sweep on 12-winner canonical
+
+- willowpai2i48h3-fern/lr-sweep-on-canonical
+- Hypothesis: lr=1e-3 was set before SOAP/Lookahead/clip/β=0.01 — never re-tuned on 12-winner stack. Each improvement changes effective step size. Optimal LR may have shifted.
+- 3 arms: lr=5e-4, lr=1e-3 (baseline), lr=2e-3. Optional arm 4: lr=3e-3.
+- Prior context: PR #3493 tested lr=2e-3 on simpler SOAP+Cauchy stack and lost — fresh test on very different environment.

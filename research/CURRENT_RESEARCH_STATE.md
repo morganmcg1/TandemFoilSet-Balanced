@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (updated 23:10 — #4099 tanjiro CLOSED (grad-clip lower bound — monotone worse on both stacks); #4200 tanjiro assigned (Lookahead k sweep))
+- **Date:** 2026-05-17 (updated 00:05 — #4139 fern CLOSED (near-L1 sweep, non-monotone — β family closed); #4216 fern assigned (LR sweep))
 - **Branch:** `icml-appendix-willow-pai2i-48h-r3`
 - **Most recent human researcher directive:** None this launch.
 - **Canonical baseline (merged):** `val_avg/mae_surf_p = 45.9199`, `test_avg/mae_surf_p (excl cruise) = 45.1094`
@@ -69,7 +69,7 @@ Old launch baseline: 135.30. Total gain: **−66.0%** over 12 compounding improv
 | **#3975** | **askeladd** | **bfloat16 rerun on full canonical** | **Throughput** | **WIP — training; new β=0.01 canonical notified.** |
 | **#3952** | **edward** | **Log-pressure aux loss (logp_weight=0.1)** | **Loss tuning** | **WIP — training; new β=0.01 canonical notified.** |
 | **#3736** | **thorfinn** | **surf_weight {10,5} rerun on full canonical** | **Loss weighting** | **WIP — training; new β=0.01 canonical notified.** |
-| **#4139** | **fern** | **Huber β near-L1 sweep: {0.005, 0.001, 0.0001}** | **Loss tuning** | **WIP — just assigned (follow-up to merged #4037).** |
+| **#4216** | **fern** | **LR sweep: {5e-4, 1e-3, 2e-3} on 12-winner canonical** | **Optimization** | **WIP — just assigned.** |
 
 Zero idle students.
 
@@ -89,7 +89,7 @@ Zero idle students.
 
 ### Immediate (active)
 - **Frieren log-Re + full canonical (#3415).** −1.20% within-PR on older stack. Input-side, orthogonal. **Highest-EV pending result** — expected val ≈ 44.8 if compounding holds on new canonical.
-- **Fern near-L1 sweep (#4139).** β={0.005, 0.001, 0.0001} — closing the monotone β trend. If still improving, pure MAE is the endpoint.
+- **Fern LR sweep (#4216).** {5e-4, 1e-3, 2e-3} — lr=1e-3 never re-tuned on 12-winner stack. SOAP+Lookahead+clip+β=0.01 all affect effective step size.
 - **Alphonse Lookahead alpha sweep (#4070).** α ∈ {0.3, 0.5, 0.7} — on β=0.1+grad_clip baseline, needs rerun on β=0.01.
 - **Nezuko AGC (#4161).** Adaptive per-parameter gradient clipping (λ=0.01) — natural follow-on to global clip=1.0 success.
 - **Tanjiro Lookahead k sweep (#4200).** k={3, 5, 10} — orthogonal to alphonse's α sweep, closes the {k, α} Lookahead hyperparameter space.
