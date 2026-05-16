@@ -2,6 +2,58 @@
 
 Per-PR results log. Earliest at the bottom; latest at the top.
 
+## 2026-05-16 02:15 — PR #3628: H29 per-block geom_proj (nezuko) — **assigned**
+
+- Branch: `charliepai2i24h4-nezuko/per-block-geom-proj`
+- Hypothesis: Replace shared geom_proj MLP (all blocks share one projection) with per-block independent projections (each of 5 blocks gets its own MLP(11,256,128)). +144K params. Target cam_rc recovery — that split needs block-specific geometric representation.
+
+## 2026-05-16 02:15 — PR #3627: H28 deeper preprocess MLP (thorfinn) — **assigned**
+
+- Branch: `charliepai2i24h4-thorfinn/preprocess-mlp`
+- Hypothesis: Replace single linear preprocess layer (86→128) with 2-layer MLP (86→256→128, GELU, dropout=0.1). +43K params. May help with heterogeneous input features (RFF + velocity + geometry + Re).
+
+## 2026-05-16 02:15 — PR #3625: H27 OneCycleLR max_lr sweep {1e-3, 2e-3} (tanjiro) — **assigned**
+
+- Branch: `charliepai2i24h4-tanjiro/max-lr-sweep`
+- Hypothesis: H24 used max_lr=5e-4 (same as AdamW lr, not true super-convergence). Test {1e-3, 2e-3} — literature suggests 3-10× base lr for saddle-escape super-convergence. H24 was also truncated at epoch 12/15.
+
+## 2026-05-16 02:00 — PR #3540: H24 OneCycleLR super-convergence (tanjiro) — **MERGED, new best**
+
+- Branch: `charliepai2i24h4-tanjiro/onecycle`
+- Result: val_avg=67.64, test_avg=62.12. Epoch 12/15 (truncated, trajectory still descending). **-15.7% vs 80.21 SwiGLU baseline** — biggest single-PR win of the round.
+
+| Split | H18 baseline | H24 OneCycleLR | Delta |
+|---|---:|---:|---:|
+| val_single_in_dist | 104.62 | 80.32 | -23.1% |
+| val_geom_camber_rc | 93.29 | 81.81 | -12.3% |
+| val_geom_camber_cruise | 50.00 | 44.46 | -11.1% |
+| val_re_rand | 70.14 | 63.96 | -8.8% |
+| **val_avg** | **79.52** | **67.64** | **-14.9%** |
+| test_avg | 68.95 | 62.12 | -9.9% |
+
+- Implementation notes: student correctly set `--epochs 15` (not default 50) for schedule sizing; set `cycle_momentum=False` (AdamW-safe).
+- LR curve confirms classic OneCycleLR: rise epochs 1-5 to peak 5e-4, cosine fall 5-12. Best epoch=12 (still descending at cutoff → lower bound).
+- Follow-up: tanjiro H27 now tests max_lr={1e-3, 2e-3} for true super-convergence.
+- **New baseline: val_avg=67.64, test_avg=62.12.**
+
+## 2026-05-16 02:00 — PR #3538: H22 LR warmup + cosine eta_min (thorfinn) — **CLOSED as redundant**
+
+- Branch: `charliepai2i24h4-thorfinn/lr-warmup`
+- Result: val_avg=69.01 (-14.0% vs baseline), test_avg=60.97 (-16.7%). Every split improved. Strong result.
+- **Closed as redundant**: OneCycleLR (#3540) integrates warmup (pct_start=0.3 = built-in linear ramp) and achieved lower val (67.64 < 69.01). The two schedulers are mutually exclusive. Warmup independently validated warmup direction.
+
+## 2026-05-16 02:00 — PR #3421: H14 cosine T_max sweep (nezuko) — **CLOSED as obsolete**
+
+- Branch: `charliepai2i24h4-nezuko/cosine-tmax`
+- Result (pre-GALE baseline): arm T_max=14 val=88.43, arm T_max=20 val=90.21. Both beat T_max=50 (92.80) on stale baseline.
+- **Closed as obsolete**: OneCycleLR merged, cosine scheduler replaced entirely. T_max tuning irrelevant.
+
+## 2026-05-16 02:00 — PR #3197: H8v3 EMA decay=0.999 (askeladd) — **SENT BACK FOR RETEST on OneCycleLR baseline**
+
+- Branch: `charliepai2i24h4-askeladd/ema`
+- Prior result (v3 on SwiGLU+cosine): val_avg=74.18, test_avg=66.62. Rebased onto H18 LayerScale + OneCycleLR (CLEAN).
+- Status: sent back for retest because schedule change (cosine→OneCycleLR) fundamentally changes EMA dynamics. EMA+OneCycleLR's low-LR tail (where EMA is most powerful) may give a larger or different gain. Required: single-arm retest with `--use_onecycle --onecycle_pct_start 0.3 --epochs 15`.
+
 ## 2026-05-16 01:30 — PR #3467: H17 attention dropout {0.05, 0.10} (fern) — **CLOSED**
 
 - Branch: `charliepai2i24h4-fern/attention-dropout`
