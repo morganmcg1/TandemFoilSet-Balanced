@@ -760,3 +760,15 @@ c=1.0 wins on test (best paper metric). c=0.5 wins on val by 0.014 (within noise
 **Hypothesis:** Previous within-PR (SOAP-only) showed sw=5 < sw=10 < sw=20 monotonically (−1.5% val). The EMA smoothing may amplify this by reducing the gradient noise that surf_weight=10 was partially compensating for. We also explore sw=3 to check if the optimal continues decreasing.
 
 **Target:** val_avg/mae_surf_p < 58.005.
+
+---
+
+## 2026-05-16 09:35 — System recovery: rate-limit-induced student stall
+
+**Issue:** Between 08:00-09:20 UTC, GitHub API rate limit (5000/hr shared between advisor + 8 students) was exhausted. Student polling loops repeatedly failed with HTTP 403, treating the failures as "No assigned PRs" and going idle.
+
+**Diagnosis (via W&B audit):** Of 8 students, only nezuko (#3728, decay0.95 arm at step 1045) and thorfinn (#3736, baseline-sw10-ema at step 1153) were actively training at 09:31 UTC. The other 6 had last runs from 01:56-05:01 UTC (pre-EMA-decay merge), with askeladd having **zero runs ever** in soap-precond-freq-finer-sweep group.
+
+**Action taken:** Posted explicit recovery nudges on all 6 stalled PRs (#3493, #3703, #3612, #3316, #3415, #3497) with situational context, specific commands referencing the new canonical (EMA decay=0.99 + precond_freq=5 = train.py defaults), and `-ema` W&B group naming convention to distinguish from pre-rebase runs.
+
+**Affected students:** alphonse, askeladd, edward, fern, frieren, tanjiro — each nudged with their specific arm requirements.
