@@ -592,3 +592,29 @@ Clean −4.00% improvement on merged baseline; apples-to-apples (same full stack
 
 New best: **92.606 val_avg/mae_surf_p**
 Reproduce: `python train.py --amp_dtype bf16 --cosine_t_max 15 --use_ema --ema_decay 0.999 --film_cond`
+
+## 2026-05-16 01:40 — PR #3443 [CLOSED-FALSIFIED]: Lower LR sweep (2.5e-4, 3.5e-4) on bf16+T_max=15
+
+- **Student branch:** `charliepai2i48h4-alphonse/lower-lr-sweep`
+- **Hypothesis:** bf16 gradient noise shifts the LR optimum downward; 2.5e-4 or 3.5e-4 may refine better than default 5e-4.
+
+### Results (3 arms, bf16 + T_max=15, no EMA)
+
+| Arm | lr | val_avg/mae_surf_p | Δ vs Arm A | test_avg (3 splits) |
+|-----|----|--------------------|------------|---------------------|
+| A | 5e-4 (default) | **97.241** | — | **91.790** |
+| B | 2.5e-4 | 98.002 | +0.78% ❌ | 94.771 |
+| C | 3.5e-4 | 99.771 | +2.60% ❌ | 98.739 |
+
+**LR axis closed: 5e-4 is at or near the magnitude optimum for bf16+T_max=15.**
+
+### Analysis
+
+- **Monotone on test:** A < B < C on every finite test split. No flips.
+- **val_single_in_dist anomaly:** B/C win by 1.5-2% on this easy split, but lose on all harder generalization splits.
+- **Floor convergence:** Both A and B hit the LR floor (LR ~0) by epoch 16 and make negligible progress; lower LR doesn't buy more useful epochs, just a worse local optimum.
+- **Note:** Arm A (97.241) is first clean bf16+T_max=15 measurement without EMA or FiLM.
+
+### Decision: CLOSED (falsification)
+
+New assignments: alphonse → Schedule-Free AdamW (#3594)
