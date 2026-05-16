@@ -471,6 +471,8 @@ class Config:
     lookahead_k: int = 5           # Lookahead sync period (steps between slow-weight syncs).
     lookahead_alpha: float = 0.5   # Lookahead interpolation weight (slow += alpha*(fast-slow)).
     grad_clip: float = 0.0  # PR #3497: max_norm for clip_grad_norm_; 0 disables (norm still logged)
+    use_swa: bool = False    # PR #4021: Stochastic Weight Averaging — uniform average of late-epoch weights.
+    swa_start_epoch: int = 8  # 0-indexed epoch from which SWA averaging begins (update fires when epoch >= this)
 
 
 cfg = sp.parse(Config)
@@ -528,6 +530,14 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 ema = EMAModel(model, decay=cfg.ema_decay) if cfg.ema_decay > 0.0 else None
 if ema is not None:
     print(f"EMA enabled: decay={cfg.ema_decay} (effective window ~{1.0 / (1.0 - cfg.ema_decay):.0f} steps)")
+
+# PR #4021: SWA — uniform running average of live model weights from a late starting epoch.
+# Orthogonal to EMA (recency-weighted full trajectory) and Lookahead (per-k-step slow sync).
+swa_model = None
+if cfg.use_swa:
+    from torch.optim.swa_utils import AveragedModel
+    swa_model = AveragedModel(model)
+    print(f"SWA enabled: averaging live weights from epoch >= {cfg.swa_start_epoch} (0-indexed)")
 
 if cfg.optimizer == "adamw":
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
@@ -659,6 +669,13 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
+    # PR #4021: SWA update at end of epoch (after scheduler step), once we are
+    # past the start epoch. Stacks with Lookahead since SWA samples the *slow*
+    # weights (Lookahead has already synced fast→slow during the epoch's last
+    # k-aligned step).
+    if swa_model is not None and epoch >= cfg.swa_start_epoch:
+        swa_model.update_parameters(model)
+
     # --- Validate ---
     # When EMA is active, evaluate the EMA copy instead of the live model.
     # The live model continues to train; do NOT evaluate it (clean A/B).
@@ -750,6 +767,53 @@ if best_metrics:
             test_log[f"test_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
+
+    # PR #4021: SWA evaluation (independent of best-EMA checkpoint).
+    # Transolver has only LayerNorm — no BN running stats — so update_bn is unnecessary.
+    if swa_model is not None:
+        n_avg = int(swa_model.n_averaged.item())
+        if n_avg == 0:
+            print("\n[SWA] No SWA updates performed (training stopped before swa_start_epoch). Skipping SWA eval.")
+        else:
+            print(f"\n[SWA] Evaluating SWA model (uniform average of {n_avg} late-epoch checkpoints)...")
+            swa_inner = swa_model.module
+            swa_inner.eval()
+
+            swa_val_metrics = {
+                name: evaluate_split(swa_inner, loader, stats, cfg.surf_weight, device)
+                for name, loader in val_loaders.items()
+            }
+            swa_val_avg = aggregate_splits(swa_val_metrics)
+            print(f"  SWA  VAL  avg_surf_p={swa_val_avg['avg/mae_surf_p']:.4f}")
+            for name in VAL_SPLIT_NAMES:
+                print_split_metrics(name, swa_val_metrics[name])
+
+            swa_log: dict[str, float] = {"swa_n_averaged": n_avg}
+            for split_name, m in swa_val_metrics.items():
+                for k, v in m.items():
+                    swa_log[f"swa_val/{split_name}/{k}"] = v
+            for k, v in swa_val_avg.items():
+                swa_log[f"swa_val_{k}"] = v
+            swa_log["val_avg/mae_surf_p_swa"] = swa_val_avg["avg/mae_surf_p"]
+
+            if not cfg.skip_test:
+                swa_test_metrics = {
+                    name: evaluate_split(swa_inner, loader, stats, cfg.surf_weight, device)
+                    for name, loader in test_loaders.items()
+                }
+                swa_test_avg = aggregate_splits(swa_test_metrics)
+                print(f"  SWA  TEST avg_surf_p={swa_test_avg['avg/mae_surf_p']:.4f}")
+                for name in TEST_SPLIT_NAMES:
+                    print_split_metrics(name, swa_test_metrics[name])
+                for split_name, m in swa_test_metrics.items():
+                    for k, v in m.items():
+                        swa_log[f"swa_test/{split_name}/{k}"] = v
+                for k, v in swa_test_avg.items():
+                    swa_log[f"swa_test_{k}"] = v
+                swa_log["test_avg/mae_surf_p_swa"] = swa_test_avg["avg/mae_surf_p"]
+
+            wandb.log(swa_log)
+            wandb.summary.update(swa_log)
 
     save_model_artifact(
         run=run,
