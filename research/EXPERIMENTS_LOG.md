@@ -1,5 +1,32 @@
 # SENPAI Research Results
 
+## 2026-05-16 09:00 — PR #3699 tanjiro Lookahead CLOSED + #3827 tanjiro input-jitter assigned
+
+### #3699 tanjiro Lookahead(AdamW, k=5, α=0.5) — CLOSED
+
+- Branch: `willowpai2i24h5-tanjiro/lookahead-adamw`
+- Hypothesis: parameter-trajectory averaging via Lookahead reduces variance in the noisy-grad-clip regime
+- W&B 3-arm result:
+
+| Arm | val_avg | val_id | val_rc | val_cruise | val_re | test_3split |
+|---|---|---|---|---|---|---|
+| b9xgr1qn ★ best | 81.42 | 96.75 | 91.71 | 60.57 | 76.63 | 79.34 |
+| gfz1990s | 85.56 | 99.27 | 94.86 | 67.10 | 81.00 | 83.28 |
+| f2jp3n9q | 84.84 | 101.39 | 95.25 | 63.25 | 79.47 | 82.32 |
+| **3-arm mean** | **83.94** | 99.14 | 93.94 | 63.64 | 79.04 | **81.64** |
+
+- **Δ vs new baseline (77.06):** +6.88 pp mean / +4.36 pp best (+8.93% / +5.66%)
+- **Decision:** CLOSED — exceeds 5% close threshold. Student's analysis correctly identifies the mechanism: Lookahead's slow-weight averaging is a low-pass filter that fights OneCycleLR's monotonic decay. Notable: arm1 (81.42) essentially ties prior 81.66 baseline, but arms 2/3 add +3-4 pp variance — Lookahead destabilized training.
+- **Key insight locked in:** Trajectory-averaging methods are 3-for-3 failures on this baseline. EMA #3431 failed on warm-restarts, SWA #3615 failed on OneCycle, Lookahead #3699 failed on OneCycle. Family-wide rejection — no further variance-reduction methods at the parameter-trajectory level.
+
+### #3827 tanjiro — New assignment: Re/AoA input jitter augmentation
+
+- Mechanism: train-time Gaussian noise on (Re, AoA) physical priors → forces locally smooth input→output mapping → expected OOD generalization gains on val_re_rand (76.89) and val_geom_camber_rc (86.63).
+- 3-arm σ sweep: small (σ_Re=0.02, σ_AoA=0.2), medium (0.05, 0.5), large (0.10, 1.0).
+- Orthogonal to optimizer, schedule, loss, batch, architecture axes — stacks with anything.
+
+---
+
 ## 2026-05-16 08:30 — PR #3616 fern bs=2 MERGED + PR #3617 edward log-space sent back + #3812 new fern assignment
 
 ### #3616 fern batch_size=2 — MERGED ✓ (new baseline 77.06)

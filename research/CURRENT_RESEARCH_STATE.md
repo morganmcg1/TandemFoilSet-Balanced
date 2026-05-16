@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 08:30
+- **Updated:** 2026-05-16 09:00
 - **Track:** `willow-pai2i-24h-r5` (advisor branch `icml-appendix-willow-pai2i-24h-r5`, base `icml-appendix-willow`)
 - **Per-run budget:** 30 min wall clock, ≤50 epochs, 1 GPU @ 96 GB VRAM
 
@@ -38,14 +38,14 @@ Head config: `batch_size=2` + `OneCycleLR(max_lr=1e-3, total_steps=len(train_loa
 
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
-| #3720 | nezuko | **Lion optimizer** — 3-arm max_lr sweep | **Potential paradigm-shift winner** — 2 arms ~68-70 (−10.5% vs new baseline 77.06); waiting for terminal post |
+| #3720 | nezuko | **Lion optimizer** — 3-arm max_lr sweep | **Potential paradigm-shift winner** — 2 arms ~68-70 (−10% vs new baseline 77.06); waiting for terminal post |
 | #3812 | fern | **batch_size=1** (extends bs trend) | New — tests diminishing returns; reports actual steps completed |
 | #3617 | edward | log-space L1 surf loss | **Sent back** — retest on new bs=2 baseline; add surf_weight=30 arms |
-| #3699 | tanjiro | Lookahead(AdamW, k=5, α=0.5) | Running — stale_wip; no results yet; nudged |
-| #3614 | thorfinn | OneCycleLR max_lr=1.5e-3 | Running — stale_wip; original 2e-3 results posted, retest at 1.5e-3 ongoing; nudged re new baseline |
+| #3614 | thorfinn | OneCycleLR max_lr=1.5e-3 | Running — original 2e-3 results posted, retest at 1.5e-3 ongoing |
 | #3787 | alphonse | Lion LR sweep at {1e-3, 5e-4, 2e-3} | Running — independent Lion LR replication |
 | #3791 | frieren | bf16 mixed precision (14/21/28 epochs) | Running — throughput + quality |
 | #3797 | askeladd | FiLM conditioning on (Re, AoA, NACA) | Running — architectural axis |
+| #3827 | tanjiro | **Re/AoA input jitter** (3-arm σ sweep) | New (after #3699 close) — data-augmentation axis; targets OOD splits |
 
 ## Round 4 closed/sent-back so far
 
@@ -59,6 +59,7 @@ Head config: `batch_size=2` + `OneCycleLR(max_lr=1e-3, total_steps=len(train_loa
 | #3696 | frieren | OneCycleLR max_lr=5e-4 (low end) | closed — 4-arm mean 84.99 (+4.1%); confirms 1e-3 is U-shape minimum |
 | #3619 | alphonse | weight_decay=0 retest on OneCycle | closed — 4-arm mean 85.22 (+4.4%); schedule subsumes wd; locks wd=1e-4 |
 | #3613 | askeladd | OneCycleLR pct_start=0.05 | closed — 5-arm mean 85.31 (+4.5%); locks pct_start=0.1 |
+| #3699 | tanjiro | Lookahead(AdamW, k=5, α=0.5) | closed — 3-arm mean 83.94 (+8.93% vs 77.06); third weight-averaging failure (family-wide reject) |
 
 ## Round 3 closed
 
@@ -81,7 +82,7 @@ Head config: `batch_size=2` + `OneCycleLR(max_lr=1e-3, total_steps=len(train_loa
 4. **Model is NOT capacity-limited** — width, depth, slice count, and all structural changes fail. slice_num=64 is the floor.
 5. **Volume loss structure matters** — full L1 vol+surf regresses vs pure L1-surf. MSE vol loss provides stronger far-field consistency gradient. Locked in: vol MSE + surf L1.
 6. **Loss weighting: surf_weight=10 is optimal** — surf_weight=5 regresses by 10.8%; surf_weight=25 regresses even more.
-7. **Weight averaging is incompatible with our setup, regardless of schedule** — EMA failed on warm-restarts (#3431), SWA failed on OneCycle (#3615). OneCycle's monotonic anneal settles into a single sharp basin; averaging blurs the cruise-OOD specialization in the final epochs rather than widening it. Don't retry averaging-based methods on this baseline.
+7. **Trajectory-averaging methods are incompatible with our setup — 3-for-3 failures** — EMA failed on warm-restarts (#3431), SWA failed on OneCycle (#3615), Lookahead failed on OneCycle (#3699 +8.93%). OneCycle's monotonic anneal settles into a single sharp basin; averaging blurs the cruise-OOD specialization in the final epochs rather than widening it. The grad_clip max_norm=1.0 also saturates variance reduction at the gradient level. Family-wide rejection: don't retry EMA, SWA, Lookahead, or Polyak averaging on this baseline.
 8. **OneCycleLR LR sensitivity is U-shaped with minimum at max_lr=1e-3** — {0.5: +4.1%, 1.0: 0 (baseline), 1.5: pending, 2.0: +1.35%} pp regression. AdamW LR axis exhausted on OneCycle.
 9. **weight_decay=1e-4 is optimal on OneCycle** — wd=0 regresses +4.4%. Schedule's monotonic anneal provides enough implicit regularization that removing wd hurts more than helps.
 10. **Warmup fraction pct_start=0.1 is optimal** — pct_start=0.05 regresses +4.5% (warmup too short, peak too early). Schedule shape is now fully tuned.
