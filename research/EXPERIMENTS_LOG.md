@@ -1576,3 +1576,68 @@ Two paired regressions (+3.14% val, +3.34% test) clearly above the seed variance
 ### Next assignment: PR #4012 Sobolev/edge-gradient loss (fern)
 
 Switch fern to a fully orthogonal axis — physics-aware loss. Add L1 supervision on the finite-difference gradient of predicted surface pressure between kNN-neighbor surface nodes. Four-arm weight sweep {0, 0.1, 0.3, 1.0}. First experiment in the round that changes *what* is being optimized rather than how.
+
+---
+
+## 2026-05-16 15:34 — PR #3594 [MERGED]: Schedule-Free AdamW eliminates cosine schedule (alphonse R2)
+
+**Branch:** `charliepai2i48h4-alphonse/schedule-free-adamw`
+
+**Hypothesis:** The cosine T_max=15 schedule floors LR at 5e-8 by epoch 16, wasting the last 2-3 epochs of the 30-minute budget. SF-AdamW (Defazio et al. 2024) eliminates the scheduler entirely, using Polyak-Ruppert averaging of the weight iterates. With no schedule, LR stays at 5e-4 throughout.
+
+R1 (pre-two-shot-FiLM stack): −20.75% paired. R2 (two-shot-FiLM + clip=1.0 stack): clean replication with smaller but still massive gain.
+
+### Results (R2 paired, two-shot-FiLM + clip=1.0 stack)
+
+| Arm | Config | val_avg/mae_surf_p | Δ vs A | Δ vs baseline 80.893 |
+|---|---|---:|---:|---:|
+| A | AdamW + cosine T_max=15 + clip=1.0 + two-shot FiLM | 78.871 | — | −2.50% |
+| **B** | **SF-AdamW (no scheduler) + clip=1.0 + two-shot FiLM** | **65.618** | **−16.80%** | **−18.88%** |
+
+### Per-split val MAE
+
+| Split | Arm A | Arm B (SF) | Δ % |
+|---|---:|---:|---:|
+| `val_single_in_dist`     | 89.793 | 74.715 | −16.79% |
+| `val_geom_camber_rc`     | 90.291 | 79.128 | −12.36% |
+| `val_geom_camber_cruise` | 59.656 | 45.160 | −24.30% |
+| `val_re_rand`            | 75.743 | 63.467 | −16.21% |
+| **val_avg**              | **78.871** | **65.618** | **−16.80%** |
+
+### Per-split test MAE (3 finite splits)
+
+| Split | Arm A | Arm B (SF) | Δ % |
+|---|---:|---:|---:|
+| `test_single_in_dist`   | 75.881 | 63.718 | −16.03% |
+| `test_geom_camber_rc`   | 80.597 | 70.042 | −13.10% |
+| `test_re_rand`          | 67.861 | 54.799 | −19.25% |
+| **test_avg (3 finite)** | **74.780** | **62.853** | **−15.95%** |
+
+### Per-epoch trajectory (key evidence)
+
+Arm A's LR reaches 5e-8 by epoch 16 — frozen. Arm B's LR stays at 5e-4 throughout. Arm B was still dropping ~1.8 val/epoch at the epoch 17 cap.
+
+| Epoch | Arm B val_avg | Arm B lr | Arm A val_avg | Arm A lr |
+|---:|---:|---:|---:|---:|
+| 14 | 71.033 | 5e-4 | 80.513 | 2.2e-5 |
+| 15 | 69.202 | 5e-4 | 79.661 | 5.5e-6 |
+| 16 | 67.440 | 5e-4 | 79.082 | 5e-8 (frozen) |
+| 17 | 65.618 | 5e-4 | 78.871 | 5e-8 (frozen) |
+
+### Analysis & conclusions
+
+- **Cosine T_max=15 wastes the last 2 epochs.** Arm A is frozen at lr=5e-8 from epoch 16.
+- **Per-split improvement is uniform and large.** Cruise gets biggest relative boost (−24.30%), all four splits improve by 12-24%.
+- **Mechanism reproduced from R1.** Smaller gain vs R1 (−20.75%) is expected — less slack to exploit on a stronger baseline.
+- **Key stack note:** this win used **clip=1.0** (not clip=0.25). The optimal clip under SF-AdamW is unknown; the 2×2 factorial (#4019) resolves this.
+- **EMA + SF-AdamW double-averaging:** SF's Polyak averaging and external EMA(0.999) may be redundant. #4019 includes EMA ablation arms.
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-alphonse-sf-r2-armb-sf-adamw-clip-20260516-142921/metrics.jsonl` ← **winner** (val_avg=65.618)
+- `models/model-charliepai2i48h4-alphonse-sf-r2-armb-sf-adamw-clip-20260516-142921/metrics.yaml`
+- `models/model-charliepai2i48h4-alphonse-sf-r2-arma-baseline-20260516-135423/metrics.jsonl` (paired control)
+
+### Next assignment: PR #4019 SF-AdamW 2×2 composition factorial (alphonse)
+
+2×2 factorial: clip ∈ {1.0, 0.25} × EMA ∈ {on, off}. Answers: (1) optimal clip under SF, (2) EMA redundancy under SF. Best arm merges as the canonical new SF-AdamW stack.
