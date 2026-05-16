@@ -356,6 +356,7 @@ def write_experiment_summary(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "mixup_alpha": cfg.mixup_alpha,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -403,6 +404,7 @@ class Config:
     cond_dim: int = 11         # FiLM conditioning dim; 0 disables FiLM
     clip_grad_norm: float = 0.0  # Gradient clip max_norm; 0 disables
     n_head: int = 4   # Transolver attention heads; head_dim = n_hidden // n_head
+    mixup_alpha: float = 0.0   # 0 disables mixup; >0 enables Beta(alpha, alpha) on raw inputs
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -476,6 +478,26 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
 
+def huber_field_losses(pred, y_norm, is_surface, mask, delta):
+    """Per-channel Huber loss split into (vol_loss, surf_loss) using boolean masks."""
+    abs_err = (pred - y_norm).abs()
+    sq_err = torch.where(
+        abs_err < delta,
+        0.5 * abs_err ** 2,
+        delta * (abs_err - 0.5 * delta),
+    )
+    vol_mask = mask & ~is_surface
+    surf_mask = mask & is_surface
+    vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+    surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+    return vol_loss, surf_loss
+
+
+mixup_dist = (
+    torch.distributions.Beta(cfg.mixup_alpha, cfg.mixup_alpha)
+    if cfg.mixup_alpha > 0 else None
+)
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -485,6 +507,7 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     epoch_grad_norm_pre = 0.0
+    epoch_lam_sum = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -493,25 +516,41 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
-        x_norm = (x - stats["x_mean"]) / stats["x_std"]
+        # Mixup on raw inputs (Zhang et al. 2018). Mixing x[..., 13:] implicitly
+        # interpolates the FiLM cond vector (extracted as x[:, 0, 13:]). We use
+        # the dual-loss formulation for the variable-mesh targets: predict from
+        # mixed x, compute Huber against original and permuted (y, is_surface,
+        # mask) separately, then blend the losses by lam/(1-lam). This avoids
+        # ambiguous float-mask interpretation when N_valid differs across
+        # samples, and matches standard regression Mixup for variable-length
+        # inputs. For Huber with small δ the linear-regime limit is L1, where
+        # dual-loss is mathematically equivalent to mixed-target loss.
+        use_mixup = mixup_dist is not None
+        if use_mixup:
+            lam = float(mixup_dist.sample().item())
+            perm = torch.randperm(x.size(0), device=device)
+            x_in = lam * x + (1.0 - lam) * x[perm]
+        else:
+            lam = 1.0
+            perm = None
+            x_in = x
+
+        x_norm = (x_in - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        abs_err = (pred - y_norm).abs()  # [B, N, 3]
         # Per-channel Huber delta: [Ux, Uy, p]
         delta = torch.tensor(
             [cfg.huber_delta_vel, cfg.huber_delta_vel, cfg.huber_delta_p],
             device=pred.device, dtype=pred.dtype,
         ).view(1, 1, 3)
-        sq_err = torch.where(
-            abs_err < delta,
-            0.5 * abs_err ** 2,
-            delta * (abs_err - 0.5 * delta),
-        )
-
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        vol_loss, surf_loss = huber_field_losses(pred, y_norm, is_surface, mask, delta)
+        if use_mixup:
+            y_norm_perm = (y[perm] - stats["y_mean"]) / stats["y_std"]
+            vol_loss_perm, surf_loss_perm = huber_field_losses(
+                pred, y_norm_perm, is_surface[perm], mask[perm], delta,
+            )
+            vol_loss = lam * vol_loss + (1.0 - lam) * vol_loss_perm
+            surf_loss = lam * surf_loss + (1.0 - lam) * surf_loss_perm
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -525,12 +564,14 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_lam_sum += lam
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
     epoch_grad_norm_pre /= max(n_batches, 1)
+    epoch_lam_mean = epoch_lam_sum / max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -562,6 +603,8 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/grad_norm_pre_clip": epoch_grad_norm_pre,
+        "train/mixup_lam_mean": epoch_lam_mean,
+        "mixup_alpha": cfg.mixup_alpha,
         "clip_grad_norm": cfg.clip_grad_norm,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
