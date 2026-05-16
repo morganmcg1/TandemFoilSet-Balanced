@@ -218,17 +218,107 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
+# Horizontal-flip TTA: dsdf channels 4..11 reorder as a mirror about the x-axis.
+# Assumes the 8 dsdf channels are 8-directional distances around each node;
+# mirroring about x-axis swaps (NE↔SE, N↔S, NW↔SW), leaves (E, W) fixed.
+# Channel local indices (0..7) permute as [0, 7, 6, 5, 4, 3, 2, 1] →
+# global indices [4..11] permute as [4, 11, 10, 9, 8, 7, 6, 5].
+DSDF_FLIP_PERM = [4, 11, 10, 9, 8, 7, 6, 5]
+
+
+def flip_x_horizontal(x: torch.Tensor, _dsdf_idx_cache: dict = {}) -> torch.Tensor:
+    """Mirror raw input features about the x-axis (z → -z, plus dependents).
+
+    Operates in raw (un-normalized) feature space. Returns a new tensor.
+
+    Channel layout (data/prepare_splits.py preprocess):
+      0-1   pos (x, z)              — z negated
+      2-3   saf (rel.x, rel.z)      — rel.z negated
+      4-11  dsdf (8 directions)     — permuted (mirror about x-axis)
+      12    is_surface              — unchanged
+      13    log(Re)                 — unchanged
+      14    AoA0 (rad)              — negated
+      15    NACA0 camber (M/9)      — negated (mirror foil shape)
+      16-17 NACA0 position/thick.   — unchanged
+      18    AoA1                    — negated
+      19    NACA1 camber            — negated
+      20-21 NACA1 position/thick.   — unchanged
+      22    gap (z-separation)      — negated
+      23    stagger (x-separation)  — unchanged
+    """
+    idx = _dsdf_idx_cache.get(x.device)
+    if idx is None:
+        idx = torch.tensor(DSDF_FLIP_PERM, device=x.device, dtype=torch.long)
+        _dsdf_idx_cache[x.device] = idx
+    xf = x.clone()
+    xf[..., 1] = -x[..., 1]
+    xf[..., 3] = -x[..., 3]
+    xf[..., 4:12] = x.index_select(-1, idx)
+    xf[..., 14] = -x[..., 14]
+    xf[..., 15] = -x[..., 15]
+    xf[..., 18] = -x[..., 18]
+    xf[..., 19] = -x[..., 19]
+    xf[..., 22] = -x[..., 22]
+    return xf
+
+
+def flip_pred_y(pred: torch.Tensor) -> torch.Tensor:
+    """Un-flip a model prediction made on a horizontally-flipped input.
+
+    Outputs are (Ux, Uy, p) in normalized space; only Uy (channel 1) changes sign.
+    """
+    out = pred.clone()
+    out[..., 1] = -pred[..., 1]
+    return out
+
+
+def _make_eval_state(device):
+    return {
+        "vol_loss_sum": 0.0,
+        "surf_loss_sum": 0.0,
+        "mae_surf": torch.zeros(3, dtype=torch.float64, device=device),
+        "mae_vol": torch.zeros(3, dtype=torch.float64, device=device),
+        "n_surf": 0,
+        "n_vol": 0,
+    }
+
+
+def _accumulate_pred(state, pred_norm, y_norm, y, is_surface, mask, stats):
+    sq_err = (pred_norm - y_norm) ** 2
+    vol_mask = mask & ~is_surface
+    surf_mask = mask & is_surface
+    state["vol_loss_sum"] += (
+        (sq_err * vol_mask.unsqueeze(-1)).sum()
+        / vol_mask.sum().clamp(min=1)
+    ).item()
+    state["surf_loss_sum"] += (
+        (sq_err * surf_mask.unsqueeze(-1)).sum()
+        / surf_mask.sum().clamp(min=1)
+    ).item()
+    pred_orig = pred_norm * stats["y_std"] + stats["y_mean"]
+    ds, dv = accumulate_batch(pred_orig, y, is_surface, mask,
+                              state["mae_surf"], state["mae_vol"])
+    state["n_surf"] += ds
+    state["n_vol"] += dv
+
+
+def _finalize_eval(state, n_batches, surf_weight):
+    vol_loss = state["vol_loss_sum"] / max(n_batches, 1)
+    surf_loss = state["surf_loss_sum"] / max(n_batches, 1)
+    out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
+           "loss": vol_loss + surf_weight * surf_loss}
+    out.update(finalize_split(state["mae_surf"], state["mae_vol"],
+                              state["n_surf"], state["n_vol"]))
+    return out
+
+
 def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
-    ``loss`` is the normalized-space loss used for training monitoring; the MAE
-    channels are in the original target space and accumulated per organizer
-    ``score.py`` (float64, non-finite samples skipped).
+    Backward-compatible single-pass evaluator (raw predictions only).
     """
-    vol_loss_sum = surf_loss_sum = 0.0
-    mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
-    mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
-    n_surf = n_vol = n_batches = 0
+    state = _make_eval_state(device)
+    n_batches = 0
 
     with torch.no_grad():
         for x, y, is_surface, mask in loader:
@@ -237,9 +327,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
-            # Defensive: replace non-finite GT values with 0, exclude affected nodes.
-            # Prevents inf*0=NaN when scoring.py's accumulate_batch masks them out.
-            _y_fin = torch.isfinite(y).all(dim=-1)  # [B, N]
+            _y_fin = torch.isfinite(y).all(dim=-1)
             if not _y_fin.all():
                 y = torch.where(_y_fin.unsqueeze(-1), y, torch.zeros_like(y))
                 mask = mask & _y_fin
@@ -248,30 +336,58 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            sq_err = (pred - y_norm) ** 2
-            vol_mask = mask & ~is_surface
-            surf_mask = mask & is_surface
-            vol_loss_sum += (
-                (sq_err * vol_mask.unsqueeze(-1)).sum()
-                / vol_mask.sum().clamp(min=1)
-            ).item()
-            surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
-                / surf_mask.sum().clamp(min=1)
-            ).item()
+            _accumulate_pred(state, pred, y_norm, y, is_surface, mask, stats)
             n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
-            n_surf += ds
-            n_vol += dv
+    return _finalize_eval(state, n_batches, surf_weight)
 
-    vol_loss = vol_loss_sum / max(n_batches, 1)
-    surf_loss = surf_loss_sum / max(n_batches, 1)
-    out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
-           "loss": vol_loss + surf_weight * surf_loss}
-    out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
-    return out
+
+def evaluate_split_with_tta(model, loader, stats, surf_weight, device):
+    """Compute raw and horizontal-flip TTA metrics in one pass.
+
+    For each batch, runs two forward passes:
+      1. raw input → raw prediction
+      2. flipped input → flipped prediction (un-flipped via Uy negation)
+    Then the TTA prediction is the per-node mean of (raw, un-flipped).
+    Both raw and TTA predictions feed independent accumulators using the same
+    organizer-aligned scoring helpers.
+
+    Returns (metrics_raw, metrics_tta) — each a dict from evaluate_split format.
+    """
+    raw_state = _make_eval_state(device)
+    tta_state = _make_eval_state(device)
+    n_batches = 0
+
+    with torch.no_grad():
+        for x, y, is_surface, mask in loader:
+            x = x.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
+            is_surface = is_surface.to(device, non_blocking=True)
+            mask = mask.to(device, non_blocking=True)
+
+            _y_fin = torch.isfinite(y).all(dim=-1)
+            if not _y_fin.all():
+                y = torch.where(_y_fin.unsqueeze(-1), y, torch.zeros_like(y))
+                mask = mask & _y_fin
+
+            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            pred_raw = model({"x": x_norm})["preds"]
+
+            x_flipped = flip_x_horizontal(x)
+            x_flipped_norm = (x_flipped - stats["x_mean"]) / stats["x_std"]
+            pred_flipped = flip_pred_y(model({"x": x_flipped_norm})["preds"])
+
+            pred_tta = 0.5 * (pred_raw + pred_flipped)
+
+            _accumulate_pred(raw_state, pred_raw, y_norm, y, is_surface, mask, stats)
+            _accumulate_pred(tta_state, pred_tta, y_norm, y, is_surface, mask, stats)
+            n_batches += 1
+
+    return (
+        _finalize_eval(raw_state, n_batches, surf_weight),
+        _finalize_eval(tta_state, n_batches, surf_weight),
+    )
 
 
 def _sanitize_artifact_token(s: str) -> str:
@@ -463,6 +579,7 @@ wandb.define_metric("train/*", step_metric="global_step")
 wandb.define_metric("val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
+    wandb.define_metric(f"{_name}_tta/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
 
 model_dir = Path(f"models/model-{run.id}")
@@ -524,15 +641,20 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate ---
+    # --- Validate (raw + TTA in one pass) ---
     model.eval()
-    split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
-        for name, loader in val_loaders.items()
-    }
-    val_avg = aggregate_splits(split_metrics)
-    avg_surf_p = val_avg["avg/mae_surf_p"]
-    val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
+    split_metrics_raw: dict[str, dict[str, float]] = {}
+    split_metrics_tta: dict[str, dict[str, float]] = {}
+    for name, loader in val_loaders.items():
+        m_raw, m_tta = evaluate_split_with_tta(model, loader, stats, cfg.surf_weight, device)
+        split_metrics_raw[name] = m_raw
+        split_metrics_tta[name] = m_tta
+
+    val_avg_raw = aggregate_splits(split_metrics_raw)
+    val_avg_tta = aggregate_splits(split_metrics_tta)
+    avg_surf_p = val_avg_raw["avg/mae_surf_p"]
+    avg_surf_p_tta = val_avg_tta["avg/mae_surf_p"]
+    val_loss_mean = sum(m["loss"] for m in split_metrics_raw.values()) / len(split_metrics_raw)
     dt = time.time() - t0
 
     step_time_ms = train_loop_dt * 1000.0 / max(n_batches, 1)
@@ -545,11 +667,16 @@ for epoch in range(MAX_EPOCHS):
         "step_time_ms": step_time_ms,
         "global_step": global_step,
     }
-    for split_name, m in split_metrics.items():
+    for split_name, m in split_metrics_raw.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
-    for k, v in val_avg.items():
+    for split_name, m in split_metrics_tta.items():
+        for k, v in m.items():
+            log_metrics[f"{split_name}_tta/{k}"] = v
+    for k, v in val_avg_raw.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+    for k, v in val_avg_tta.items():
+        log_metrics[f"val_{k}_tta"] = v  # val_avg/mae_surf_p_tta etc.
     wandb.log(log_metrics)
 
     tag = ""
@@ -558,7 +685,9 @@ for epoch in range(MAX_EPOCHS):
         best_metrics = {
             "epoch": epoch + 1,
             "val_avg/mae_surf_p": avg_surf_p,
-            "per_split": split_metrics,
+            "val_avg/mae_surf_p_tta": avg_surf_p_tta,
+            "per_split": split_metrics_raw,
+            "per_split_tta": split_metrics_tta,
         }
         torch.save(model.state_dict(), model_path)
         tag = " *"
@@ -567,20 +696,23 @@ for epoch in range(MAX_EPOCHS):
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s, step={step_time_ms:.1f}ms) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p={avg_surf_p:.4f} (TTA={avg_surf_p_tta:.4f}){tag}"
     )
     for name in VAL_SPLIT_NAMES:
-        print_split_metrics(name, split_metrics[name])
+        print_split_metrics(name, split_metrics_raw[name])
+        print_split_metrics(f"  └ TTA {name}", split_metrics_tta[name])
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
-    print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
+    print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f} "
+          f"(TTA at same epoch = {best_metrics['val_avg/mae_surf_p_tta']:.4f})")
     wandb.summary.update({
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
+        "best_val_avg/mae_surf_p_tta": best_metrics["val_avg/mae_surf_p_tta"],
         "total_train_minutes": total_time,
     })
 
@@ -590,27 +722,37 @@ if best_metrics:
     test_metrics = None
     test_avg = None
     if not cfg.skip_test:
-        print("\nEvaluating on held-out test splits...")
+        print("\nEvaluating on held-out test splits (raw + TTA)...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
             for name, ds in test_datasets.items()
         }
-        test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
-            for name, loader in test_loaders.items()
-        }
+        test_metrics = {}
+        test_metrics_tta = {}
+        for name, loader in test_loaders.items():
+            m_raw, m_tta = evaluate_split_with_tta(model, loader, stats, cfg.surf_weight, device)
+            test_metrics[name] = m_raw
+            test_metrics_tta[name] = m_tta
         test_avg = aggregate_splits(test_metrics)
-        print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
+        test_avg_tta = aggregate_splits(test_metrics_tta)
+        print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}  "
+              f"avg_surf_p_tta={test_avg_tta['avg/mae_surf_p']:.4f}")
         for name in TEST_SPLIT_NAMES:
             print_split_metrics(name, test_metrics[name])
+            print_split_metrics(f"  └ TTA {name}", test_metrics_tta[name])
 
         test_log: dict[str, float] = {}
         for split_name, m in test_metrics.items():
             for k, v in m.items():
                 test_log[f"test/{split_name}/{k}"] = v
+        for split_name, m in test_metrics_tta.items():
+            for k, v in m.items():
+                test_log[f"test/{split_name}_tta/{k}"] = v
         for k, v in test_avg.items():
             test_log[f"test_{k}"] = v
+        for k, v in test_avg_tta.items():
+            test_log[f"test_{k}_tta"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
 
