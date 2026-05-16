@@ -1,5 +1,51 @@
 # SENPAI Research Results
 
+## 2026-05-16 15:25 — nezuko #3954 MERGED (new baseline val 64.68 / test 56.17); R8 R9 arms running
+
+### #3954 nezuko — spec_norm output + lr=1e-4 combined (MERGED — **new baseline val 64.6812 / test 56.1746**)
+
+- Branch: `willowpai2i48h5-nezuko/r8-specnorm-lr1e4`
+- Hypothesis: Stack two merged winners — spec_norm(output) from #3748 + Lion lr=1e-4 from #3843. Do they compound additively?
+- Results:
+
+| Arm | lr | spec_norm | W&B run | val_avg | test_avg | Δ vs new baseline 65.41 |
+|-----|-----|-----------|---------|---------|----------|------------------------|
+| A (ctrl) | 5e-5 | output | `55a1xzky` | 67.87 | 60.01 | — |
+| **B (hypothesis)** | **1e-4** | **output** | **`pc7lsis0`** | **64.6812** | **56.1746** | **−0.733 val / +0.112 test** |
+
+Per-split (Arm B — winner):
+| Split | val | test | Δval vs frieren 65.41 | Δtest vs frieren 56.06 |
+|-------|-----|------|----------------------|------------------------|
+| single_in_dist | 69.26 | 61.06 | −0.34 | +0.03 |
+| geom_camber_rc | 78.64 | 69.24 | −1.54 | −1.23 |
+| geom_camber_cruise | 46.37 | 38.56 | +0.18 | +0.72 |
+| re_rand | 64.47 | 55.83 | −1.22 | +0.92 |
+| **avg** | **64.68** | **56.17** | **−0.73** | **+0.11** |
+
+- Analysis: **Hypothesis weakly confirmed. spec_norm at lr=1e-4 is orthogonal but not additive.** The two mechanisms coexist without interfering (val drops from 65.41 to 64.68), but the gain shrinks dramatically vs spec_norm at lr=5e-5 (which gave −1.39 val). Mechanistic explanation: Lion's sign-based update naturally bounds the effective per-step output gradient magnitude; the additional Lipschitz cap on the head adds little once the step size is already bounded by sign(). **Test metric is flat to slightly worse (+0.11).**
+
+  Note: 4 independent reproductions of lr=1e-4 without spec_norm cluster at val 64.18–64.79 (mean ~64.5). Nezuko's spec_norm arm val 64.68 sits within this noise band — the true spec_norm contribution at lr=1e-4 is ~0 ± seed noise.
+
+  **Key finding (added):** spec_norm Lipschitz contribution diminishes as lr grows. At lr=5e-5: −1.39 val. At lr=1e-4: ~−0 val (noise). The regularization budget is saturated by sign-based updates at higher lr.
+
+  **New baseline: val 64.6812 / test 56.1746** (BASELINE.md updated, PR #3954 squash-merged).
+
+### Active experiments: R8 + R9 rounds
+
+| PR | Student | Config | Status | Best val so far |
+|----|---------|--------|--------|-----------------|
+| #3976 | frieren | R9: lr push 1.5e-4 | jurrwig2 running (step 4341/5264) | 66.15 (still running) |
+| #3977 | fern | R9: stochastic depth 0.1 | 8zhftd2l running (step 4072/5264) | 76.93 (early) |
+| #3978 | askeladd | R9: MixUp alpha=0.2 | u1k8cpqz running (step 1385/5264) | 175.98 (warmup) |
+| #3958 | thorfinn | R8: wd=5e-4 finished, wd=2e-3 running | x9vlv88g finished val 64.79 (above new BL 64.68) | 64.79 |
+| #3957 | tanjiro | R8: T_max=10 retry running | d3jr861j at step 4538/5264 | 80.14 (early eval) |
+| #3955 | alphonse | R8: n_power_iter=5 running | nh64g1ds at step 2396/5264 | 95.93 (early) |
+| #3913 | edward | R8: alpha=0.5 lr=1e-4 just started | 447v6w7g step 84 | — |
+
+Note: thorfinn wd=5e-4 (val 64.79) no longer beats the new baseline (64.68). wd=2e-3 and the wd=1e-3 ctrl retry still running.
+
+---
+
 ## 2026-05-16 13:30 — frieren #3843 MERGED (new baseline val 65.41 / test 56.06); fern #3808 / askeladd #3712 closed informative; 3 R9 assignments
 
 ### #3843 frieren — Lion lr=1e-4 sweep (MERGED — **new baseline val 65.4142 / test 56.0627**)
