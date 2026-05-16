@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 12:32
+- **Date:** 2026-05-16 13:08
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
@@ -30,7 +30,7 @@
 
 | Student | PR | Hypothesis | Status |
 |---|---|---|---|
-| edward | #3878 | EMA decay sweep {0.995, 0.999} on triple compound | wave-9 |
+| edward | #3971 | EMA warm-up ramping {0.9→0.998 @100, 0.9→0.9995 @200} | NEW (wave-10) |
 | alphonse | #3964 | LayerScale γ-init sweep {0.005, 0.02} on triple compound | NEW (wave-10) |
 | fern | #3883 | T_max schedule sweep {12, 25} on triple compound | wave-9 |
 | frieren | #3909 | Learnable Fourier frequencies on triple compound | NEW (wave-9) |
@@ -63,6 +63,7 @@
 | #3740 (frieren) | Asymmetric LayerScale γ-init: both arms regress; γ converges to natural asymmetry regardless of init |
 | #3823 (nezuko) | Lookahead optimizer: both k=5/k=10 ~15-21% worse; slow-anchor averaging disrupts LayerScale γ trajectory |
 | #3882 (alphonse) | SAM optimizer ρ=0.05: structural failure under 30-min budget; 2× overhead halves epochs, no flat-min benefit overcomes |
+| #3878 (edward) | EMA decay sweep {0.995, 0.999}: both worse than 0.998; 0.999 EMA doesn't "open" in 12-epoch budget — needs warm-up |
 
 ## Current research themes
 
@@ -70,7 +71,7 @@
 
 2. **LayerScale γ-init sweep (alphonse #3964) — wave-10 NEW**: γ=0.01 won on n=10 stack; with n_freqs=14 (richer input) + EMA (averages γ-trajectory) the optimal may have shifted. Testing γ ∈ {0.005, 0.02} narrow bracket on triple compound.
 
-3. **EMA decay sweep (edward #3878) — wave-9, STALLED**: EMA 0.998 won by enabling n14+LayerScale. Testing {0.995, 0.999} bracket. ~3h no progress since assignment; pod healthy but pinged.
+3. **EMA warm-up ramping (edward #3971) — wave-10 NEW**: edward's own follow-up — static 0.999 decay couldn't "open" in 12-epoch budget. Warm-up ramps decay 0.9→target over first N steps to unlock the deeper-averaging regime. arm-1: 0.9→0.998 @100 steps (validates warm-up doesn't hurt). arm-2: 0.9→0.9995 @200 steps (unlocks 0.9995 regime).
 
 4. **T_max schedule sweep (fern #3883) — wave-9**: Current T_max=20 with ~12 effective epochs means cosine only completes 60-70% of its cycle. T_max=12 (aligned to budget) vs T_max=25 (slower decay).
 

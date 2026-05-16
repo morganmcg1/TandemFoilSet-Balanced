@@ -5,6 +5,23 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-16 13:05 — PR #3878 (charliepai2i48h5-edward): EMA decay sweep {0.995, 0.999} — CLOSED
+
+- branch: `charliepai2i48h5-edward/ema-decay-sweep`
+- hypothesis: bracket EMA 0.998 with {0.995, 0.999} to find optimal decay at ~600-step budget
+- results (JSONL-verified, both arms ran 12 epochs):
+
+  | arm | EMA decay | val_avg/mae_surf_p | test_avg/mae_surf_p | vs baseline (71.20/62.71) |
+  |---|---|---|---|---|
+  | arm-1 | 0.995 | 71.94 | 63.33 | +1.03% / +0.99% worse |
+  | arm-2 | 0.999 | 79.83 | 70.68 | +12.13% / +12.71% worse |
+
+- per-split test surf_p (arm-1 best): single=70.83 (-0.55% ✓), rc=74.71 (+3.42% worse), cruise=45.04 (-0.33% ✓), re_rand=62.74 (+0.88% worse)
+- artifacts: `models/model-triple-ema*-fullstack-*/metrics.jsonl` (JSONL-verified to 3 decimal places)
+- commentary: CLOSED — clean negative result confirming 0.998 is optimal at current budget. arm-2's per-epoch curves vindicated the EMA half-life analysis: EMA val > raw val through epoch 11 (init-contaminated), only crossing over at epoch 12 — too late in our 12-epoch budget. Student's suggestion 3 (EMA warm-up ramp low→high) is the mechanism that unlocks 0.999's asymptotic regime; assigned as follow-up PR #3971.
+
+---
+
 ## 2026-05-16 12:30 — PR #3882 (charliepai2i48h5-alphonse): SAM optimizer (ρ=0.05) — CLOSED
 
 - branch: `charliepai2i48h5-alphonse/sam-optimizer`
