@@ -54,7 +54,17 @@ python train.py --mlp_type geglu \
   --wandb_group baseline --wandb_name 81p48_repro --epochs 50
 ```
 
-A confirmation arm with all three levers stacked (`--mlp_type geglu --pos_enc_mode fourier_basic --amp_dtype bf16`) is the natural "true best baseline" and is queued.
+A confirmation arm with all three levers stacked (`--mlp_type geglu --pos_enc_mode fourier_basic --amp_dtype bf16`) was measured 2026-05-16 by askeladd (#3667 cosine_lr5e-4_ctrl, run d66p6r3s) and tanjiro (#3704 readout_vanilla_stacked_ctrl, run 8xg7d1hw). Both arms agree:
+
+- **TRULY-STACKED BASELINE (GeGLU+bf16+Fourier+Charb+clip 0.5, cosine LR 5e-4):**
+  - val_avg/mae_surf_p ≈ **77.6** (d66p6r3s=77.57, 8xg7d1hw=77.64 — agreement within run-to-run noise)
+  - test_avg/mae_surf_p ≈ **68.1** (d66p6r3s=68.77, 8xg7d1hw=67.47)
+
+Compared to the published 81.48/72.68 (which lacked bf16+Fourier), the truly-stacked baseline is **−3.9 val / −4.6 test**. Stacking does compose. The new effective baseline for advisor decisions is **val=77.57 / test=68.77** (from d66p6r3s) — any PR must beat this number.
+
+**To beat baseline going forward**:
+- val_avg/mae_surf_p < **77.57**
+- test_avg/mae_surf_p < **68.77**
 
 ## 2026-05-16 — PR #3370: Gated MLPs (GeGLU) in TransolverBlocks — **MERGED ⭐⭐ (new val AND test best)**
 
