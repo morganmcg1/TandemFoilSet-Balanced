@@ -2216,3 +2216,73 @@ Key redirects:
 - Control R2: `models/model-charliepai2i48h4-frieren-lion-r2-arma-adamw-clip25-rebased-20260516-172945/metrics.jsonl`
 - Original R1 winner: `models/model-charliepai2i48h4-frieren-lion-r1-armb-lion-clip25-20260516-152650/metrics.jsonl`
 
+
+---
+
+## 2026-05-16 21:18 — PR #4038 [MERGED]: SF-AdamW LR sweep — lr ∈ {5e-4, 1e-3, 2e-3, 5e-3}
+
+- **Student branch:** `charliepai2i48h4-askeladd/sf-lr-sweep`
+- **Hypothesis:** The default lr=5e-4 was inherited from AdamW-tuned cosine stack. SF's constant-LR regime benefits from re-tuning upward — paper recommends 4-10× higher LR than scheduled optimizers.
+
+### Results
+
+All arms ran on full SF-AdamW canonical stack (17 epochs each).
+
+| Arm | lr | val_avg | Paired Δ vs A | Test 3-split | Test Δ vs A |
+|-----|---|---|---|---|---|
+| **A (ctrl)** | 5e-4 | 62.958 | — | 61.235 | — |
+| B | 1e-3 | 58.424 | **−7.20%** | 56.145 | −8.31% |
+| **C (winner)** | **2e-3** | **54.769** | **−13.01%** | **53.540** | **−12.57%** |
+| D | 5e-3 | 55.951 | −11.13% | 53.833 | −12.09% |
+
+**Non-monotone: C < D < B.** C (lr=2e-3) is the minimum. C wins on EVERY val split and EVERY finite test split.
+
+Per-split val:
+
+| Split | A (5e-4) | C (2e-3, winner) | Δ |
+|---|---:|---:|---:|
+| `val_single_in_dist`     | 72.255 | **60.429** | −16.4% |
+| `val_geom_camber_rc`     | 75.771 | **68.478** | −9.6% |
+| `val_geom_camber_cruise` | 42.765 | **34.597** | −19.1% |
+| `val_re_rand`            | 61.040 | **55.572** | −9.0% |
+| **val_avg**              | **62.958** | **54.769** | **−13.01%** |
+
+### Comparison to newly-merged Lion baseline (63.336)
+
+SF-AdamW + lr=2e-3 (54.769) beats Lion + cosine + lr=1.5e-4 (63.336) by **−13.5% absolute on val** and **−11.7% on test (53.540 vs 60.549)**. This re-establishes SF-AdamW as the dominant single mechanism.
+
+**Critical finding:** The lr=5e-4 default was catastrophically wrong for SF. SF's constant-LR regime needs ~4× higher LR than AdamW's cosine-schedule counterpart. Every SF experiment up to this point (including the Lion comparison) was run with the wrong LR.
+
+### Decision: MERGED as new canonical stack (2026-05-16 21:18 UTC)
+
+### Impact on in-flight experiments
+
+All in-flight SF sweeps (#4019, #4087, #4113, #4114) were run with lr=5e-4 — the wrong LR. Their results are still mechanistically informative (directional effects transfer), but absolute numbers and any "close to baseline" decisions should be re-evaluated. When these PRs land:
+
+- If paired Δ is still directionally significant → result likely holds at lr=2e-3 (probably bigger)
+- If paired Δ was marginal → re-test on the correct lr=2e-3 stack
+
+Frieren #4144 Lion+SF composition: **Updated to use SF-AdamW lr=2e-3 in the Arm B control** (posted corrective comment).
+
+### New canonical stack
+
+```bash
+python train.py \
+  --amp_dtype bf16 \
+  --use_ema --ema_decay 0.999 \
+  --film_cond --two_shot_film \
+  --grad_clip_norm 1.0 \
+  --use_schedule_free --lr 2e-3
+```
+
+### New assignments
+
+- **askeladd → #4149**: Lion LR sweep {7.5e-5, 1.5e-4, 3e-4, 6e-4} — can the 4× LR insight transfer to Lion? Tests whether Lion matches SF-AdamW lr=2e-3 with higher LR.
+
+### Metric artifacts
+
+- Winner (lr=2e-3): `models/model-charliepai2i48h4-askeladd-sf-lr-r1-armc-lr2e-3-20260516-180222/metrics.jsonl`
+- Control (lr=5e-4): `models/model-charliepai2i48h4-askeladd-sf-lr-r1-arma-lr5e-4-20260516-192309/metrics.jsonl`
+- Arm B (lr=1e-3): `models/model-charliepai2i48h4-askeladd-sf-lr-r1-armb-lr1e-3-20260516-172709/metrics.jsonl`
+- Arm D (lr=5e-3): `models/model-charliepai2i48h4-askeladd-sf-lr-r1-armd-lr5e-3-20260516-183721/metrics.jsonl`
+
