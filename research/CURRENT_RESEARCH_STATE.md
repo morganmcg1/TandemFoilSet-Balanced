@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **As of:** 2026-05-16 09:30 UTC
+- **As of:** 2026-05-16 10:15 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r3`
 - **Research tag:** `willow-pai2i-24h-r3` (round 6 active)
 - **Most recent human research direction:** None received.
@@ -39,14 +39,14 @@ The full current SOTA stack (7 levers stacked across 6 rounds):
 
 | Student | PR | Slug | Hypothesis | Status |
 |---|---|---|---|---|
-| alphonse | #3590 | `lion-clip-sweep` | Add clip=off arm on T_max=21 stack | WIP — clip-off running |
+| alphonse | #3876 | `slice-num-sweep` | PhysicsAttention slice_num {32, 96} | NEW — just assigned |
 | edward | #3640 | `ema-weights` | EMA d=0.999 on T_max=21 stack | WIP — post-rebase re-run in progress |
-| frieren | #3801 | `lion-lr-refine` | lr=2.5e-4 + lr=2e-4/T_max=25 | WIP |
-| tanjiro | #3821 | `cosine-plateau-tail` | Plateau at 1.4e-5 or 2e-5 for ep17-19 | NEW — just assigned |
-| nezuko | #3745 | `h160-tmax-calibrated` | H=160 + T_max=16 | WIP |
-| fern | #3747 | `vol-loss-p-weight` | vol_loss p-weight {1.5, 2.0} | WIP |
-| askeladd | #3749 | `lion-beta-sweep` | Lion β₁ {0.8, 0.95} | WIP |
-| thorfinn | #3751 | `wd-sweep` | Weight decay {1e-3, 5e-2} | WIP |
+| frieren | #3801 | `lion-lr-refine` | lr=2.5e-4 done (val=65.40, worse); T_max=25 arm nudged | WIP — awaiting Arm 2 |
+| tanjiro | #3821 | `cosine-plateau-tail` | Plateau at 1.4e-5 or 2e-5 for ep17-19 | WIP — Training |
+| nezuko | #3745 | `h160-tmax-calibrated` | H=160 done (val=65.78, worse); H=144 arm nudged | WIP — awaiting Arm 2 |
+| fern | #3747 | `vol-loss-p-weight` | vol_p=1.5 val=65.17 (val-better, test-worse); vol_p=2.0 re-run | WIP — mixed result |
+| askeladd | #3880 | `dropout-sweep` | dropout {0.05, 0.10} on SOTA stack | NEW — just assigned |
+| thorfinn | #3751 | `wd-sweep` | wd=1e-3 done (val=65.92, worse); wd=5e-2 arm nudged | WIP — awaiting Arm 2 |
 
 ## Current baseline (BASELINE.md)
 
@@ -69,13 +69,13 @@ The full current SOTA stack (7 levers stacked across 6 rounds):
 | Priority | PR | Student | Hypothesis | Latest signal |
 |---|---|---|---|---|
 | MED | #3640 | edward | EMA d=0.999 on T_max=21 | Post-rebase re-run in progress |
-| HIGH | #3801 | frieren | lr-refine: lr=2.5e-4 + T_max=25 | Training |
-| MED | #3821 | tanjiro | cosine-plateau-tail: plateau 1.4/2e-5 ep17-19 | NEW (Training) |
-| MED | #3590 | alphonse | clip=off arm | Running |
-| MED | #3745 | nezuko | H=160+T_max=16 / H=144+T_max=17 | Arm 1 finished val=65.78 (worse); Arm 2 running |
-| LOW | #3747 | fern | vol_loss p-weight 1.5/2.0 | Both arms finished: vol_p=1.5 val=65.17/test=61.02 (val-better, test-worse); re-run vol_p=2.0 in flight |
-| LOW | #3749 | askeladd | Lion β₁ sweep | Both arms finished: β=0.8 val=70.66, β=0.95 val=70.87 (both worse); awaiting terminal |
-| LOW | #3751 | thorfinn | wd sweep | wd=1e-3 ran 3× (val=65.92, test=61.90, all worse); **wd=5e-2 arm missing — nudged student** |
+| HIGH | #3801 | frieren | lr=2.5e-4 done worse (+0.10); awaiting T_max=25 arm | Nudged — Arm 2 pending |
+| MED | #3821 | tanjiro | cosine-plateau-tail: plateau 1.4/2e-5 ep17-19 | Training |
+| MED | #3876 | alphonse | slice_num {32, 96} — NEW ASSIGNMENT | Training |
+| MED | #3745 | nezuko | H=160 done worse (+0.48); awaiting H=144 arm | Nudged — Arm 2 pending |
+| MED | #3747 | fern | vol_p=1.5 val=65.17/test=61.02 (mixed — val↓ test↑) | Awaiting terminal |
+| MED | #3880 | askeladd | dropout {0.05, 0.10} — NEW ASSIGNMENT | Training |
+| LOW | #3751 | thorfinn | wd=1e-3 done worse; awaiting wd=5e-2 arm | Nudged — Arm 2 pending |
 
 ## Critical insight: EMA + T_max=21 mechanism overlap
 
@@ -115,7 +115,8 @@ This redirects round-7 priorities:
 | Approach | Best result | Decision |
 |---|---:|---|
 | **eta_min raise (tanjiro #3713): {2e-5, 3e-5}** | 67.16 / 68.44 (both worse) | **CLOSED** — raises entire cosine second half; model can't reach sweet-spot LR≈1.45e-5 |
-| (other round-6 in-flight TBD) | — | Pending terminals |
+| **Lion β₁ sweep (askeladd #3749): {0.8, 0.95}** | 70.66 / 70.87 (both +5.4 worse) | **CLOSED** — β=0.9 confirmed optimal; timescale calibrated to clip+schedule |
+| **clip sweep (alphonse #3590): {0.25, 0.5, 2.0, off}** | 70.11 best (clip=off worst at 76.17) | **CLOSED** — structural diagnostic: sign-invariance theorem confirmed; clip=1.0 locked |
 
 ## Eliminated approaches (cumulative)
 
@@ -130,7 +131,8 @@ This redirects round-7 priorities:
 | NACA Fourier features (thorfinn) | 115.45 | Closed |
 | LR warmup on old Lion (frieren) | 100.80 | Closed |
 | Lion+bf16 without clip (fern) | 89.53 | Closed |
-| Lion+clip threshold > 0 sweep (alphonse #3590) | 70.12 (clip=0.25/0.5 bit-identical) | Sign-invariance under always-clipping confirmed |
+| Lion+clip full sweep (alphonse #3590, all 4 arms) | 70.11 (best, clip=0.25/0.5); clip=off=76.17 (worst) | Sign-invariance theorem confirmed; clip lever closed |
+| Lion β₁ sweep (askeladd #3749): {0.8, 0.95} | 70.66 / 70.87 (both worse by >5) | β=0.9 confirmed optimal; lever closed |
 
 ## Known infra bugs (unchanged)
 
