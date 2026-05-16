@@ -2,6 +2,40 @@
 
 ## Current Best
 
+### 2026-05-16 23:35 — PR #4103: bs=2 + Huber δ=0.10 — charliepai2i48h5-tanjiro
+
+- **val_avg/mae_surf_p**: **56.92** (best_epoch=18/18, timeout-bound, still descending)
+- **test_avg/mae_surf_p**: **49.32** (from best-val checkpoint)
+- **Improvement over prior best**: -0.33% val / +0.16% test vs PR #4146 (57.11/49.24)
+- **Cumulative improvement**: -55.8% val vs round-5 start (~128.69)
+- **Per-split test surface p MAE**:
+  | Split | test surf_p | Δ vs prior (57.11/49.24) |
+  |---|---|---|
+  | single_in_dist | 54.68 | +1.63% ✗ |
+  | geom_camber_rc | 61.34 | -0.49% ✓ |
+  | geom_camber_cruise | 32.89 | +0.18% ✗ |
+  | re_rand | 48.35 | -0.70% ✓ |
+- **Metric artifacts**: `models/model-bf16-layerscale-bs2-huber010-rerun-20260516-222510/metrics.jsonl`
+- **Stack**: BF16 + LayerScale γ-init=0.01 + n_freqs=**10** + **batch_size=2** + **Huber δ=0.10** + T_max=20 + clip=0.25 (no EMA)
+- **Note**: Different stack lineage from #4146 (n=10 vs n=8, no lr=7e-4). The 4-way compound (bs=2+n=8+lr=7e-4+δ=0.10) is still untested — likely a bigger win.
+- **Key findings**:
+  - Monotonic Huber tightening: δ=0.3 → 0.15 → 0.10 keeps improving val at bs=2
+  - δ=0.15 → δ=0.10 added -2.57 val on n=10 stack
+  - No destabilization at δ=0.10 (best_epoch=18/18, val curves smooth)
+  - cruise split gains -5.3% val (most residual-sensitive)
+- **Reproduce**:
+  ```bash
+  cd target && python train.py --epochs 50 \
+      --bf16 --batch_size 2 \
+      --layer_scale_init 0.01 \
+      --n_freqs 10 --huber_delta 0.10 \
+      --lr_t_max 20 --grad_clip_max_norm 0.25 \
+      --experiment_name bf16-layerscale-bs2-huber010-rerun \
+      --agent charliepai2i48h5-tanjiro
+  ```
+
+---
+
 ### 2026-05-16 22:45 — PR #4146: bs=2 + n_freqs=8 + lr=7e-4 compound — charliepai2i48h5-alphonse
 
 - **val_avg/mae_surf_p**: **57.11** (best_epoch=18/18, timeout-bound, still descending)
