@@ -467,6 +467,7 @@ class Config:
     num_freq: int = 4  # Fourier positional-encoding frequencies (Tancik 2020); 4 won vs 8
     coord_noise_std: float = 0.01  # Gaussian noise std on normalized (x,z) coords during training
     mlp_ratio: int = 2  # FFN expansion ratio; SwiGLU inner = round_to_mult(hidden*mlp_ratio*2/3, 8)
+    camber_flip_aug: bool = False  # z-mirror + AoA negation augmentation (training only)
 
 
 cfg = sp.parse(Config)
@@ -582,13 +583,41 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
+        y_norm = (y - stats["y_mean"]) / stats["y_std"]
+
+        # Camber-flip augmentation: per-sample 50% z-mirror with AoA negation.
+        # Physical symmetry: raw value v under chord flip is v' = -v. In
+        # normalized space (norm = (v - mean) / std), the correct transform is
+        # norm' = (-v - mean)/std = -norm - 2*mean/std. The "- 2*mean/std"
+        # offset is essential whenever the raw mean is non-zero.
+        # Affected dims (z-antisymmetric):
+        #   x: 1 (z), 3 (saf_z), 14 (AoA1), 18 (AoA2), 22 (gap)
+        #   y: 1 (Uy=z-velocity)
+        # Gap is signed (program.md: range [-0.8, 1.6]) — the advisor's
+        # original "unsigned" note was incorrect; ~60% of train samples have
+        # non-zero gap. Without flipping gap, half of augmented tandem samples
+        # would have inconsistent (flipped pressure field, original gap sign).
+        # Unchanged (z-symmetric or scalar): saf_x, dsdf 4-11, is_surface,
+        # log(Re), NACA M/P/T, stagger; targets Ux and p.
+        if cfg.camber_flip_aug:
+            B = x_norm.shape[0]
+            flip_mask = (torch.rand(B, device=x_norm.device) < 0.5).to(x_norm.dtype)
+            sign = (1 - 2 * flip_mask).view(B, 1)  # (B, 1) ∈ {+1, -1}
+            flip_f = flip_mask.view(B, 1)          # (B, 1) ∈ {0, 1}
+            x_norm = x_norm.clone()
+            for d in (1, 3, 14, 18, 22):
+                offset = -2.0 * stats["x_mean"][d] / stats["x_std"][d]
+                x_norm[..., d] = x_norm[..., d] * sign + flip_f * offset
+            y_norm = y_norm.clone()
+            offset_uy = -2.0 * stats["y_mean"][1] / stats["y_std"][1]
+            y_norm[..., 1] = y_norm[..., 1] * sign + flip_f * offset_uy
+
         if cfg.coord_noise_std > 0:
             pad_mask = mask.unsqueeze(-1).to(x_norm.dtype)  # (B, N, 1); zero at padding
             noise = torch.randn_like(x_norm[..., :2]) * cfg.coord_noise_std * pad_mask
             x_norm = x_norm.clone()
             x_norm[..., :2] = x_norm[..., :2] + noise
         x_enc = encode_inputs(x_norm, cfg.num_freq)
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_enc})["preds"]
         err = _pointwise_loss(pred, y_norm, cfg.loss_type)
 
