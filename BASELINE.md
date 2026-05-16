@@ -11,6 +11,35 @@ Paper-facing test metric: `test_avg_nansafe/mae_surf_p` (3-split nansafe due to 
 
 ---
 
+## 2026-05-16 04:30 — PR #3596: T_max=21 cosine fix on Lion+bf16+clip+floor stack (tanjiro)
+
+**Round-5 winner. New SOTA. −5.9% val / −6.3% test improvement over previous SOTA.**
+
+- **val_avg/mae_surf_p:** 65.7375
+- **test_avg_nansafe/mae_surf_p:** 61.7003 (via `eval_nansafe.py`)
+- **Per-split val (best ckpt epoch 18):**
+  - val_single_in_dist: ~79.6 (see W&B run tew7xthq)
+  - val_geom_camber_rc: ~84.9
+  - val_geom_camber_cruise: ~40.2
+  - val_re_rand: ~67.5
+- **Per-split test (nansafe, eval_nansafe.py):**
+  - test_single_in_dist: 61.9972
+  - test_geom_camber_rc: 69.7654
+  - test_geom_camber_cruise: 57.5355
+  - test_re_rand: 57.5030
+- **Surface MAE (test_avg_nansafe):** Ux=0.9697, Uy=0.4851, p=61.7003
+- **W&B run:** `tew7xthq` (group: `lion-tmax-newbase`, agent: `willowpai2i24h3-tanjiro`)
+- **Key change (stacked on PR #3427 Lion+bf16+clip+floor):**
+  - `lr_T_max=21` — cosine arc fully traverses the lower 57% of the curve within the 19-epoch bf16 budget, vs T_max=50 (only 38% traversed). LR reaches ~1.2e-5 at epoch 19, near but not at eta_min floor (1e-5).
+  - Best epoch = 18 (not 19); epoch 19 mildly regresses in both arms — eta_min floor itself not helpful; the benefit is from the lower-LR refinement region around epochs 16-18.
+  - Comparison arm (T_max=19): val=66.25 — also beats baseline, but T_max=21 is optimal (LR slightly higher in the critical ep 17-18 window)
+- **Peak VRAM:** 33.0 GB / 96 GB (unchanged)
+- **Reproduce:** `cd "target/" && python train.py --lr_T_max 21 --wandb_group lion-tmax-newbase --wandb_name lion-tmax21 --agent willowpai2i24h3-tanjiro`
+
+Note: `test_avg/mae_surf_p` is NaN in-tree (cruise data bug). Test metric via `eval_nansafe.py`.
+
+---
+
 ## 2026-05-16 00:30 — PR #3427: Lion + bf16 + grad-clip + eta_min stack (alphonse)
 
 **Round-4 winner. New SOTA. −25.75% val improvement over previous Lion baseline.**
