@@ -1540,3 +1540,39 @@ Edward reassigned to AGC (Adaptive Gradient Clipping, NFNet-style per-parameter-
 - `models/model-charliepai2i48h4-tanjiro-clipthresh-r1-armc-clip0_25-20260516-133449/metrics.jsonl` ← **winner**
 
 ### Next assignment: PR #4003 clip threshold R2 {0.05, 0.1, 0.15, 0.25 control}
+
+---
+
+## 2026-05-16 14:50 — PR #3758 [CLOSED]: n_layers=4 depth ablation R3 (fern)
+
+**Branch:** `charliepai2i48h4-fern/n-layers-4-depth-ablation`
+
+**Hypothesis:** Under the 30-min wall-clock budget, n_layers=4 should be net-positive because each epoch ~17-20% faster than n_layers=5 buys 2-3 extra fine-tune epochs in the cosine T_max=15 tail. Tested twice prior (R1 +0.41%, R2 +1.78% on the pre-clip stack — both within seed band and inconclusive). R3 re-ran on the **new clip=1.0 stack** to check whether depth=4 still adds anything once gradient clipping is on.
+
+### Results (R3 paired, clip=1.0 stack)
+
+| Arm | Config | val_avg/mae_surf_p | Δ vs Arm A |
+|---|---|---:|---:|
+| A | n_layers=5 + clip | 81.31 | — (control) |
+| B | n_layers=4 + clip | 83.86 | **+3.14% (regression)** |
+
+Test 3-split mean: Arm A 77.5, Arm B 80.1 — **+3.34%** matching direction.
+
+### Decision: CLOSE
+
+Two paired regressions (+3.14% val, +3.34% test) clearly above the seed variance band (±1.5-2%). Depth axis fully closed: depth↑ regressed (#3595 n_layers=6), depth↓ regressed under clip (#3758 n_layers=4). The original "epoch-budget buys late-training stability" mechanism is real, but gradient clipping (now baseline at 0.25) does exactly that job more directly — **two distinct mechanisms targeting the same role do not compound, and the cheaper one (clip) wins**.
+
+### Lessons captured
+
+- **Pre-clip vs post-clip mechanism check is now a standard test.** When R1/R2 evidence for a hypothesis comes from a stack that has since changed (clip was added between R2 and R3), re-running on the new stack often reveals the original mechanism was a proxy for something the new stack now handles directly.
+- **Late-training stability is owned by gradient clipping in this stack.** EMA(0.999) handles trajectory smoothing on longer time scales; clip=0.25 handles per-step direction; depth=4 was a third path to the same effect and is now subsumed.
+- **n_layers=5 is the right depth** for this Transolver on this dataset under the 30-min budget — no further depth sweeps planned.
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-fern-depth-r3-arma-baseline-*/metrics.jsonl` (Arm A control)
+- `models/model-charliepai2i48h4-fern-depth-r3-armb-n_layers4-*/metrics.jsonl` (Arm B regression)
+
+### Next assignment: PR #4012 Sobolev/edge-gradient loss (fern)
+
+Switch fern to a fully orthogonal axis — physics-aware loss. Add L1 supervision on the finite-difference gradient of predicted surface pressure between kNN-neighbor surface nodes. Four-arm weight sweep {0, 0.1, 0.3, 1.0}. First experiment in the round that changes *what* is being optimized rather than how.
