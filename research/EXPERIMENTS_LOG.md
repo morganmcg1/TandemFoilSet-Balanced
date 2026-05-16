@@ -1,5 +1,103 @@
 # SENPAI Research Results — charlie-pai2i-24h-r2
 
+## 2026-05-16 01:25 — PR #3536: eta_min=1e-5 on cosine annealing [SENT BACK — REBASE FOR COMPOUND TEST]
+- Branch: `charliepai2i24h2-tanjiro/eta-min-1e-5-rebased-r5`
+- Student: charliepai2i24h2-tanjiro
+- Hypothesis: Raise CosineAnnealingLR `eta_min` from 0 to 1e-5 so the schedule tail keeps a productive lr. Predicted 0.5–2% val improvement.
+
+### Results table
+
+| Metric | Result | vs OLD baseline 96.667 | vs NEW baseline 95.808 |
+|--------|--------|------------------------|------------------------|
+| `val_avg/mae_surf_p` (best @ ep 14) | **95.835** | **−0.86% ✓** (beat target) | +0.03% (effectively tied) |
+| `test_avg/mae_surf_p` | 85.292 | −0.19% ✓ | **−0.33% ✓** (slight win) |
+| `val_geom_camber_rc` | 103.748 | −1.68% ✓ | — |
+| `val_re_rand` | 90.032 | −1.52% ✓ | — |
+| E13→E14 val drop | 97.63→95.83 | clear cosine-tail productivity | — |
+
+### Analysis
+- Hypothesis confirmed in isolation: eta_min=1e-5 makes the final 1-2 cosine epochs continue to descend productively. Best epoch is the final epoch with a sharp 1.8-pt drop in the last step. Validates the lever and falsifies the closed T_max=10 hypothesis as the right direction.
+- However, run was launched on OLD baseline (96.667 at commit 1ade498). While training, PR #3314 (wd=3e-4) merged, dropping the baseline to 95.808. Compared at new baseline: val is tied (+0.027), test is marginal win (−0.33%).
+- The lever is real and orthogonal to wd=3e-4 (which attacks single_in_dist; eta_min attacks geom_rc + re_rand). Predicted compound effect: 0.5–1% additional improvement on top of 95.808.
+
+### Decision
+- **SENT BACK** for rebase + compound retest with wd=3e-4 on the new baseline. Same code change (eta_min=1e-5 in CosineAnnealingLR), same reproduce command. Target: beat 95.808.
+
+---
+
+## 2026-05-16 01:24 — PR #3534: RFF positional encoding (32 freqs, σ=10) on new baseline [CLOSED]
+- Branch: `charliepai2i24h2-nezuko/rff-32-rebased-r5`
+- Student: charliepai2i24h2-nezuko
+- Hypothesis: 32-frequency Gaussian RFF (σ=10) added to (x, z) gives the model high-frequency positional features that should specifically help single_in_dist (the hardest split). Predicted 1-5% improvement.
+
+### Results table
+
+| Metric | RFF (σ=10) | Baseline (PR #3377) | Δ |
+|--------|-----------|---------------------|---|
+| `val_avg/mae_surf_p` | **99.457** | 96.667 | **+2.89%** worse |
+| `test_avg/mae_surf_p` | **87.197** | 85.454 | **+2.04%** worse |
+| `val_single_in_dist` | 123.805 | 116.665 | **+6.12%** worse (REVERSE of prediction) |
+| `val_geom_camber_rc` | 112.192 | 105.516 | +6.33% worse |
+| `val_geom_camber_cruise` | 71.359 | 73.065 | −2.34% better |
+| `val_re_rand` | 90.471 | 91.421 | −1.04% better |
+
+### Analysis
+- Hypothesis **reversed**: split predicted to help most (single_in_dist) regressed worst. Smooth splits (cruise, re_rand) marginally improved.
+- Mechanism: σ=10 generates frequencies up to ~10 cycles/unit on normalized (x, z), matching dense per-node mesh details — not airfoil scales. On geom-shifted splits, those high-freq features encode mesh-frame patterns that don't transfer. The OLD-baseline RFF win likely came from filling a positional-capacity gap that the new slice_num=96 + n_hidden=96 stack has already closed.
+- Loss still descending at E14 (~−2.3 pts/epoch) — wider input also pushes the preprocess MLP into under-training.
+
+### Decision
+- **Closed.** σ=10 specific direction dead. Follow-up assigned to nezuko: RFF σ=3 (lower frequencies, matching airfoil-scale).
+
+---
+
+## 2026-05-16 01:24 — PR #3506: Scale n_layers 5→6 (depth above baseline) [CLOSED]
+- Branch: `charliepai2i24h2-thorfinn/depth-6-capacity-test`
+- Student: charliepai2i24h2-thorfinn
+- Hypothesis: Adding a 6th Transolver layer (~+20% params) increases representational depth. Predicted single_in_dist improvement.
+
+### Results table
+
+| Metric | Depth-6 | Baseline (PR #3377) | Δ |
+|--------|---------|---------------------|---|
+| `val_avg/mae_surf_p` (best @ ep 12) | **111.200** | 96.667 | **+15.0%** worse |
+| `test_avg/mae_surf_p` | **96.939** | 85.454 | **+13.4%** worse |
+| All 4 val splits | regressed | — | +9-19% worse |
+| Per-epoch wall | ~163.5 s | ~137 s | +19% slower |
+| Epochs completed | 12 of 14 | 14 of 14 | timeout truncated tail |
+
+### Analysis
+- Depth-6 decisively worse across every val and test split.
+- Truncation (2 epochs missing) cannot close a 15-point gap given ep11→ep12 only dropped 0.256.
+- Combined with width-{64,128,192} closures and mlp_ratio=4 closure: **capacity-expansion axis fully exhausted on this stack**. depth=5, n_hidden=96, mlp_ratio=2 confirmed as the sweet-spot tuple.
+
+### Decision
+- **Closed.** Follow-up assigned to thorfinn: dropout p=0.1 on FFN — fresh axis (regularization, not capacity).
+
+---
+
+## 2026-05-16 01:28 — PR #3505: Channel-weighted Huber loss [1,1,2] for [Ux,Uy,p] [CLOSED]
+- Branch: `charliepai2i24h2-frieren/channel-weight-p2x`
+- Student: charliepai2i24h2-frieren
+- Hypothesis: Upweighting pressure channel 2× steers gradient mass toward the primary ranking metric. Predicted single_in_dist improvement (largest pressure dynamic range).
+
+### Results table
+
+| Metric | This run | Baseline (PR #3377) | Δ |
+|--------|----------|---------------------|---|
+| `val_avg/mae_surf_p` (best @ ep 13) | **99.418** | 96.667 | **+2.85%** worse |
+| `test_avg/mae_surf_p` | **88.370** | 85.454 | **+3.41%** worse |
+| 3 of 4 val splits | regressed | — | +2.5-4.5% worse |
+
+### Analysis (two compounding failures, student-identified)
+1. **Loss-scale confound (LR effective).** The instruction's divisor `channel_weights.sum()=4` shrunk gradient scale by ~3× vs baseline (where 3 unit-weighted channels sum to 3). The slow trajectory (E1=384 vs typical ~150) is consistent with implicit under-stepping.
+2. **Velocity-pressure physical coupling.** In incompressible NS, velocity ↔ pressure are tightly coupled. Down-weighting velocity (effectively 0.25× baseline share) degrades the velocity field, which the pressure prediction depends on. Worse u → worse p, even with explicit p upweight.
+
+### Decision
+- **Closed.** Even with divisor fix the physics argument suggests channel-reweighting is fighting Navier-Stokes coupling rather than helping. Follow-up assigned to frieren: SwiGLU activation in FFN — orthogonal new axis.
+
+---
+
 ## 2026-05-16 01:40 — PR #3502: Scale n_hidden 96→64 (width ladder continued) [CLOSED]
 - Branch: `charliepai2i24h2-alphonse/n-hidden-64-width-ladder`
 - Student: charliepai2i24h2-alphonse
