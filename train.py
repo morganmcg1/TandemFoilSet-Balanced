@@ -253,17 +253,18 @@ class Transolver(nn.Module):
 
 
 class TransolverFiLM(Transolver):
-    """Transolver with single-point FiLM conditioning on log(Re) (dim 13)."""
+    """Transolver with single-point FiLM conditioning on the 11 per-sample-global
+    scalars at dims 13:24 (log_Re, AoA_1, NACA_1, AoA_2, NACA_2, gap, stagger)."""
 
-    def __init__(self, *args, film_mid: int = 64, **kwargs):
+    def __init__(self, *args, film_mid: int = 128, **kwargs):
         super().__init__(*args, **kwargs)
-        self.film = FiLM(cond_dim=1, hidden_dim=self.n_hidden, mid_dim=film_mid)
+        self.film = FiLM(cond_dim=11, hidden_dim=self.n_hidden, mid_dim=film_mid)
 
     def forward(self, data, **kwargs):
         x = data["x"]
-        re_cond = x[..., 13:14]
+        film_cond = x[..., 13:24]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        fx = self.film(re_cond, fx)
+        fx = self.film(film_cond, fx)
         for block in self.blocks:
             fx = block(fx)
         return {"preds": fx}
@@ -482,6 +483,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     fourier_n_freqs: int = 16
     fourier_sigma: float = 1.0
+    film_mid: int = 128  # FiLM head mid-dim (R2 winning arm)
 
 
 cfg = sp.parse(Config)
@@ -526,7 +528,7 @@ model_config = dict(
     output_dims=[1, 1, 1],
 )
 
-model = TransolverFiLM(**model_config).to(device)
+model = TransolverFiLM(film_mid=cfg.film_mid, **model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: TransolverFiLM ({n_params/1e6:.2f}M params)")
 
