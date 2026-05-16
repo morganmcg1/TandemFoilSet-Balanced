@@ -321,6 +321,57 @@ class EMA:
 
 
 # ---------------------------------------------------------------------------
+# Lookahead — slow-weight wrapper around an inner optimizer (Zhang et al., 2019)
+# ---------------------------------------------------------------------------
+
+
+class Lookahead(torch.optim.Optimizer):
+    """Lookahead optimizer wrapper.
+
+    Every ``k`` inner-optimizer steps, pull the fast weights back toward slow
+    weights: ``slow ← slow + alpha * (fast - slow)`` then ``fast ← slow``.
+    Inner moments (Adam exp_avg/exp_avg_sq) are preserved across syncs so the
+    fast trajectory resumes adapting from the interpolated point.
+
+    The wrapper exposes the inner optimizer's ``param_groups`` / ``state`` /
+    ``defaults`` so torch LR schedulers continue to drive the inner optimizer.
+    """
+
+    def __init__(self, base_optimizer: torch.optim.Optimizer, k: int = 5, alpha: float = 0.5):
+        if k < 1:
+            raise ValueError(f"Lookahead k must be >= 1, got {k}")
+        if not (0.0 < alpha <= 1.0):
+            raise ValueError(f"Lookahead alpha must be in (0, 1], got {alpha}")
+        self.base = base_optimizer
+        self.k = k
+        self.alpha = alpha
+        self.step_counter = 0
+        # Slow weights cloned from current fast weights (model init).
+        self.slow_weights = [
+            [p.data.clone() for p in group["params"]]
+            for group in self.base.param_groups
+        ]
+        # Standard torch.optim plumbing (shared with base so LR scheduler edits flow through).
+        self.param_groups = self.base.param_groups
+        self.state = self.base.state
+        self.defaults = self.base.defaults
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = self.base.step(closure)
+        self.step_counter += 1
+        if self.step_counter % self.k == 0:
+            for group, slow_group in zip(self.base.param_groups, self.slow_weights):
+                for p, slow in zip(group["params"], slow_group):
+                    slow.add_(p.data - slow, alpha=self.alpha)
+                    p.data.copy_(slow)
+        return loss
+
+    def zero_grad(self, set_to_none: bool = True):
+        self.base.zero_grad(set_to_none=set_to_none)
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
@@ -433,6 +484,9 @@ def write_experiment_summary(
         "amp_dtype": cfg.amp_dtype,
         "use_ema": cfg.use_ema,
         "ema_decay": cfg.ema_decay if cfg.use_ema else None,
+        "use_lookahead": cfg.use_lookahead,
+        "lookahead_k": cfg.lookahead_k if cfg.use_lookahead else None,
+        "lookahead_alpha": cfg.lookahead_alpha if cfg.use_lookahead else None,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -486,6 +540,9 @@ class Config:
     film_cond: bool = False  # enable per-block FiLM conditioning on x[:,0,13:24]
     film_mlp_hidden: int = 128
     two_shot_film: bool = False  # apply FiLM modulation at both attn and mlp sites per block
+    use_lookahead: bool = False  # wrap AdamW with Lookahead slow-weight interpolation
+    lookahead_k: int = 5  # sync slow ← slow + alpha*(fast-slow) every k inner steps
+    lookahead_alpha: float = 0.5  # interpolation factor
 
 
 cfg = sp.parse(Config)
@@ -541,6 +598,9 @@ if ema is not None:
     print(f"EMA: enabled (decay={cfg.ema_decay}, warmup ramp (1+step)/(10+step))")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+if cfg.use_lookahead:
+    optimizer = Lookahead(optimizer, k=cfg.lookahead_k, alpha=cfg.lookahead_alpha)
+    print(f"Lookahead: enabled (k={cfg.lookahead_k}, alpha={cfg.lookahead_alpha})")
 t_max_eff = cfg.cosine_t_max if cfg.cosine_t_max is not None else MAX_EPOCHS
 if cfg.cosine_t_max is not None:
     # Decay fully across t_max_eff epochs, then hold near zero for any overshoot.
@@ -660,6 +720,11 @@ for epoch in range(MAX_EPOCHS):
     if ema is not None:
         epoch_record["ema_step"] = ema.step
         epoch_record["ema_effective_decay"] = ema.effective_decay()
+    if cfg.use_lookahead:
+        epoch_record["lookahead_step_counter"] = optimizer.step_counter
+        epoch_record["lookahead_sync_count"] = optimizer.step_counter // cfg.lookahead_k
+        epoch_record["lookahead_k"] = cfg.lookahead_k
+        epoch_record["lookahead_alpha"] = cfg.lookahead_alpha
     append_metrics_jsonl(metrics_jsonl_path, epoch_record)
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
