@@ -501,6 +501,43 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 
+class Lion(torch.optim.Optimizer):
+    """Lion optimizer (Chen et al., 2023, arXiv:2302.06675).
+
+    Sign-based momentum update. update_step = sign(beta1 * m + (1-beta1) * grad);
+    momentum tracked separately as m <- beta2 * m + (1-beta2) * grad.
+    Decoupled weight decay applied multiplicatively per step.
+    """
+    def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None if closure is None else closure()
+        for group in self.param_groups:
+            beta1, beta2 = group["betas"]
+            lr = group["lr"]
+            wd = group["weight_decay"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                grad = p.grad
+                state = self.state[p]
+                if len(state) == 0:
+                    state["exp_avg"] = torch.zeros_like(p)
+                exp_avg = state["exp_avg"]
+                # Decoupled weight decay
+                if wd != 0:
+                    p.mul_(1 - lr * wd)
+                # Lion update: sign of momentum-mixed gradient
+                update = exp_avg.mul(beta1).add(grad, alpha=1 - beta1).sign_()
+                p.add_(update, alpha=-lr)
+                # Update momentum
+                exp_avg.mul_(beta2).add_(grad, alpha=1 - beta2)
+        return loss
+
+
 @dataclass
 class Config:
     lr: float = 5e-4
@@ -518,6 +555,9 @@ class Config:
     eta_min: float = 0.0   # CosineAnnealingLR floor; 0 = anneal to zero (default)
     n_head: int = 4   # Transolver attention heads; head_dim = n_hidden // n_head
     n_layers: int = 5   # Transolver depth (number of TransolverBlocks)
+    optimizer: str = "adamw"  # 'adamw' or 'lion'
+    beta1: float = 0.9   # First-moment / momentum decay (AdamW or Lion)
+    beta2: float = 0.999  # Second-moment / momentum-track decay; pass 0.99 for Lion
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -577,7 +617,23 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+if cfg.optimizer == "lion":
+    optimizer = Lion(
+        model.parameters(),
+        lr=cfg.lr,
+        betas=(cfg.beta1, cfg.beta2),
+        weight_decay=cfg.weight_decay,
+    )
+elif cfg.optimizer == "adamw":
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=cfg.lr,
+        betas=(cfg.beta1, cfg.beta2),
+        weight_decay=cfg.weight_decay,
+    )
+else:
+    raise ValueError(f"Unknown optimizer {cfg.optimizer!r}; expected 'adamw' or 'lion'")
+print(f"Optimizer: {cfg.optimizer} (lr={cfg.lr}, wd={cfg.weight_decay}, betas=({cfg.beta1}, {cfg.beta2}))")
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
     optimizer, T_max=15, eta_min=cfg.eta_min
 )
@@ -694,6 +750,11 @@ for epoch in range(MAX_EPOCHS):
         "clip_grad_norm": cfg.clip_grad_norm,
         "norm_type": cfg.norm_type,
         "ffn_act": cfg.ffn_act,
+        "optimizer": cfg.optimizer,
+        "beta1": cfg.beta1,
+        "beta2": cfg.beta2,
+        "n_head": cfg.n_head,
+        "n_layers": cfg.n_layers,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "gate_stats": gate_stats,
