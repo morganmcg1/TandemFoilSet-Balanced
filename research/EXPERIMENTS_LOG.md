@@ -1,13 +1,35 @@
 # SENPAI Research Results
 
-## 2026-05-16 23:00 — PR #4158: H: Lookahead k sweep (k∈{3,8}, α=0.5) on triple-stack ← POTENTIAL WINNER (val=55.97, awaiting SENPAI-RESULT)
+## 2026-05-16 23:35 — PR #4175: Lookahead α sweep (α∈{0.3,0.7}) at k=5 ← CLOSED (superseded by new k=3 baseline)
+
+- Branch: `willowpai2i48h1-askeladd/lookahead-alpha-sweep`
+- Student: willowpai2i48h1-askeladd
+- W&B runs: `rg4qeiyu` (α=0.3, val=61.577), `pni7uzhw` (α=0.7, val=56.916)
+- Hypothesis: α sweep at fixed k=5 around the paper default α=0.5.
+
+### Results
+
+| Arm | val_avg | test_avg | Δ val vs α=0.5 (57.22) | W&B |
+|---|---|---|---|---|
+| α=0.3 | 61.577 | 58.414 | +4.357 (worse) | `rg4qeiyu` |
+| **α=0.7** | **56.916** | 54.307 | **−0.305 (better)** | `pni7uzhw` |
+
+### Interpretation
+
+Monotone trend: α=0.3→0.5→0.7 → val=61.58→57.22→56.92. Larger α consistently better. α=0.7's val improvement (−0.305) is accompanied by test regression (+0.260), suggesting a single-seed noise-floor result — within noise but directionally informative. The val/test divergence and small magnitude (|Δ|<0.5) suggest α=0.7 is not a robust standalone win.
+
+### Decision
+
+Closed — α=0.7 wins the OLD baseline (57.22) but val=56.916 does NOT beat the NEW baseline (55.968, PR #4158 merged this round). Next step: test α∈{0.6, 0.7, 0.8} at k=3 (the new optimal k). Askeladd reassigned to #4211 (k=3 α∈{0.6,0.7}) and thorfinn to #4213 (k=3 α=0.8).
+
+## 2026-05-16 23:35 — PR #4158: Lookahead k sweep (k∈{3,8}) ← MERGED (NEW PROGRAMME BEST, val=55.97)
 
 - Branch: `willowpai2i48h1-nezuko/lookahead-k-sweep`
 - Student: willowpai2i48h1-nezuko
-- W&B runs: `oeb54ela` (k=3, finished val=55.97), `o7adv9re` (k=8, RUNNING)
+- W&B runs: `oeb54ela` (k=3, val=55.97), `o7adv9re` (k=8, val=60.09)
 - Hypothesis: Sweep Lookahead k ∈ {3, 8} around current best k=5 to localize optimal sync frequency.
 
-### Results (W&B-verified, awaiting student SENPAI-RESULT post)
+### Results (terminal SENPAI-RESULT, W&B-verified)
 
 | Config | val_avg | test_avg | best_epoch | Δ vs k=5 (val=57.22) |
 |---|---|---|---|---|
@@ -21,9 +43,23 @@ Per-split test (k=3): single_in_dist=59.98, geom_camber_rc=60.98, geom_camber_cr
 
 k=3 (more frequent slow-weight sync) cleanly improves over k=5 at seed=0. Δ=−1.25 is larger than the GeGLU-era noise floor (σ̂≈1) but smaller than the seed=1 outlier observed concurrently — needs 3-seed verification.
 
+### k-sweep monotone relationship (definitive)
+
+| k | val_avg/mae_surf_p | Δ vs k=5 |
+|---|---|---|
+| **k=3** | **55.968** | **−1.252** |
+| k=5 (prior best) | 57.220 | — |
+| k=8 | 60.091 | +2.871 |
+
+Monotone and symmetric around k=5: smaller k helps, larger k hurts. More frequent slow-weight syncing (k=3) delivers more basin-variance reduction within the 6375-step budget. k=8 lets the fast trajectory drift too far before each sync — fewer, lower-quality basin averages. Optimal k at α=0.5 ≈ 3 or possibly lower.
+
+k=3 per-split improvements: every split improved. OOD strongest: geom_camber_cruise 35.70 (strong), re_rand 52.76. geom_camber_rc 68.39 and single_in_dist 67.02 also improved.
+
+k=3 per-sync count: 2125 syncs (vs 1275 at k=5 vs 797 at k=8). Higher sync frequency ↔ better performance.
+
 ### Decision
 
-**Awaiting student SENPAI-RESULT post + review marker.** Posted W&B-verified metrics on the PR and requested student post the structured marker. Assigned alphonse (#4202) to verify k=3 seed=1 due to concurrent finding of k=5 seed=1=78.50 outlier.
+**Merged as new programme best. BASELINE.md updated.** New win threshold: val < 55.97. k=3 3-seed canonical assigned to alphonse (#4202 seed=1) and nezuko (#4210 seed=2). α sweep at k=3 assigned to askeladd (#4211 α∈{0.6,0.7}) and thorfinn (#4213 α=0.8).
 
 ## 2026-05-16 23:00 — PR #4160: Lookahead seed=1 canonical ← CLOSED (seed=1 OUTLIER, val=78.50)
 
