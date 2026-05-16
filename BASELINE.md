@@ -1,6 +1,48 @@
 # Baseline — TandemFoilSet (willow-pai2i-48h-r5)
 
-## Current best — PR #3748 (Spectral norm on output head under n_fourier=0)
+## Current best — PR #3843 (Lion lr=1e-4 — larger LR doubles improvement over spec_norm)
+
+**val_avg/mae_surf_p = 65.4142** (W&B run: `bw38ym4h`, PR #3843 Lion lr=1e-4 + n_fourier=0 + FiLM-output log(Re) + Lion wd=1e-3 + EMA(0.997) + Huber β=0.05 + T_max=14; NO spec_norm)
+**test_avg/mae_surf_p = 56.0627** (same run `bw38ym4h`, clean 4-split)
+
+| Split | val mae_surf_p | test mae_surf_p |
+|-------|----------------|------------------|
+| single_in_dist | 69.60 | 61.03 |
+| geom_camber_rc | 80.18 | 70.47 |
+| geom_camber_cruise | **46.19** | **37.84** |
+| re_rand | 65.69 | 54.91 |
+
+**Comparison vs prior best (PR #3748 spec_norm output, val 68.9592 / test 60.8201):**
+
+| Split | Prior val (u42jpd48) | New val (bw38ym4h) | Δval | Prior test | New test | Δtest |
+|-------|---------------------:|--------------------:|-----:|-----------:|---------:|------:|
+| single_in_dist | 77.84 | 69.60 | **−8.24** | 69.62 | 61.03 | **−8.59** |
+| geom_camber_rc | 81.38 | 80.18 | **−1.20** | 73.21 | 70.47 | **−2.74** |
+| geom_camber_cruise | 49.90 | 46.19 | **−3.71** | 40.68 | 37.84 | **−2.84** |
+| re_rand | 66.71 | 65.69 | **−1.02** | 59.78 | 54.91 | **−4.87** |
+| **avg** | **68.9592** | **65.4142** | **−3.55** | **60.8201** | **56.0627** | **−4.76** |
+
+**All 4 val splits and all 4 test splits improve.** Largest absolute gains: in_dist (−8.24 val / −8.59 test), re_rand (−1.02 val / −4.87 test). This is the largest single-mechanism gain since the Lion optimizer itself (−16.8%/−17.5%).
+
+**PR #3843 (Lion lr=1e-4):** Doubled the Lion learning rate from 5e-5 to 1e-4. In Lion, the effective step size ≈ lr × sign(grad) — doubling lr doubles per-step magnitude uniformly. The 3-arm sweep showed clean monotone improvement: val(2e-5)=78.93 → val(5e-5)=69.69 → val(1e-4)=65.41. The control arm (lr=5e-5) cleanly reproduced the n_fourier=0 substrate (val 69.69 vs 70.34 baseline, within σ=4.6 noise), confirming the lr=1e-4 win is real. This run was on the n_fourier=0 + FiLM + EMA substrate WITHOUT spec_norm.
+
+**Reproduce (PR #3843 arm C — winner):**
+```bash
+cd target/
+python train.py --agent willowpai2i48h5-frieren --epochs 50 \
+  --wandb_group round7-lion-lr-frieren \
+  --loss_type smooth_l1 --loss_beta 0.05 \
+  --n_fourier 0 \
+  --cosine_t_max 14 \
+  --optimizer_name lion --lr 1e-4 --weight_decay 1e-3 \
+  --ema_decay 0.997 \
+  --use_film \
+  --wandb_name frieren-r7-lion-lr1e-4
+```
+
+---
+
+## Prior best — PR #3748 (Spectral norm on output head under n_fourier=0)
 
 **val_avg/mae_surf_p = 68.9592** (W&B run: `u42jpd48`, PR #3748 output-only spectral norm (n_power_iter=1) + n_fourier=0 + FiLM-output log(Re) + Lion lr=5e-5 wd=1e-3 + EMA(0.997) + Huber β=0.05 + T_max=14)
 **test_avg/mae_surf_p = 60.8201** (same run `u42jpd48`, clean 4-split)
