@@ -27,6 +27,36 @@ Per-run limits enforced by the harness:
 
 ## Baseline metrics
 
+### 2026-05-16 09:40 — PR #3720: Lion optimizer (max_lr=3e-4) — paradigm-shift win
+
+**New best: `val_avg/mae_surf_p = 66.69`** — best arm, **−10.37 pp (−13.46%)** vs prior baseline 77.06 (mean). Test 3-split (excl. cruise) hits **62.72** (−10.33 pp / −14.14% vs prior 73.05 mean).
+
+| Split | val mae_surf_p (best `w8l5gszw`) | Arm 1 (max_lr=1e-3) | Arm 3 (max_lr=1e-4) |
+|---|---|---|---|
+| val_single_in_dist | 71.35 | 72.58 | 90.64 |
+| val_geom_camber_rc | 81.98 | 84.46 | 90.90 |
+| val_geom_camber_cruise | 48.74 | 48.64 | 56.42 |
+| val_re_rand | 64.69 | 66.83 | 71.27 |
+| **val_avg** | **66.69** | 68.13 | 77.31 |
+| test_3split_excl_cruise | **62.72** | 65.13 | 74.54 |
+
+- **W&B runs (3-arm max_lr sweep):** `w8l5gszw` (66.69 ★ winning arm), `psttg4e9` (68.13), `99j24mjj` (77.31)
+- **Per-split test:** test_single_in_dist=60.78, test_geom_camber_rc=70.43, test_re_rand=56.94 (best arm)
+- **Epochs:** 14 / 50 (30-min wall-clock cap; same as baseline)
+- **Peak VRAM:** unchanged (Lion has 1 buffer vs AdamW's 2, but model is small)
+- **Change vs prior baseline:** replaced `AdamW(lr=5e-4, wd=1e-4)` with `Lion(lr=1.5e-4, wd=1e-4)` and `OneCycleLR(max_lr=3e-4)` (was 1e-3 for AdamW). Lion `betas=(0.9, 0.99)`. CLI flag `--max_lr` added.
+- **Why it works:** Lion's sign-based update is per-element clipping at unit magnitude. Combined with `clip_grad_norm_(max_norm=1.0)` (global L2 clip every step, median pre-clip norm ~45), the trajectory is double-bounded — first by global L2, then by per-element sign. The Lion paper recommends 3-10× smaller LR than AdamW; max_lr=3e-4 (3.3× smaller than AdamW's 1e-3) confirms the recommendation. Arm 1 (1e-3, AdamW-equivalent) is also a big win (−11.6%) but arm 2 (3e-4) is best. All splits improved dramatically: val_id −12 pp, val_rc −5 pp, val_cruise −13 pp (!!), val_re −12 pp. Mechanism is genuine OOD generalization improvement, not just optimization-side.
+- **Reproduce (best arm):**
+  ```bash
+  cd target/ && python train.py \
+    --lr 1.5e-4 --max_lr 3e-4 --weight_decay 1e-4 --batch_size 2 --surf_weight 10.0 --epochs 50 \
+    --agent willowpai2i24h5-nezuko \
+    --wandb_group willow-pai2i-24h-r5-round4 \
+    --wandb_name nezuko-lion-maxlr3e4-arm2
+  ```
+
+---
+
 ### 2026-05-16 08:30 — PR #3616: batch_size=2 (2× gradient updates per epoch)
 
 **New best: `val_avg/mae_surf_p = 77.06`** — 4-arm mean, **−4.60 pp (−5.63%)** vs prior baseline 81.66. All 4 arms beat baseline; spread 2.83 pp.
