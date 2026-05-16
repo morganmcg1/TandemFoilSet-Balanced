@@ -1,5 +1,78 @@
 # SENPAI Research Results
 
+## 2026-05-16 10:45 — PR #3811: H: Dropout 0.1 + SwiGLU ✗ CLOSED (null, 2-seed mean val=66.82)
+
+- Branch: `willowpai2i48h1-alphonse/dropout_swiglu`
+- Student: willowpai2i48h1-alphonse
+
+### Results (W&B `6pp84zlu`/`eb9j7kte`, seeds 0+1, h=128/T_max=15/bf16/SwiGLU + attn_drop=proj_drop=0.1)
+
+| Metric | seed=0 | seed=1 | 2-seed mean | σ̂ | SwiGLU #3680 | Δ vs SwiGLU |
+|--------|:------:|:------:|:-----------:|:--:|:------------:|:-----------:|
+| **val_avg/mae_surf_p** | **66.412** | **67.228** | **66.820** | 0.577 | 65.444 | **+1.376** |
+| **test_avg/mae_surf_p** | **63.086** | **63.199** | **63.142** | 0.079 | 62.036 | **+1.107** |
+
+All 4 splits degrade slightly vs SwiGLU-only. OOD-asymmetric help hypothesis fails — cruise regresses +1.33 (not asymmetrically better than in-dist). σ̂(val)=0.58, σ̂(test)=0.08. Eval determinism confirmed on SwiGLU+dropout path.
+
+### Mechanistic interpretation
+
+SwiGLU's input-dependent gating already provides the effective regularization budget this model needs at h=128 / 1500 training samples. Explicit attn/proj dropout does not compound; the slight regression (+1.38 val) is consistent with mild over-regularization of the gate's dynamic range. Mirrors PR #3678 (GELU null) — the conclusion holds on the gated frontier.
+
+### Closure rationale
+
+2-seed mean val=66.82 in [65.44, 67] null band per decision tree. Follows PR #3678's GELU null result.
+
+### Follow-up: PR #3886 alphonse DropPath
+
+Block-granularity regularization (entire residual branch dropout) is mechanistically distinct — doesn't fragment gate values mid-computation. Assigned.
+
+---
+
+## 2026-05-16 10:45 — PR #3840: H: fc_gate LR boost 1.5× on SwiGLU ✗ CLOSED (modest regression val=67.00 + major within-block diagnostic)
+
+- Branch: `willowpai2i48h1-frieren/fc_gate_lr_swiglu`
+- Student: willowpai2i48h1-frieren
+
+### Results (W&B `crw04ruz`, seed=0, h=128/T_max=15/bf16/SwiGLU + fc_gate LR=7.5e-4, fc_main LR=5e-4)
+
+| Metric | SwiGLU #3680 | fc_gate boost 1.5× | Δ |
+|--------|:------------:|:------------------:|:---:|
+| **val_avg/mae_surf_p** | **65.44** | **67.0016** | **+1.56** |
+| **test_avg/mae_surf_p** | **62.04** | **62.8337** | **+0.79** |
+
+### The within-block diagnostic: fc_gate is NOT the bottleneck
+
+Per-block fc_gate/fc_main grad-norm ratio (last 50 steps per epoch):
+
+| Epoch | block_0 | block_1 | block_2 | block_3 | block_4 |
+|-------|:-------:|:-------:|:-------:|:-------:|:-------:|
+| 1 | 0.755 | 0.715 | 0.739 | 0.710 | 0.709 |
+| 5 | 0.732 | 0.678 | 0.619 | 0.584 | 0.686 |
+| 10 | 0.701 | 0.683 | 0.602 | 0.618 | 0.623 |
+| 15 | 0.724 | 0.681 | 0.602 | 0.729 | 0.603 |
+
+**fc_main has ~30-40% more gradient mass than fc_gate across all 5 blocks and all epochs.** The gate is a stable modulator; the value path is the dominant within-block learner. The boost was mis-targeted.
+
+Raw grad-norms at epoch 5 confirm the between-block pattern from #3768 (block_0 >> blocks 1-4) holds within-block as well: fc_gate @ block_0 = 0.457, fc_main @ block_0 = 0.625.
+
+### Complete SwiGLU gradient picture
+
+Combining #3768 (between-block) and #3840 (within-block):
+- **Between blocks:** head_and_embed (3.48) > block_4 (1.41) > block_0 (1.12) > middle blocks (0.17)
+- **Within each block:** fc_main > fc_gate (ratio 0.6-0.75 = gate:main)
+
+Dominant learning occurs at: (1) input/output ends of network, (2) value path within each block. Gate path is a stable modulator with smaller updates throughout.
+
+### Closure rationale
+
+val=67.00 in [64-67]/[67-75] boundary — modest regression per decision tree. Closing. Highest-value result of this PR is the grad-norm diagnostic, not the val number.
+
+### Follow-up: PR #3888 frieren fc_main LR boost
+
+Frieren's own #1 recommended follow-up. Same plumbing, opposite target. If fc_main dominates gradient flow, 1.5× boost on fc_main should match the within-block geometry. Assigned.
+
+---
+
 ## 2026-05-16 10:10 — PR #3810: H: GeGLU activation ✓ MERGED (new programme best val=65.37 / test=61.68)
 
 - Branch: `willowpai2i48h1-tanjiro/geglu_activation`
