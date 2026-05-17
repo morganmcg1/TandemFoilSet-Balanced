@@ -957,3 +957,85 @@ python train.py \
 # NEXT: empirical (n_layers=3 × sf_betas=(0.95, 0.99)) confirmation; SF-beta frontier extension
 ```
 
+
+---
+
+## 2026-05-17 09:35 — PR #4464: n_layers=2 NEW BEST (frieren shallower-depth-probe)
+
+**val_avg/mae_surf_p: 40.622 | test_3split_mean/mae_surf_p: 39.598**
+_(test_geom_camber_cruise excluded: pre-existing NaN scoring bug on cruise held-out samples)_
+
+### Headline paired Δ
+
+| Metric | Prior canonical | New best | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 45.654 (n_layers=3) | **40.622** (n_layers=2) | **−11.02%** |
+| test_3split_mean/mae_surf_p | 44.878 | **39.598** | **−11.77%** |
+
+Paired Δ vs Arm A control (n_layers=3 at same canonical): **−9.23% val / −11.77% test** (18× the 0.5% gate).
+
+### Per-split val (mae_surf_p, epoch 37)
+
+| Split | n_layers=3 (A) | n_layers=2 (B) | Δ |
+|---|---:|---:|---:|
+| val_single_in_dist | 46.856 | **40.367** | −13.9% |
+| val_geom_camber_rc | 58.135 | **55.995** | −3.7% |
+| val_geom_camber_cruise | 26.926 | **23.944** | −11.1% |
+| val_re_rand | 47.090 | **42.183** | −10.4% |
+| **val_avg** | 44.752 | **40.622** | **−9.2%** |
+
+Arm B strictly dominates Arm A on all four val splits.
+
+### Per-split test (mae_surf_p)
+
+| Split | n_layers=2 |
+|---|---:|
+| test_single_in_dist | 36.002 |
+| test_geom_camber_rc | 49.549 |
+| test_re_rand | 33.243 |
+| test_geom_camber_cruise | NaN (pre-existing scoring bug) |
+| **test_3split_mean** | **39.598** |
+
+### Mechanism note
+
+At iso-epoch=26 (common to all arms): l3 < l2 < l1 — deeper models are better per optimization step. But the 30-min wall-clock budget is binding: l2 runs at 48.7 s/epoch and completes 37 epochs vs l3's 69 s/epoch and 26 epochs. The win is a step-count effect — l2 accumulates ~1.4× more optimization steps. All arms still descending at budget cap (best_epoch = last_epoch), so there is headroom in longer-budget regimes.
+
+### Infra metrics (Arm B, epoch 37)
+
+- peak_VRAM: 17.99 GB
+- grad_clip_rate: 0.92 (stable)
+- ema_effective_decay: 0.999
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-frieren-shallower-depth-probe-r1-armB-l2-20260517-082017-20260517-082020/metrics.jsonl`
+
+### Reproduce
+
+```bash
+cd target/
+python train.py \
+  --amp_dtype bf16 \
+  --use_ema --ema_decay 0.999 \
+  --film_cond --two_shot_film \
+  --grad_clip_norm 1.0 \
+  --use_schedule_free --lr 3e-3 \
+  --sf_beta1 0.95 --sf_beta2 0.99 \
+  --n_layers 2
+```
+
+### Current best config (carry forward to all new experiments)
+
+```python
+# Loss: Huber (smooth_l1_loss, beta=1.0)
+# AMP: --amp_dtype bf16
+# Scheduler: NONE (--use_schedule_free replaces cosine)
+# EMA: --use_ema --ema_decay 0.999
+# FiLM: --film_cond --two_shot_film
+# Optimizer: SF-AdamW lr=3e-3, weight_decay=1e-4, warmup_steps=500
+# Optimizer betas: sf_beta1=0.95, sf_beta2=0.99
+# Gradient clip: --grad_clip_norm 1.0
+# Model: n_hidden=128, n_layers=2 (NEW), n_head=4, slice_num=64, mlp_ratio=2
+# surf_weight=10
+# Note: l1 < l2 (iso-epoch); l2 wins by step-count at 30-min budget
+```
