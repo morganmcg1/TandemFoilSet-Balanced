@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-17 06:10Z — round 15 of `icml-appendix-charlie-pai2i-48h-r2`
+- 2026-05-17 06:30Z — round 15 of `icml-appendix-charlie-pai2i-48h-r2`
 - No active research directives from the human research team
 - **New baseline: val=38.6750** (PR #4243 askeladd slice_num=48 merged, −2.91% from 39.83)
 
@@ -48,7 +48,7 @@ cd target && python train.py --agent <student> \
 | PR | Student | Theme | Status | Baseline context |
 |----|---------|-------|--------|-----------------|
 | #4358 | alphonse | SwiGLU activation: gated MLP (SiLU gate) vs GELU on slice=48 stack | WIP | #4308 closed (ffn-dropout regresses); activation-form untested; Arm A param-matched (hidden×2/3), Arm B full hidden |
-| #4295 | fern | Per-group LR: lr_attn_mult vs lr_other_mult to rebalance MLP/attn updates | WIP | #4237 closed; depth throughput-bound; MLP/attn 5× grad-norm imbalance (PR #4154) still unaddressed |
+| #4414 | fern | Surface-only pressure-weight multiplier (1.5× Arm A, 2.0× Arm B) — redirect loss budget to primary metric | WIP — NEW | #4295 closed (per-group-LR no_improvement — Lion sign masks grad-norm); first asymmetric loss-budget experiment, only surface p loss is boosted |
 | #4306 | askeladd | slice_num coarser: 40 (Arm A), 32 (Arm B) — below new baseline slice=48 | WIP (stale — was rate-limited; GPU active again) | #4243 MERGED (slice=48 strong win); continue coarser direction; trend clear |
 | #4377 | nezuko | Point subsampling augmentation: keep_rate=0.8 (Arm A), 0.6 (Arm B) on non-surface points | WIP | #4278 closed (attn-dropout regresses); pivot to DATA augmentation; targets val_geom_camber_rc (51.62) coverage |
 | #4362 | thorfinn | Lookahead-Lion: slow/fast weight anchoring (k=5 Arm A, k=10 Arm B) on slice=48 | WIP | #4312 closed (SWA fails); Lookahead preserves cosine schedule, adds trust-region anchoring |
@@ -58,7 +58,7 @@ cd target && python train.py --agent <student> \
 
 ## Key open questions (round 15 — new baseline 38.675, slice_num=48 — ACTIVE ESCALATION)
 
-**Escalation status:** 9 consecutive no_improvement results since slice=48 merged (now also +#4327 huber-loss, +#4253 SGDR; plus #4278 attn-dropout, #4308 ffn-dropout, #4312 SWA, #4273 n_head v2, + earlier #4235 mlp-ratio, #4230 weight-decay, #4287 batch-size). Loss-function reshaping and LR-schedule disruption are now fully closed directions. Escalating to: (a) architectural changes (SwiGLU, RMSNorm, Lookahead in-flight); (b) **data augmentation** (point subsampling); (c) **input representation** (Fourier features); (d) **structural regularization** (DropPath — block-level vs element-wise).
+**Escalation status:** 10 consecutive no_improvement results since slice=48 merged (now also +#4295 per-group-lr; +#4327 huber-loss, +#4253 SGDR; plus #4278 attn-dropout, #4308 ffn-dropout, #4312 SWA, #4273 n_head v2, + earlier #4235 mlp-ratio, #4230 weight-decay, #4287 batch-size). Optimizer-tuning, loss-function reshaping, and LR-schedule disruption directions are now fully closed. Lion's sign-update masks gradient-norm asymmetry: the MLP/attn grad-norm 5× ratio (#4154) is a **measurement artefact**, not a steering signal. Escalating to: (a) architectural changes (SwiGLU, RMSNorm, Lookahead in-flight); (b) **data augmentation** (point subsampling); (c) **input representation** (Fourier features); (d) **structural regularization** (DropPath); (e) **loss-budget redirection** (surf-p-weight-mult — primary metric is mae_surf_p, allocate gradient toward it).
 
 **Key reading from 3 regularization failures (FFN dropout, attention dropout, SWA):** model is NOT over-fitting in the classic sense at 35 epochs. The OOD gap on val_geom_camber_rc (51.62) is driven by **training data coverage**, not by parameter over-fitting. This pivots us toward data augmentation as the right axis.
 
@@ -66,7 +66,7 @@ cd target && python train.py --agent <student> \
 2. **Does Lookahead-wrapped Lion find better minima than plain Lion + EMA?** (#4362 thorfinn) — trust-region anchoring at step level (k=5 or k=10); preserves cosine schedule unlike SWA; hypothesis: Lion sign-noise + Lookahead slow weights compound.
 3. **Does RMSNorm outperform LayerNorm in this bf16, small-data regime?** (#4365 tanjiro) — simpler norm without mean centering; bf16-safer; used in LLaMA, Mistral, T5v1.1; normalization form completely untested axis.
 4. **Do even coarser slices (32, 40) continue the slice_num winning trend?** (#4306 askeladd) — slice=48 strong win vs slice=64/96; monotone coarser trend may continue.
-5. **Does per-group LR rebalancing address the MLP/attn update magnitude imbalance?** (#4295 fern) — Arm A reins in MLP (lr_other×0.5), Arm B boosts attn (lr_attn×2.0); Lion sign-update may mask the imbalance.
+5. **Does up-weighting surface pressure loss (specifically, not uniformly) improve mae_surf_p?** (#4414 fern) — surf_p_weight_mult=1.5 (A) or 2.0 (B); effective surface-p loss weight 3.0 or 4.0 vs uniform 2.0; redirects gradient budget to the primary metric.
 6. **Does point subsampling augmentation improve OOD generalization?** (#4377 nezuko) — drop 20% (A) or 40% (B) of non-surface points per training batch; tests data-coverage hypothesis directly; surface points always preserved.
 7. **Does Fourier feature encoding unlock high-frequency spatial signal for surface pressure?** (#4403 edward) — NeRF octaves K=8 vs RFF K=16 σ=10; removes spectral bias of raw coord inputs; may disproportionately help val_geom_camber_rc OOD split.
 8. **Does DropPath (block-level dropout) succeed where element-wise dropout failed?** (#4405 frieren) — drops entire residual branches at p=0.10/0.20; stronger generalization pressure with less per-step noise; linear schedule 0→p_max over 5 layers.
@@ -129,6 +129,7 @@ cd target && python train.py --agent <student> \
 | #4235 (alphonse mlp-ratio-sweep) | no_improvement: A (r=3) val=40.26 (+1.08%, 31ep), B (r=4) val=43.10 (+8.20%, 29ep); throughput-bound, monotone: more MLP width → slower → fewer epochs → worse val; MLP-ratio axis closed at r=2 → #4308 ffn-dropout |
 | #4230 (thorfinn weight-decay-sweep) | no_improvement: A (wd=1e-4) val=41.99 (+5.4%, stop), B (wd=5e-4) val=43.48 (+9.2%, stop); both hit stop cond (>41.0); monotone ordering confirms wd=3e-4 at optimum → #4312 swa |
 | #4287 (frieren batch-size-sweep) | failure: A (batch=8) val=45.26 (+13.6%, fail >45), B (batch=12) val=63.51 (+59.4%, fail); sub-linear time scaling, fewer gradient updates dominate, in-dist split suffered most (undertraining); batch axis closed at batch=4 with LR locked → #4327 huber-loss |
+| #4295 (fern per-group-lr) | no_improvement: Arm A (lr_other×0.5) val=40.07, Arm B (lr_attn×2.0) val=39.50; Lion sign-update masks grad-norm asymmetry; per-group LR only changes trajectory length not step size → #4414 surf-p-weight-mult |
 
 ## Potential next research directions
 
@@ -155,7 +156,8 @@ cd target && python train.py --agent <student> \
 - **DropPath stochastic depth** — IN PROGRESS as #4405 (frieren); p_max=0.10/0.20; first block-level regularization attempt
 - **Attention dropout** — CLOSED as #4278 (nezuko); both arms regress on bottleneck split; train/val gap GROWS with dropout (signal-removal not co-adaptation); 3rd regularization failure → #4377 point-subsample
 - **Point subsampling augmentation** — IN PROGRESS as #4377 (nezuko); keep_rate=0.8 (A), 0.6 (B); first data-augmentation experiment in the program
-- **Per-group LR** — IN PROGRESS as #4295 (fern)
+- **Per-group LR** — CLOSED as #4295 (fern); Arm A (lr_other×0.5) val=40.07, Arm B (lr_attn×2.0) val=39.50; Lion sign-update masks grad-norm asymmetry; per-group LR only changes trajectory length → #4414 surf-p-weight-mult
+- **Surface-only pressure-weight multiplier** — IN PROGRESS as #4414 (fern); surf_p_weight_mult=1.5/2.0 — asymmetric loss budget targeting primary metric
 
 **Not yet tried (candidates for next round):**
 - Y-mirror geometric augmentation — full physics-aware mirror of geometry + targets; targets camber_rc bottleneck (more complex than point-subsample but more effective)

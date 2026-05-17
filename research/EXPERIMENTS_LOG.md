@@ -1220,3 +1220,26 @@ Stop condition triggered (val > 41.0 threshold); Arm B (warmup=3) correctly not 
 
 - **Analysis:** Clean LR trace confirms restart implementation (Arm A: E17 lr=1.46e-6 → E18 lr=1.7e-4 = exact reset; Arm B: E12 lr=2.9e-6 → E13 lr=1.7e-4 = exact reset). The restart causes a regression spike of +5.5 (Arm A) or +8.2 (Arm B) in val. Within the 30-min budget, Arm A completes only ~47% of cycle 2 and Arm B nearly completes cycle 2 — neither recovers below cycle-1 minimum.
 - **Decision:** CLOSED — no_improvement. **Third schedule-disrupting failure** (#4312 SWA, this, plus the Huber-as-effective-LR-shape closure on #4327). Monotonic cosine T_max=40 is locally optimal under timeout constraint. Schedule-disruption strategies are a now-closed direction.
+
+---
+
+## 2026-05-17 05:42 — PR #4295: Per-group LR (lr_attn_mult, lr_other_mult) on slice=48 stack
+
+- **Branch:** charliepai2i48h2-fern/per-group-lr
+- **Hypothesis:** MLP/attn 5× gradient-norm asymmetry (PR #4154) reflects real signal-strength imbalance. Per-group LR multipliers should rebalance the effective update step size that single global LR can't address.
+
+| Metric | Baseline (PR #4243) | Arm A (lr_other×0.5) | Arm B (lr_attn×2.0) |
+|--------|---------------------|----------------------|---------------------|
+| **val_avg/mae_surf_p** | **38.6750** | 40.0739 (+1.40) | 39.5025 (+0.83) |
+| **test_avg/mae_surf_p** | **33.4948** | 34.3189 | 33.7651 |
+| val_single_in_dist | 42.1400 | 45.1506 (+3.01) | 40.6518 (−1.49) |
+| val_geom_camber_rc | 51.6180 | 53.7306 | 52.7786 |
+| val_re_rand | 38.4600 | 39.5943 | 41.4051 (+2.95) |
+| Metric artifacts | | `models/model-charliepai2i48h2-fern-per-group-lr-A-20260517-034502/metrics.jsonl` | `models/model-charliepai2i48h2-fern-per-group-lr-B-20260517-041956/metrics.jsonl` |
+
+- **Param split:** attn=273,620 (41%); other=388,739 (59%). LR sanity at ep1 confirmed both arms applied correctly.
+- **Analysis:** Both arms regressed, with informative asymmetric failure modes:
+  1. Arm A (rein MLP) under-trained the larger group → +3.01 on val_single_in_dist, +3.68 on test_single_in_dist. Train_surf_loss 50% higher than Arm B.
+  2. Arm B (boost attn) over-fit to easy splits → improved val_single_in_dist (−1.49) and test_in_dist (−0.23) but regressed val_re_rand (+2.95).
+- **Key insight (from student's diagnostic):** Lion's `sign(momentum)` already neutralizes the gradient-norm *magnitude* asymmetry. Per-group LR ratios only change the **total trajectory length** in each group's parameter subspace. The 5× MLP/attn grad-norm gap is a **measurement artefact**, not a steering signal Lion can be told to act on.
+- **Decision:** CLOSED — no_improvement. Third optimizer-tuning failure on slice=48 (#4031 β2, #4181 lr-fine, this). Lion optimizer geometry comprehensively resolved.
