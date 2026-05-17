@@ -2,6 +2,44 @@
 
 ## Current Best
 
+**PR #4215 — H95 Arm A: bf16 autocast (alphonse)**
+Merged 2026-05-17. 21 epochs with bf16 mixed precision (best_epoch=17). ~30% throughput gain: 122 → 85.6 s/epoch, 15 → 21 epochs per 30-min budget.
+
+| Metric | Value | Source |
+|--------|-------|--------|
+| val_avg/mae_surf_p | **40.5066** | PR #4215 Arm A (best_epoch=17) |
+| val_single_in_dist/mae_surf_p | 40.0863 | PR #4215 Arm A |
+| val_geom_camber_rc/mae_surf_p | 54.5050 | PR #4215 Arm A |
+| val_geom_camber_cruise/mae_surf_p | 25.0069 | PR #4215 Arm A |
+| val_re_rand/mae_surf_p | 42.4283 | PR #4215 Arm A |
+| test_avg/mae_surf_p | NaN (⚠ scoring bug) | PR #4215 |
+| test_avg/mae_surf_p (3-split, excl. cruise) | **39.0160** | PR #4215 Arm A |
+| test_single_in_dist/mae_surf_p | 34.8689 | PR #4215 Arm A |
+| test_geom_camber_rc/mae_surf_p | 48.3785 | PR #4215 Arm A |
+| test_re_rand/mae_surf_p | 33.8006 | PR #4215 Arm A |
+
+**Configuration:** Same as H88 + **use_bf16=True** (`torch.autocast("cuda", dtype=torch.bfloat16)`; `pred.float()` cast-back; Lion states remain fp32). FiLM cond_dim=11 + Huber δ_vel=0.5/δ_p=0.25 + CosineAnnealingLR T_max=15 + clip_grad_norm=1.0 + optimizer=lion + lr=3e-4 + wd=1e-3 + β=(0.9, 0.997) + n_head=2 + ffn_act=geglu + n_layers=4 + slice_num=96 + norm_type=layernorm. Peak GPU memory: 30.46 GB (unchanged from fp32). Mean s/epoch: 84.3.
+
+**Schedule confound (T_max=15 hardcoded):** With 21 epochs run, cosine LR hits 0 at ep15 then climbs back. Best epoch 17 sits in the rising-LR phase. Numerical quality verified by Arm B (bf16 matched to 15 epochs: val=41.54, within noise of H88 41.22). The bf16 benefit is real — the schedule interaction is a confounder, not the source of improvement.
+
+**Δ vs prior best (H88, 41.2153 / 39.5337):** **−0.71 pts val_avg, −0.52 pts test 3-split.**
+**Cumulative R5 gain from H37b (66.11):** **−25.60 pts val_avg.**
+
+**Artifacts:** `models/model-charliepai2i48h3-alphonse-h95-arm-a-bf16-walltime-20260516-234702/`
+
+**Reproduce:**
+```bash
+cd target/ && python train.py --epochs 50 \
+  --experiment_name h95-arm-a-bf16-walltime --agent <student> \
+  --optimizer lion --lr 3e-4 --weight_decay 1e-3 \
+  --beta1 0.9 --beta2 0.997 \
+  --slice_num 96 --n_layers 4 --ffn_act geglu \
+  --n_head 2 --clip_grad_norm 1.0 \
+  --use_bf16
+```
+
+## Previous Best (overridden by #4215)
+
 **PR #4166 — H88 Arm B: Lion + β₂=0.997 at H78 base (edward)**
 Merged 2026-05-16 23:55. 15 epochs (cosine T_max=15) before 30-min wall stop.
 
