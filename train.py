@@ -655,17 +655,27 @@ if cfg.scheduler == "wsd":
         LinearLR,
         SequentialLR,
     )
-    _warmup = LinearLR(
-        optimizer, start_factor=0.01, end_factor=1.0,
-        total_iters=cfg.warmup_epochs,
-    )
     _stable = ConstantLR(optimizer, factor=1.0, total_iters=cfg.stable_epochs)
     _decay = CosineAnnealingLR(optimizer, T_max=cfg.decay_epochs, eta_min=0.0)
-    scheduler = SequentialLR(
-        optimizer,
-        schedulers=[_warmup, _stable, _decay],
-        milestones=[cfg.warmup_epochs, cfg.warmup_epochs + cfg.stable_epochs],
-    )
+    if cfg.warmup_epochs == 0:
+        # No warmup: stable → decay. Skip LinearLR entirely so the optimizer's
+        # initial LR is the peak (LinearLR(total_iters=0) would otherwise pin
+        # epoch-0 LR to start_factor * peak).
+        scheduler = SequentialLR(
+            optimizer,
+            schedulers=[_stable, _decay],
+            milestones=[cfg.stable_epochs],
+        )
+    else:
+        _warmup = LinearLR(
+            optimizer, start_factor=0.01, end_factor=1.0,
+            total_iters=cfg.warmup_epochs,
+        )
+        scheduler = SequentialLR(
+            optimizer,
+            schedulers=[_warmup, _stable, _decay],
+            milestones=[cfg.warmup_epochs, cfg.warmup_epochs + cfg.stable_epochs],
+        )
     print(
         f"Scheduler: WSD (warmup={cfg.warmup_epochs}, stable={cfg.stable_epochs}, "
         f"decay={cfg.decay_epochs}; total={cfg.warmup_epochs + cfg.stable_epochs + cfg.decay_epochs} epochs)"
