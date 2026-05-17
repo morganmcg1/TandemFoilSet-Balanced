@@ -572,6 +572,7 @@ class Config:
     lion_b2: float = 0.99  # Lion beta2; default matches historical baseline
     lookahead_k: int = 5
     lookahead_alpha: float = 0.5
+    focal_gamma: float = 0.0  # Focal surface-MAE hardness weighting; 0=disabled
 
 
 cfg = sp.parse(Config)
@@ -704,6 +705,7 @@ run.summary["lion_b2"] = cfg.lion_b2
 run.summary["lookahead_k"] = cfg.lookahead_k
 run.summary["lookahead_alpha"] = cfg.lookahead_alpha
 run.summary["lookahead_on"] = _lookahead_on
+run.summary["focal_gamma"] = cfg.focal_gamma
 
 # Rolling buffer for per-step train losses to compute volatility (window=100).
 _train_loss_window: deque[float] = deque(maxlen=100)
@@ -727,6 +729,9 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        focal_weight_max = None
+        focal_weight_mean = None
+        focal_weight_std = None
         with autocast(device_type="cuda", dtype=torch.bfloat16):
             pred = model({"x": x_norm})["preds"]
             err = F.huber_loss(pred, y_norm, delta=0.1, reduction="none")  # [B, N, 3]
@@ -736,7 +741,31 @@ for epoch in range(MAX_EPOCHS):
             vol_mask_3d = vol_mask.unsqueeze(-1)
             surf_mask_3d = surf_mask.unsqueeze(-1)
             vol_loss = (err * vol_mask_3d).sum() / vol_mask_3d.sum().clamp(min=1)
-            surf_loss = (err * surf_mask_3d).sum() / surf_mask_3d.sum().clamp(min=1)
+            if cfg.focal_gamma > 0.0:
+                # Focal-style surface reweighting: weight ∝ (p_err_node / batch_mean_p_err)^γ
+                # Weights detached so they do NOT receive gradient — pure reshape of
+                # gradient mass toward nodes with above-average pressure error.
+                with torch.no_grad():
+                    p_err = (pred[..., 2] - y_norm[..., 2]).abs().detach().float()  # [B,N]
+                    surf_mask_f = surf_mask.float()
+                    n_surf_per_sample = surf_mask_f.sum(dim=-1, keepdim=True).clamp(min=1.0)
+                    batch_mean_p = (p_err * surf_mask_f).sum(dim=-1, keepdim=True) \
+                                   / n_surf_per_sample
+                    # 1e-6 floor: bf16 underflows near 1e-8; physical mean can be tiny early.
+                    weights = (p_err / batch_mean_p.clamp(min=1e-6)).pow(cfg.focal_gamma) \
+                              * surf_mask_f  # [B, N]
+                    focal_weight_max = weights.max().item()
+                    focal_weight_mean = (
+                        weights.sum() / surf_mask_f.sum().clamp(min=1.0)
+                    ).item()
+                    if surf_mask.any():
+                        focal_weight_std = weights[surf_mask].std().item()
+                    else:
+                        focal_weight_std = 0.0
+                weights_3d = weights.unsqueeze(-1)
+                surf_loss = (err * weights_3d).sum() / weights.sum().clamp(min=1)
+            else:
+                surf_loss = (err * surf_mask_3d).sum() / surf_mask_3d.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -755,6 +784,10 @@ for epoch in range(MAX_EPOCHS):
         }
         if _lookahead_on and optimizer.last_sync_diff_norm is not None:
             _log_dict["train/lookahead_sync_diff_norm"] = optimizer.last_sync_diff_norm
+        if focal_weight_max is not None:
+            _log_dict["train/focal_weight_max"] = focal_weight_max
+            _log_dict["train/focal_weight_mean"] = focal_weight_mean
+            _log_dict["train/focal_weight_std"] = focal_weight_std
         wandb.log(_log_dict)
 
         epoch_vol += vol_loss.item()
