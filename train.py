@@ -571,6 +571,7 @@ class Config:
     use_lion: bool = False
     lookahead_k: int = 5
     lookahead_alpha: float = 0.5
+    n_head: int = 4
 
 
 cfg = sp.parse(Config)
@@ -611,7 +612,7 @@ model_config = dict(
     out_dim=3,
     n_hidden=128,
     n_layers=5,
-    n_head=4,
+    n_head=cfg.n_head,
     slice_num=64,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
@@ -702,6 +703,8 @@ run.summary["use_lion"] = cfg.use_lion
 run.summary["lookahead_k"] = cfg.lookahead_k
 run.summary["lookahead_alpha"] = cfg.lookahead_alpha
 run.summary["lookahead_on"] = _lookahead_on
+run.summary["n_head"] = cfg.n_head
+run.summary["d_head"] = model_config["n_hidden"] // cfg.n_head
 
 # Rolling buffer for per-step train losses to compute volatility (window=100).
 _train_loss_window: deque[float] = deque(maxlen=100)
@@ -823,6 +826,9 @@ for epoch in range(MAX_EPOCHS):
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+
+if torch.cuda.is_available():
+    run.summary["gpu_mem_peak_gb"] = torch.cuda.max_memory_allocated() / 1e9
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
