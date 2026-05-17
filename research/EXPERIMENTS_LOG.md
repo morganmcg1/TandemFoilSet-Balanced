@@ -1612,3 +1612,53 @@ Note: both #4186 and #4155 were trained on the **old pre-SF baseline** since the
 - **Decision:** CLOSED. val regressed slightly (within seed noise); val/test asymmetry (val worse, test better) confirms seed-noise band. Actual speedup ~2s/epoch (predicted 7-9) — val pass is only ~4-6s of each epoch, not 17s as inferred.
 - **Key learning:** *Train pass dominates per-epoch cost (~36s of 42s). Future compute wins should target train-side ops (attention/matmul fusion), not val.* The val pass is a small enough fraction that further val-side optimization has diminishing returns.
 - **Implementation note:** The change is correct and safe — `torch.compile(ema_model.module, dynamic=True, mode="default")` works cleanly with `AveragedModel`. EMA averaging continues to function; checkpoint round-trip preserved by using `getattr(ema_model.module, "_orig_mod", ema_model.module).state_dict()` on save.
+
+## 2026-05-17 02:10 — PR #4282 — mlp_ratio=2: GEGLUBlock dead-code fix (MERGED — new baseline)
+
+- **Branch:** `charliepai2i48h1-fern/mlp-ratio-2-with-geglu-fix-on-compile-stack`
+- **Hypothesis:** `mlp_ratio` was silently ignored in `TransolverBlock` — `GEGLUBlock` was hardcoded `hidden_dim=hidden_dim` regardless of config. Fix to `hidden_dim=int(hidden_dim * mlp_ratio)` and set `mlp_ratio=2` doubles GEGLU inner dimension from 128 to 256.
+- **Results:**
+
+| Metric | Value | Baseline (37.31) | Δ |
+|--------|-------|------------------|---|
+| val_avg/mae_surf_p | **36.13** | 37.31 | **−3.2%** |
+| test_avg/mae_surf_p | **31.97** | 32.81 | **−2.6%** |
+| val_single_in_dist | 36.67 | 37.19 | −1.4% |
+| val_geom_camber_rc | 48.15 | 50.50 | −4.7% |
+| val_geom_camber_cruise | 21.37 | 21.48 | −0.5% |
+| val_re_rand | 38.34 | 40.09 | −4.4% |
+| test_single_in_dist | 36.53 | 36.49 | +0.1% |
+| test_geom_camber_rc | 44.62 | 46.33 | −3.7% |
+| test_geom_camber_cruise | 17.23 | 17.85 | −3.5% |
+| test_re_rand | 29.50 | 30.54 | −3.4% |
+| sec/epoch | 47.76 | 42.4 | +12.6% |
+| epochs reached | 37 | 42 | −5 |
+| peak VRAM | 22.61 GB | 18.88 GB | +19.7% |
+| n_params | 983,871 | 736,831 | +33.6% |
+
+- **Metrics path:** `models/model-mlp-ratio-2-with-geglu-on-compile-stack-20260517-015040/metrics.jsonl`
+- **Decision:** MERGED. Val improved despite 5 fewer epochs and 20% higher per-epoch cost — net compute gain from larger capacity exceeded the shorter run. New baseline: val=36.13, test=31.97.
+- **Key finding — dead-code bug:** All prior `mlp_ratio` experiments (R7: mlp_ratio 2→1; all subsequent runs at mlp_ratio=1) were effectively running with mlp_ratio=1 regardless of the config value. The axis was never properly explored. This invalidates the "mlp_ratio CLOSED at 1" finding from R7 (#3982) — mlp_ratio is now a live open axis.
+- **FFN capacity insight:** 3 of 4 val splits improved meaningfully (rc −4.7%, re_rand −4.4%); cruise was near-tie (−0.5%). The OOD geometry and Re-randomized splits benefited most, suggesting the wider FFN helps the model generalize its pressure representation across diverse conditions. In-distribution improvement was smaller (−1.4%) — consistent with broader capacity helping OOD first.
+- **Programme implication:** mlp_ratio=3 (fern, PR #4299) and mlp_ratio=4 (nezuko, PR #4300) are now in flight to bracket the capacity ceiling. Total calibration improvement: 143.52 → 36.13 = **−74.8%**.
+
+## 2026-05-17 02:10 — PR #4257 — n_hidden=160 capacity probe (CLOSED — superseded)
+
+- **Branch:** `charliepai2i48h1-thorfinn/n-hidden-160-capacity-probe`
+- **Hypothesis:** Wider attention projections (+33% n_hidden) in freed VRAM headroom post-compile.
+- **Results:** val=37.49 (vs baseline 37.31, +0.5%). Tested against the old 37.31 baseline — already borderline. With the new 36.13 baseline (PR #4282), this is now +3.8% regression.
+- **Decision:** CLOSED. At the time of testing, mlp_ratio=1 (dead code) meant the FFN width was already at minimum. Now that mlp_ratio=2 is the baseline, n_hidden=160 should be retested on the full mlp_ratio=2 stack if the FFN capacity axis saturates first. The wider attention projections (+33% n_hidden) may interact differently with wider FFN (mlp_ratio=2 inner_dim=256). Deferred — not the highest-value next step.
+
+## 2026-05-17 02:10 — PR #4261 — batch_size=8 on compile stack (CLOSED — regression)
+
+- **Branch:** `charliepai2i48h1-tanjiro/batch-size-8-compile-stack`
+- **Hypothesis:** Larger batch in freed VRAM headroom; better gradient estimates per step.
+- **Results:** val=38.87 (vs new baseline 36.13, +7.6%). Halved step count at no wall-clock saving — exactly the wrong trade-off when compute-bound.
+- **Decision:** CLOSED. batch_size axis closed: with a 30-min wall-clock cap and compute-bound training, halving step count via larger batch consistently hurts. Gradient quality gains do not compensate for fewer update steps at this scale. Freed VRAM from compile should go to architectural capacity (wider/deeper model), not gradient batch size.
+
+## 2026-05-17 02:10 — PR #4275 — surface-weight ramp 10→100 (CLOSED — optimizer instability)
+
+- **Branch:** `charliepai2i48h1-nezuko/surface-weight-ramp-10x-late-epochs`
+- **Hypothesis:** Late-epoch surf_weight ramp (10→100 at epoch 38) focuses the model on surface pressure MAE in the final epochs.
+- **Results:** val=39.77 (vs new baseline 36.13, +10.1%). Val spiked from 40.85 to 44.49 at epoch 38 (the ramp point), then descended but never recovered.
+- **Decision:** CLOSED. The 10× abrupt multiplier jump scrambled SF AdamW's running gradient-variance estimates, causing a 5-epoch recovery period with no net benefit. Surface ramp direction not dead — a gentler approach (2× max over cosine curriculum, or smooth annealing over full training) is worth revisiting after core axes settle.
