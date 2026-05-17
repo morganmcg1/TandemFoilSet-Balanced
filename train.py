@@ -487,6 +487,7 @@ class Config:
     slice_num: int = 64
     use_swiglu: bool = False
     swiglu_hidden_mult: float = 1.0  # 1.0 = full hidden; 0.6667 = param-matched
+    input_channel_dropout: float = 0.0   # per-channel drop prob on x_norm at train time. 0 = off.
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -551,6 +552,7 @@ print(
     f"MLP-only={n_mlp_params/1e3:.1f}K, "
     f"use_swiglu={cfg.use_swiglu}, swiglu_hidden_mult={cfg.swiglu_hidden_mult})"
 )
+print(f"input_channel_dropout={cfg.input_channel_dropout}")
 
 optimizer = Lion(model.parameters(), lr=cfg.lr, betas=(0.9, 0.99), weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.cosine_t_max_epochs)
@@ -596,6 +598,13 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
+
+        # Channel-level dropout: randomly mask entire input channels to zero (= channel mean)
+        # Inverted-dropout scaling preserves expected magnitude: E[x_norm_dropped] = x_norm
+        if cfg.input_channel_dropout > 0.0 and model.training:
+            keep_mask = (torch.rand(x_norm.shape[-1], device=x_norm.device) > cfg.input_channel_dropout).float()
+            keep_prob = 1.0 - cfg.input_channel_dropout
+            x_norm = x_norm * (keep_mask / max(keep_prob, 1e-8))
 
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             pred = model({"x": x_norm})["preds"]
