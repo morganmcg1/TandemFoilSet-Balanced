@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -265,7 +266,10 @@ class TransolverBlock(nn.Module):
             fx = gamma.unsqueeze(1) * fx + beta.unsqueeze(1)
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            # Return (projection_out, trunk_out): the second tensor is the
+            # hidden-dim representation pre-projection, used by the H107
+            # auxiliary log(Re) head for multi-task regularization.
+            return self.mlp2(self.ln_3(fx)), fx
         return fx
 
 
@@ -327,9 +331,14 @@ class Transolver(nn.Module):
         # at the end by pad_collate) so we read the global condition from it.
         cond = x[:, 0, 13:] if self.cond_dim > 0 else None
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
-            fx = block(fx, cond=cond)
-        return {"preds": fx}
+        n_blocks = len(self.blocks)
+        trunk_out = None
+        for i, block in enumerate(self.blocks):
+            if i == n_blocks - 1:
+                fx, trunk_out = block(fx, cond=cond)
+            else:
+                fx = block(fx, cond=cond)
+        return {"preds": fx, "trunk_out": trunk_out}
 
 
 # ---------------------------------------------------------------------------
@@ -581,6 +590,7 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     use_bf16: bool = False   # Enable bf16 mixed-precision via torch.autocast (H95)
     T_max: int = 15  # CosineAnnealingLR period; default preserves prior behavior
+    aux_logre_weight: float = 0.0  # H107: auxiliary log10(Re) prediction loss weight (0 disables)
 
 
 cfg = sp.parse(Config)
@@ -635,12 +645,33 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+# H107: auxiliary log10(Re) prediction head — lightweight 2-layer MLP that
+# reads the final-block trunk representation (pre-projection) mean-pooled
+# over real (non-padded) nodes, and predicts log10(Re). Multi-task
+# regularization forces the trunk to maintain Re-informative structure.
+aux_head: nn.Module | None = None
+if cfg.aux_logre_weight > 0.0:
+    aux_head = nn.Sequential(
+        nn.Linear(model_config["n_hidden"], 64),
+        nn.ReLU(),
+        nn.Linear(64, 1),
+    ).to(device)
+    n_aux_params = sum(p.numel() for p in aux_head.parameters())
+    print(f"H107 aux head: 2-layer MLP ({model_config['n_hidden']}->64->1, {n_aux_params} params) "
+          f"with aux_logre_weight={cfg.aux_logre_weight}")
+
+# Collect all trainable params (model + optional aux head) once for the
+# optimizer and gradient clipping.
+trainable_params = list(model.parameters())
+if aux_head is not None:
+    trainable_params += list(aux_head.parameters())
+
 if cfg.optimizer == "lion":
-    optimizer = Lion(model.parameters(), lr=cfg.lr, betas=(cfg.beta1, cfg.beta2),
+    optimizer = Lion(trainable_params, lr=cfg.lr, betas=(cfg.beta1, cfg.beta2),
                      weight_decay=cfg.weight_decay)
     print(f"Optimizer: Lion (lr={cfg.lr}, betas=({cfg.beta1}, {cfg.beta2}), wd={cfg.weight_decay})")
 elif cfg.optimizer == "adamw":
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr,
+    optimizer = torch.optim.AdamW(trainable_params, lr=cfg.lr,
                                   betas=(cfg.beta1, cfg.beta2),
                                   weight_decay=cfg.weight_decay)
     print(f"Optimizer: AdamW (lr={cfg.lr}, betas=({cfg.beta1}, {cfg.beta2}), wd={cfg.weight_decay})")
@@ -669,6 +700,10 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
 
+# H107: precompute ln→log10 conversion for the auxiliary target.
+# Dim 13 of x is natural log(Re); we predict log10(Re) per the H107 hypothesis.
+LN_TO_LOG10 = 1.0 / math.log(10.0)
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -676,7 +711,10 @@ for epoch in range(MAX_EPOCHS):
 
     t0 = time.time()
     model.train()
+    if aux_head is not None:
+        aux_head.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_aux = 0.0
     epoch_grad_norm_pre = 0.0
     n_batches = 0
 
@@ -689,7 +727,8 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=cfg.use_bf16):
-            pred = model({"x": x_norm})["preds"]
+            out = model({"x": x_norm})
+            pred = out["preds"]
         # Loss computation in fp32: reductions on tiny Huber thresholds (0.25, 0.5)
         # benefit from full precision, and Lion only needs gradient signs anyway.
         pred = pred.float()
@@ -711,22 +750,38 @@ for epoch in range(MAX_EPOCHS):
         surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
+        # H107: auxiliary log10(Re) prediction head — masked mean-pool the
+        # final-block trunk representation over real nodes, predict log10(Re),
+        # MSE against the ground truth derived from the raw dim-13 feature.
+        aux_loss_val = 0.0
+        if aux_head is not None:
+            trunk_out = out["trunk_out"].float()  # [B, N, hidden]
+            mask_f = mask.unsqueeze(-1).float()
+            pooled = (trunk_out * mask_f).sum(dim=1) / mask_f.sum(dim=1).clamp(min=1)  # [B, hidden]
+            log10_re_pred = aux_head(pooled).squeeze(-1)  # [B]
+            log10_re_gt = x[:, 0, 13] * LN_TO_LOG10  # [B], ln→log10 conversion
+            aux_loss = F.mse_loss(log10_re_pred, log10_re_gt)
+            loss = loss + cfg.aux_logre_weight * aux_loss
+            aux_loss_val = aux_loss.item()
+
         optimizer.zero_grad()
         loss.backward()
         if cfg.clip_grad_norm > 0:
             pre_clip_norm = torch.nn.utils.clip_grad_norm_(
-                model.parameters(), max_norm=cfg.clip_grad_norm
+                trainable_params, max_norm=cfg.clip_grad_norm
             )
             epoch_grad_norm_pre += float(pre_clip_norm)
         optimizer.step()
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_aux += aux_loss_val
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_aux /= max(n_batches, 1)
     epoch_grad_norm_pre /= max(n_batches, 1)
 
     # --- Validate ---
@@ -762,6 +817,8 @@ for epoch in range(MAX_EPOCHS):
         "peak_memory_gb": peak_gb,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/aux_loss": epoch_aux,
+        "aux_logre_weight": cfg.aux_logre_weight,
         "train/grad_norm_pre_clip": epoch_grad_norm_pre,
         "clip_grad_norm": cfg.clip_grad_norm,
         "norm_type": cfg.norm_type,
@@ -773,9 +830,10 @@ for epoch in range(MAX_EPOCHS):
         "gate_stats": gate_stats,
         "is_best": tag == " *",
     })
+    aux_str = f" aux={epoch_aux:.4f}" if aux_head is not None else ""
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}{aux_str}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
