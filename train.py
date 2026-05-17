@@ -130,14 +130,19 @@ class BilinearGLU(nn.Module):
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64,
+                 temperature_init: float = 0.5, freeze_temperature: bool = False):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
         self.heads = heads
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
-        self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
+        init_t = torch.ones([1, heads, 1, 1]) * temperature_init
+        if freeze_temperature:
+            self.register_buffer("temperature", init_t)
+        else:
+            self.temperature = nn.Parameter(init_t)
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
@@ -185,13 +190,16 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 use_swiglu=False, swiglu_hidden_mult=1.0, glu_act_type="swiglu"):
+                 use_swiglu=False, swiglu_hidden_mult=1.0, glu_act_type="swiglu",
+                 temperature_init: float = 0.5, freeze_temperature: bool = False):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
+            temperature_init=temperature_init,
+            freeze_temperature=freeze_temperature,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         mlp_hidden = hidden_dim * mlp_ratio
@@ -226,6 +234,7 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  use_swiglu=False, swiglu_hidden_mult=1.0, glu_act_type="swiglu",
+                 temperature_init: float = 0.5, freeze_temperature: bool = False,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -250,6 +259,8 @@ class Transolver(nn.Module):
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 use_swiglu=use_swiglu, swiglu_hidden_mult=swiglu_hidden_mult,
                 glu_act_type=glu_act_type,
+                temperature_init=temperature_init,
+                freeze_temperature=freeze_temperature,
             )
             for i in range(n_layers)
         ])
@@ -357,6 +368,40 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
            "loss": vol_loss + surf_weight * surf_loss}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
     return out
+
+
+def compute_slice_entropy(model, fixed_batch, stats, device) -> float:
+    """Mean entropy (nats) of block-0 slice-routing softmax over valid (real) nodes.
+
+    Lower = sharper routing; upper bound for uniform routing is log(slice_num).
+    Runs the uncompiled base module to avoid hook/compile interaction.
+    """
+    base = model._orig_mod if hasattr(model, "_orig_mod") else model
+    captured: dict[str, torch.Tensor] = {}
+
+    def hook(_module, _inp, output):
+        captured["w"] = output.detach()
+
+    handle = base.blocks[0].attn.softmax.register_forward_hook(hook)
+    was_training = base.training
+    base.eval()
+    try:
+        x, _y, _is_surface, mask = fixed_batch
+        x = x.to(device, non_blocking=True)
+        mask = mask.to(device, non_blocking=True)
+        x_norm = (x - stats["x_mean"]) / stats["x_std"]
+        with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            _ = base({"x": x_norm})
+        w = captured["w"].float()  # [B, heads, N, slice_num]
+        log_w = w.clamp(min=1e-12).log()
+        entropy = -(w * log_w).sum(dim=-1)  # [B, heads, N]
+        m = mask.unsqueeze(1).expand_as(entropy)
+        valid = entropy[m]
+        return float(valid.mean().item()) if valid.numel() > 0 else float("nan")
+    finally:
+        handle.remove()
+        if was_training:
+            base.train()
 
 
 def _sanitize_path_token(s: str) -> str:
@@ -522,6 +567,8 @@ class Config:
     use_swiglu: bool = False
     swiglu_hidden_mult: float = 1.0  # 1.0 = full hidden; 0.6667 = param-matched
     glu_act_type: str = "swiglu"  # GLU gate activation: "swiglu" | "geglu" | "bilinear"
+    attn_temperature_init: float = 0.5         # PhysicsAttention slice-routing softmax temperature init
+    attn_freeze_temperature: bool = False      # if True, temperature is a non-learnable buffer
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -567,6 +614,8 @@ model_config = dict(
     use_swiglu=cfg.use_swiglu,
     swiglu_hidden_mult=cfg.swiglu_hidden_mult,
     glu_act_type=cfg.glu_act_type,
+    temperature_init=cfg.attn_temperature_init,
+    freeze_temperature=cfg.attn_freeze_temperature,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -578,6 +627,8 @@ n_mlp_params = sum(
     for blk in model.blocks
     for p in blk.mlp.parameters()
 )
+n_temp = sum(p.numel() for n, p in model.named_parameters() if "temperature" in n)
+print(f"Attn temperature: init={cfg.attn_temperature_init}, freeze={cfg.attn_freeze_temperature}, learnable params={n_temp}")
 if cfg.compile_mode:
     _mode = cfg.compile_mode if cfg.compile_mode != "default" else None
     model = torch.compile(model, mode=_mode, dynamic=True)
@@ -611,6 +662,20 @@ with open(model_dir / "config.yaml", "w") as f:
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
+
+# Fixed val batch for slice-entropy diagnostic (block-0 attention softmax over slice dim).
+_diag_loader = val_loaders[VAL_SPLIT_NAMES[0]]
+_diag_batch = next(iter(_diag_loader))
+init_entropy = compute_slice_entropy(model, _diag_batch, stats, device)
+print(f"Slice-weight entropy (init, block 0): {init_entropy:.4f} nats (uniform={float(torch.tensor(cfg.slice_num).log()):.4f})")
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "slice_entropy",
+    "stage": "init",
+    "block": 0,
+    "mean_entropy_nats": init_entropy,
+    "slice_num": cfg.slice_num,
+    "uniform_entropy_nats": float(torch.tensor(cfg.slice_num).log()),
+})
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -724,6 +789,18 @@ for epoch in range(MAX_EPOCHS):
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+
+# Final slice-weight entropy on the same fixed val batch (trained weights)
+final_entropy = compute_slice_entropy(model, _diag_batch, stats, device)
+print(f"Slice-weight entropy (final, block 0): {final_entropy:.4f} nats (init was {init_entropy:.4f})")
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "slice_entropy",
+    "stage": "final",
+    "block": 0,
+    "mean_entropy_nats": final_entropy,
+    "slice_num": cfg.slice_num,
+    "uniform_entropy_nats": float(torch.tensor(cfg.slice_num).log()),
+})
 
 # --- Test evaluation + local summary ---
 if best_metrics:
