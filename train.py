@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 import os
@@ -565,6 +566,18 @@ class Lion(torch.optim.Optimizer):
 
 
 # ---------------------------------------------------------------------------
+# EMA: Polyak averaging of model weights (Ho et al. 2020, DDPM)
+# ---------------------------------------------------------------------------
+
+
+@torch.no_grad()
+def update_ema(ema_m: nn.Module, live_m: nn.Module, decay: float) -> None:
+    """In-place EMA update: ema ← decay·ema + (1-decay)·live, in fp32."""
+    for ema_p, live_p in zip(ema_m.parameters(), live_m.parameters()):
+        ema_p.data.mul_(decay).add_(live_p.data.float(), alpha=1.0 - decay)
+
+
+# ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
 
@@ -601,6 +614,7 @@ class Config:
     T_max: int = 15  # CosineAnnealingLR period; default preserves prior behavior
     fourier_pe: bool = False   # Tancik Fourier PE on (x, z) coords (H106)
     fourier_pe_freqs: int = 8  # Number of log-spaced frequencies; adds 4*K features
+    ema_decay: float = 0.0  # EMA decay (Polyak avg) on model weights; 0 disables. Eval/test use EMA weights.
 
 
 cfg = sp.parse(Config)
@@ -657,6 +671,16 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+# EMA shadow weights (fp32) — see PR #4452. Eval/test use ema_model when enabled.
+ema_model: nn.Module | None = None
+if cfg.ema_decay > 0.0:
+    ema_model = copy.deepcopy(model).float()
+    ema_model.eval()
+    for p in ema_model.parameters():
+        p.requires_grad_(False)
+    print(f"EMA: enabled, decay={cfg.ema_decay} (eval uses EMA weights)")
+eval_model = ema_model if ema_model is not None else model
 
 if cfg.optimizer == "lion":
     optimizer = Lion(model.parameters(), lr=cfg.lr, betas=(cfg.beta1, cfg.beta2),
@@ -742,6 +766,8 @@ for epoch in range(MAX_EPOCHS):
             )
             epoch_grad_norm_pre += float(pre_clip_norm)
         optimizer.step()
+        if ema_model is not None:
+            update_ema(ema_model, model, cfg.ema_decay)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -754,8 +780,10 @@ for epoch in range(MAX_EPOCHS):
 
     # --- Validate ---
     model.eval()
+    if ema_model is not None:
+        ema_model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, use_bf16=cfg.use_bf16)
+        name: evaluate_split(eval_model, loader, stats, cfg.surf_weight, device, use_bf16=cfg.use_bf16)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -770,12 +798,12 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        torch.save(eval_model.state_dict(), model_path)
         tag = " *"
 
     gate_stats = []
     if cfg.ffn_act in ("geglu", "swiglu"):
-        gate_stats = collect_gate_stats(model, val_loaders["val_single_in_dist"], stats, device, use_bf16=cfg.use_bf16)
+        gate_stats = collect_gate_stats(eval_model, val_loaders["val_single_in_dist"], stats, device, use_bf16=cfg.use_bf16)
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     append_metrics_jsonl(metrics_jsonl_path, {
@@ -793,6 +821,7 @@ for epoch in range(MAX_EPOCHS):
         "T_max": cfg.T_max,
         "fourier_pe": cfg.fourier_pe,
         "fourier_pe_freqs": fourier_pe_freqs,
+        "ema_decay": cfg.ema_decay,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "gate_stats": gate_stats,
@@ -813,8 +842,8 @@ print(f"\nTraining done in {total_time:.1f} min")
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
 
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
-    model.eval()
+    eval_model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+    eval_model.eval()
 
     test_metrics = None
     test_avg = None
@@ -826,7 +855,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, use_bf16=cfg.use_bf16)
+            name: evaluate_split(eval_model, loader, stats, cfg.surf_weight, device, use_bf16=cfg.use_bf16)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
