@@ -2,6 +2,45 @@
 
 ## Current Best
 
+### 2026-05-17 06:35 — PR #4349: lr=7e-4 + n_freqs=8 + slice=32 + Huber δ=0.10 compound — charliepai2i48h5-tanjiro
+
+- **val_avg/mae_surf_p**: **55.250** (best_epoch=22/22, timeout-bound)
+- **test_avg/mae_surf_p**: **47.592** (from best-val checkpoint)
+- **Improvement over prior best (#4322)**: -0.98% val, -2.57% test
+- **Cumulative improvement**: -57.1% val vs round-5 start (~128.69)
+- **Per-split val surf_p** (at best epoch):
+  | Split | val surf_p | Δ vs prior (#4322) |
+  |---|---|---|
+  | single_in_dist | 58.867 | +1.39% ✗ |
+  | geom_camber_rc | 68.972 | +1.89% ✗ |
+  | geom_camber_cruise | 36.893 | -7.41% ✓ |
+  | re_rand | 56.267 | -2.32% ✓ |
+- **Per-split test surf_p**:
+  | Split | test surf_p | Δ vs prior (#4322) |
+  |---|---|---|
+  | single_in_dist | 51.952 | +1.24% ✗ |
+  | geom_camber_rc | 60.750 | -2.27% ✓ |
+  | geom_camber_cruise | 31.167 | -5.76% ✓ |
+  | re_rand | 46.497 | -4.78% ✓ |
+- **Metric artifacts**: `models/model-bf16-layerscale-bs2-n8-lr7e4-huber010-slice32-20260517-042421/metrics.jsonl`
+- **arm-2 (n=8+slice=32+δ=0.10, no lr change)**: val=55.270 / test=47.822 (both beat #4322 but arm-1 is better on both)
+- **Stack**: BF16 + LayerScale γ-init=0.01 + **n_freqs=8** + batch_size=2 + Huber δ=0.10 + **lr=7e-4** + T_max=20 + clip=0.25 + slice_num=32 (no explicit weight_decay; default applies)
+- **Key finding**: lr=7e-4 transfers from lineage A to the slice=32 stack. Mechanism: n=8 Fourier + slice=32's +4 epoch budget lets lr=7e-4 escape clip-saturation (clip_frac=0.953 final vs 0.965+ on n=10 stacks). cruise and re_rand split most improved.
+- **Reproduce**:
+  ```bash
+  cd target && python train.py --epochs 50 \
+      --bf16 --batch_size 2 \
+      --lr 7e-4 \
+      --layer_scale_init 0.01 \
+      --n_freqs 8 --huber_delta 0.10 \
+      --lr_t_max 20 --grad_clip_max_norm 0.25 \
+      --slice_num 32 \
+      --experiment_name <name> \
+      --agent <student>
+  ```
+
+---
+
 ### 2026-05-17 06:00 — PR #4322: weight_decay=0.001 on new best stack — charliepai2i48h5-askeladd
 
 - **val_avg/mae_surf_p**: **55.799** (best_epoch=22/22, timeout-bound)
