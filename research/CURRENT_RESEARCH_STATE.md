@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-17 (~03:15 UTC) — #4201 nezuko MERGED (new best val 53.08 / test 44.89); #4212 #4231 #4258 CLOSED (informative nulls); 4 new R12 experiments assigned probing new BL substrate. 8/8 staffed.
+- **Date:** 2026-05-17 (~07:30 UTC) — #4240 #4274 #4256 CLOSED (Findings #33-35); #4326 #4328 #4329 assigned (R12 H75-H77: Huber β, EMA, Lion β1 at new BL). 8/8 staffed; #4255 fern nudged to submit.
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
@@ -50,30 +50,28 @@ Key mechanism: Four-way composition. layer_scale=1e-4 + T_max=20 + lr=2e-4 + cli
 
 | PR | Student | Hypothesis | Status |
 |----|---------|------------|--------|
-| #4240 | alphonse | R11 H66: Triple composition — layer_scale=1e-4 + T_max=24 + clip=1.0 | WIP (likely informative null — 3/4 diverged) |
-| #4255 | fern | R11 H67: LR sweep at T_max=24+clip=1.0 {1.3e-4, 1.5e-4, 1.7e-4, 2.0e-4} | WIP |
-| #4256 | edward | R11 H68: Fine-grained clip {0.85, 1.15} at T_max=24 (new BL ctx) | WIP |
-| #4274 | frieren | R11 H70: EMA decay {0.995, 0.999} at T_max=24+clip=1.0 | WIP |
-| **#4315** | **tanjiro** | **R12 H71: LR sweep {1.7e-4, 2.3e-4} at new BL (ls+T_max=20+clip+lr=2e-4)** | **Just assigned** |
-| **#4318** | **askeladd** | **R12 H72: ls magnitude {1e-3, 5e-5} at new BL substrate** | **Just assigned** |
-| **#4319** | **nezuko** | **R12 H73: WD sweep {5e-4, 2e-3} at new BL substrate** | **Just assigned** |
-| **#4320** | **thorfinn** | **R12 H74: T_max {16, 22} at new BL substrate (T_max=24 excluded: diverges)** | **Just assigned** |
+| #4255 | fern | R11 H67: LR sweep at T_max=24+clip=1.0 {1.3e-4, 1.5e-4, 1.7e-4, 2.0e-4} | WIP — nudged to submit; all arms done |
+| #4315 | tanjiro | R12 H71: LR sweep {1.7e-4, 2.3e-4} at new BL (ls+T_max=20+clip+lr=2e-4) | WIP |
+| #4318 | askeladd | R12 H72: ls magnitude {1e-3, 5e-5} at new BL substrate | WIP |
+| #4319 | nezuko | R12 H73: WD sweep {5e-4, 2e-3} at new BL substrate | WIP |
+| #4320 | thorfinn | R12 H74: T_max {16, 22} at new BL substrate (T_max=24 excluded: diverges at ls) | WIP |
+| **#4326** | **alphonse** | **R12 H75: Huber β {0.03, 0.10} at new BL substrate (targets camber_cruise & re_rand)** | **Just assigned** |
+| **#4328** | **frieren** | **R12 H76: EMA decay {0.995, 0.999} at new BL substrate (ls unblocks ema=0.999?)** | **Just assigned** |
+| **#4329** | **edward** | **R12 H77: Lion β1 {0.85, 0.95} at new BL substrate (extends Finding #30)** | **Just assigned** |
 
-## Recent closures (informative nulls)
+## Recent closures
 
 | PR | Student | Result | Note |
 |----|---------|--------|------|
-| #4258 | thorfinn | β1 sweep: both arms +5 val vs BL. **Finding #30**: β1=0.9 robust at new substrate. Lion-state axis closed. | CLOSED |
-| #4212 | askeladd | ls magnitude: ls=1e-3 −0.18 val within σ at old substrate; all arms regress vs new BL. **Finding #31**: non-monotone ls landscape on log(scale). | CLOSED |
-| #4231 | tanjiro | LR recalibration: lr=1.7e-4 wins old substrate (−1.55 val / −1.22 test). Cross-substrate confound: val beats new BL (52.75 < 53.08) but test regresses (+1.18). **Finding #32**: LR directional finding established for follow-up at new BL substrate. | CLOSED |
-| #4240 | alphonse | Triple composition (T_max=24+ls+clip): 3/4 runs diverge (val>100). layer_scale+T_max=24+clip=1.0 is unstable. | WIP (awaiting student submission) |
+| #4256 | edward | Fine-grained clip {0.85, 1.15} at T_max=24+no-ls: both arms +2 val vs clip=1.0. **Finding #35**: clip=1.0 locally optimal; fine-grid asymmetry (Finding #25) does not replicate. Substrate superseded. | CLOSED |
+| #4274 | frieren | EMA {0.995, 0.999} at T_max=24+clip+no-ls: both within σ of BL. **Finding #34**: EMA tightens around 0.997 at old substrate. Follow-up at new BL → #4328. | CLOSED |
+| #4240 | alphonse | Triple composition (ls=1e-4 + T_max=24 + clip=1.0): 3/4 diverge (val>100). **Finding #33**: T_max=24 EXCLUDED when layer_scale present. Safe T_max ≤ 20 with ls. | CLOSED |
+| #4258 | thorfinn | β1 sweep: both arms +5 val vs BL. **Finding #30**: β1=0.9 robust at old substrate. Lion-state axis closed at old BL; follow-up at new BL → #4329. | CLOSED |
+| #4212 | askeladd | ls magnitude: ls=1e-3 −0.18 val within σ at old substrate; all arms regress vs new BL. **Finding #31**: non-monotone ls landscape. Follow-up at new BL → #4318. | CLOSED |
+| #4231 | tanjiro | LR recalibration: lr=1.7e-4 directional winner at old substrate. Test regresses vs new BL. **Finding #32**: LR finding for follow-up at new BL → #4315. | CLOSED |
 | #4214 | frieren | EMA@layer_scale+T_max=20: timeout-truncated. **Finding #28**: layer_scale stabilises ema=0.999 but slow. | CLOSED |
-| #4173 | thorfinn | lr×T_max at clip: **Finding #26** (lr monotone [1.5,2.0]), **Finding #27** (T_max=18 bimodal worst). | CLOSED |
-| #4180 | edward | Clip ratio @ lr=2e-4: **Finding #25** asymmetric valley; clip=1.0 sharp optimum. | CLOSED |
-| #4192 | fern | Huber β @ lr=2e-4+clip: both arms regress; finding #11 extends. | CLOSED |
-| #4231 | tanjiro | LR@T_max=20 old substrate: lr=1.7e-4 directional winner −0.64 val (within noise). Substrate superseded. | CLOSED |
 
-## Key findings (cumulative, 32)
+## Key findings (cumulative, 35)
 
 1. **FiLM on log(Re)** contributes −4.35 val / −4.56 test under n_fourier=0.
 2. **EMA(0.997)** contributes +4.4 val on top of Lion.
@@ -107,17 +105,28 @@ Key mechanism: Four-way composition. layer_scale=1e-4 + T_max=20 + lr=2e-4 + cli
 30. **β1=0.9 robust at new substrate (T_max=24+clip=1.0)**: both arms +5 val. Rate-of-momentum-warmup dominates in 13-epoch budget. Lion optimizer-state axis closed.
 31. **ls=1e-3 marginal winner at old T_max=20 substrate**: −0.18 val / −0.57 test within σ. Non-monotone landscape on log(layer_scale): 3e-4 is worst. Against new BL, all arms regress.
 32. **lr=1.7e-4 directional winner at layer_scale+T_max=20+no-clip substrate**: −1.55 val / −1.22 test vs old BL. Cross-substrate: val beats new BL (52.75 < 53.08) but test regresses (+1.18) due to camber_cruise/re_rand divergence.
+33. **layer_scale + T_max=24 + clip=1.0 is UNSTABLE**: 3/4 runs diverge (val>100). T_max=24 EXCLUDED from all future layer_scale experiments. Safe range with layer_scale: T_max ≤ 20.
+34. **EMA tightens around 0.997 at T_max=24+clip=1.0+no-layer_scale**: both 0.995 and 0.999 within σ of BL. EMA axis closed at old substrate. Distinct from Finding #28 (layer_scale enables ema=0.999, but slow).
+35. **Fine-grained clip (0.85, 1.15) at T_max=24+no-ls both regress ~2 val vs clip=1.0**: the asymmetric regression from Finding #25 (clip 0.5 vs 2.0 favored 2.0) does NOT replicate at the fine grid. clip=1.0 is locally optimal at {0.85, 1.0, 1.15}. Clip axis at old substrate closed.
 
-## R12 focus: probing the new BL substrate
+## R12 focus: closing all hyperparameter axes at the new BL substrate
 
-The new BL (PR #4201, val 53.08 / test 44.89) uses: ls=1e-4 + T_max=20 + lr=2e-4 + clip=1.0 + EMA(0.997). 
+The new BL (PR #4201, val 53.08 / test 44.89) uses: ls=1e-4 + T_max=20 + lr=2e-4 + clip=1.0 + EMA(0.997) + Huber β=0.05 + FiLM + wd=1e-3 + Lion β1=0.9.
 
-**Main weakness**: camber_cruise regression (+2.5 val / +2.8 test), re_rand test (+0.92). The R12 experiments test 4 axes against this new substrate:
-1. **LR** (#4315 tanjiro): lr={1.7e-4, 2.3e-4} vs ctrl 2e-4
-2. **ls magnitude** (#4318 askeladd): ls={1e-3, 5e-5} vs ctrl 1e-4
-3. **WD** (#4319 nezuko): wd={5e-4, 2e-3} vs ctrl 1e-3 (FIRST WD sweep at new BL)
-4. **T_max** (#4320 thorfinn): T_max={16, 22} vs ctrl 20 (T_max=24 EXCLUDED — diverges at ls substrate)
+**Main weakness**: camber_cruise regression (+2.5 val / +2.8 test), re_rand test (+0.92). R12 systematically closes every hyperparameter axis at this substrate:
 
-Also in-flight on old BL substrate (T_max=24+clip, no-ls): #4255 fern (LR), #4256 edward (clip), #4274 frieren (EMA), #4240 alphonse (triple compose — awaiting submission).
+| Axis | PR | Student | Values tested |
+|------|----|---------|---------------|
+| LR | #4315 | tanjiro | {1.7e-4, 2.3e-4} vs 2e-4 |
+| ls magnitude | #4318 | askeladd | {1e-3, 5e-5} vs 1e-4 |
+| WD | #4319 | nezuko | {5e-4, 2e-3} vs 1e-3 (FIRST at new BL) |
+| T_max | #4320 | thorfinn | {16, 22} vs 20 (T_max=24 EXCLUDED) |
+| Huber β | #4326 | alphonse | {0.03, 0.10} vs 0.05 (FIRST at new BL) |
+| EMA decay | #4328 | frieren | {0.995, 0.999} vs 0.997 (FIRST at new BL with ls) |
+| Lion β1 | #4329 | edward | {0.85, 0.95} vs 0.9 default (extends Finding #30) |
+
+T_max=24 EXCLUDED from all future ls experiments (Finding #33 — diverges at ls substrate).
+
+Still in-flight from old BL substrate (T_max=24+clip, no-ls): #4255 fern (LR sweep — all arms done, nudged to submit).
 
 **Note on guard parser issue**: Advisor template comments containing `SENPAI-RESULT: {...}` (literal brace placeholder) trip the merge guard parser. Future advisor comments should use "SENPAI-RESULT JSON marker" or similar instead of the literal template.

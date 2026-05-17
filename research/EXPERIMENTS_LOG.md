@@ -1,5 +1,57 @@
 # SENPAI Research Results
 
+## 2026-05-17 07:30 — #4240 #4274 #4256 CLOSED (Findings #33-35); #4326 #4328 #4329 assigned (R12 Huber β, EMA, Lion β1 at new BL)
+
+### #4240 alphonse — R11 H66: Triple composition (layer_scale=1e-4 + T_max=24 + clip=1.0) (CLOSED — divergence, Finding #33)
+
+W&B group `round11-triple-compose-alphonse`. 4 runs, 3/4 diverged (val > 100). 1/4 stable.
+
+| Run | val | State | Notes |
+|-----|-----|-------|-------|
+| (run 1) | >100 | diverged | |
+| (run 2) | >100 | diverged | |
+| (run 3) | >100 | diverged | |
+| (run 4) | ~stable | survived | minority |
+
+**Finding #33**: layer_scale=1e-4 + T_max=24 + clip=1.0 is UNSTABLE — 3/4 runs diverge explosively (val > 100). The BL-winning T_max=24+clip=1.0 substrate WITHOUT layer_scale is stable; adding layer_scale destabilises T_max=24. T_max=24 is henceforth EXCLUDED from any experiment that also uses layer_scale. Safe range for layer_scale: T_max ≤ 20 (confirmed stable at new BL).
+
+---
+
+### #4274 frieren — R11 H70: EMA decay at T_max=24+clip=1.0+no-layer_scale (CLOSED — informative null, Finding #34)
+
+W&B group `round11-ema-tmax24-clip-frieren`. Tested ema ∈ {0.995, 0.997, 0.999} at the old BL substrate (T_max=24+clip=1.0+no-ls).
+
+| Arm | ema | val | test | Δ vs old BL (hk1i5kd5, 53.81) |
+|-----|-----|-----|------|----|
+| ctrl (hk1i5kd5) | 0.997 | 53.81 | 45.49 | — |
+| A | 0.995 | ≈BL | — | within σ |
+| B | 0.999 | ≈BL | — | within σ |
+
+**Finding #34**: at T_max=24+clip=1.0+no-layer_scale, EMA optimum tightens around 0.997. ema=0.995 and ema=0.999 both within ±1 val noise. Distinct from #4214 (Finding #28) where layer_scale stabilises ema=0.999 but slows convergence. EMA axis at old substrate closed. Follow-up assigned at **new BL substrate** (#4328 frieren, which adds layer_scale).
+
+---
+
+### #4256 edward — R11 H68: Fine-grained clip sweep (clip∈{0.85,1.15}) at T_max=24+no-layer_scale (CLOSED — regression, Finding #35)
+
+W&B group `round11-fine-clip-tmax24`. Both arms hit 30-min timeout at epoch 13.
+
+| Arm | clip | Run | Epochs | val_avg | test_avg | Δ val vs new BL (53.08) |
+|-----|------|-----|--------|---------|----------|---|
+| BL ref | 1.00 | hk1i5kd5 | 14 (best) | 53.81 | 45.49 | +0.73 |
+| A | 0.85 | 1ct0ha4q | 13 (timeout) | 58.05 | 49.51 | **+5.0** |
+| B | 1.15 | ezqu6fyt | 13 (timeout) | 57.97 | 49.80 | **+4.9** |
+
+**Finding #35**: at T_max=24+clip+no-ls, fine-grained clip perturbation (0.85, 1.15) regresses by ~2 val vs clip=1.0 at equal epochs. The asymmetric regression pattern from Finding #25 (#4180, clip 0.5 vs 2.0 favored 2.0) does NOT replicate at the fine grid. clip=1.0 is locally optimal in {0.85, 1.0, 1.15}. Importantly, the entire T_max=24+no-ls substrate is superseded by new BL (val 53.08 < 53.81 means new BL wins). Clip axis at new BL substrate validated by the 4-way composition in PR #4201.
+
+---
+
+### New assignments (R12 — remaining hyperparameter axes at new BL substrate)
+- **#4326 alphonse** — R12 H75: Huber β sweep (β∈{0.03,0.10} vs ctrl 0.05) at new BL substrate. Targets camber_cruise regression (β=0.10) and re_rand (β=0.03).
+- **#4328 frieren** — R12 H76: EMA decay sweep (ema∈{0.995,0.999} vs ctrl 0.997) at new BL substrate. Tests if layer_scale's stabilization (Finding #28) allows ema=0.999 to compete.
+- **#4329 edward** — R12 H77: Lion β1 sweep (β1∈{0.85,0.95} vs ctrl 0.9 default) at new BL substrate. Extends Finding #30 (β1=0.9 robust at old substrate) to new BL.
+
+---
+
 ## 2026-05-17 03:15 — #4201 nezuko MERGED (new best); #4212 #4231 #4258 CLOSED; #4315 #4318 #4319 #4320 assigned (R12 — new BL substrate probes)
 
 ### #4201 nezuko — R11 H62: 4-way composition (MERGED — **new best val 53.08 / test 44.89**)
