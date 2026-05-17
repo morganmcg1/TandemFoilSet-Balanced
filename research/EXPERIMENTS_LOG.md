@@ -2433,3 +2433,62 @@ Arm A directional improvement across 3/4 val splits (single_in_dist −1.53, cru
 - Standing winner: H93 Arm C (WSD 0/5/10) at val=39.51 / test=38.53 — pending rebase before merge
 - Compound test queued mentally: WSD 0/5/10 + bf16 → predicted val ~37-38 if effects compound
 - Schedule lever has new headroom (WSD 0/5/10 is a real signal); capacity lever still has 4 active probes (H100/H101/H102/H103); efficiency stack has compile+bf16 compound active (H96)
+
+---
+
+## 2026-05-17 — PR #4272: H99 bf16 + T_max=21 schedule fix (alphonse) — MERGED, NEW BEST
+
+- Branch: `charliepai2i48h3-alphonse/h99-bf16-schedule-fix`
+- Hypothesis: Aligning CosineAnnealingLR T_max to the bf16 wall budget (21 epochs) eliminates the LR-bounce confound and unlocks additional accuracy.
+
+| Arm | T_max | val_avg | Δ vs H95 (40.51) | test 3-split | best_epoch |
+|-----|-------|---------|-------------------|--------------|-----------|
+| **A (winner)** | **21** | **37.2626** | **−3.24** | **35.8568** | **21 (monotone)** |
+| B (control) | 15 | 40.6803 | +0.17 (repro ✓) | 39.7261 | 18 |
+
+Per-split Arm A: val_single_in_dist 37.09 (Δ-3.00), val_geom_camber_rc 49.78 (Δ-4.73), val_geom_camber_cruise 22.93 (Δ-2.08), val_re_rand 39.25 (Δ-3.18). Clean improvement on every split. Arm B (T_max=15 control) reproduces H95 within noise (val=40.68 vs 40.51, Δ=0.17), confirming T_max is the only variable.
+
+**Analysis:** The T_max=15 hardcode under 21 bf16 epochs created an LR-bounce: cosine decays to 0 at ep15, then rises again through ep16-21. H95's best_epoch=17 sat in this rising-LR "noise region." H99 fixes T_max=21 → monotone descent from ep1 to ep21 → model converges cleanly at final epoch. Mechanism: Lion + cosine decay benefits from extended near-zero-LR polishing in the final epochs. Δ-3.24 pts is a one-line schedule fix with no architecture change.
+
+**Cumulative gain vs H37b (66.11): −28.84 pts val_avg.** Artifacts: `models/model-h99-arm-a-bf16-tmax21-20260517-014114/`
+
+---
+
+## 2026-05-17 — PR #4276: H100 n_hidden=192 capacity probe (askeladd) — CLOSED, no signal
+
+- Branch: `charliepai2i48h3-askeladd/h100-n-hidden-192-bf16`
+- Hypothesis: n_hidden=192 or n_hidden=160 under bf16 yields capacity gain over default n_hidden=128.
+
+| Arm | n_hidden | val_avg | Δ vs H95 (40.51) | test 3-split |
+|-----|---------|---------|-------------------|--------------|
+| A | 192 | 40.7830 | +0.28 (worse) | 39.8213 |
+| B | 160 | 40.3852 | -0.12 (tie) | 38.5554 |
+
+Both within 1.7-pt noise floor. Under new H99 baseline (37.26), both arms are +3.1 to +3.5 pts worse → real negative signal. Conclusion: capacity is NOT the bottleneck at this point. The T_max=21 schedule fix (H99) unlocks far more accuracy at n_hidden=128 than any width increase. Closed.
+
+---
+
+## 2026-05-17 — PR #4277: H101 n_layers=5/6 depth probe (frieren) — CLOSED, partial signal
+
+- Branch: `charliepai2i48h3-frieren/h101-n-layers-5-bf16`
+- Hypothesis: n_layers=5 or n_layers=6 under bf16 improves on n_layers=4 baseline.
+
+| Arm | n_layers | epochs | val_avg | Δ vs H95 (40.51) | test 3-split |
+|-----|---------|--------|---------|-------------------|--------------|
+| A | 5 | 18 | 42.2102 | +1.70 (noise / small negative) | 40.5731 |
+| B | 6 | 15 | 39.7356 | -0.77 (tie) | 37.8828 |
+
+Arm B (n_layers=6) was wall-cut at ep15, still descending (41.78→41.26→39.74 per epoch). Under new H99 baseline (37.26), both arms are nominally worse, but Arm B's undertraining is the confound. With T_max=21 fix applied (which gives different effective LR shape at n_layers=6's wall-cut), there may still be headroom. Assigning frieren a retest (H113: n_layers=6 + bf16 + T_max sweep). Closed.
+
+---
+
+## 2026-05-17 — Cycle 38 Assignments
+
+| PR | Student | Hypothesis | Priority |
+|----|---------|-----------|---------|
+| #4332 | nezuko | **H114: WSD 0/7/14 + 0/3/18 on H99 baseline (compound schedule)** | TOP |
+| #4333 | frieren | **H113: n_layers=6 + bf16 + T_max=21 retest (Arms A, B)** | HIGH |
+| #4335 | alphonse | **H106: Fourier PE of mesh coordinates (K=8, K=4)** | MED |
+| #4337 | askeladd | **H107: log(Re) auxiliary head (λ=0.1, λ=0.01)** | MED |
+
+**Cycle summary:** Major win merged (H99 Δ-3.24 pts). 8 WIP, 0 idle. Active capacity probes H102/H103 now running against new baseline 37.26 — results will determine if any capacity axis improves further with schedule fix.
