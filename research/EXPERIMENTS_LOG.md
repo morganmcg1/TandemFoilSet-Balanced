@@ -1580,3 +1580,47 @@ Stop condition triggered (val > 41.0 threshold); Arm B (warmup=3) correctly not 
 
 - **#4572 (fern channel-dropout-geom-only):** Restricts channel masking to dims 0-11 (geometry: pos, saf, dsdf) only. Dims 12-23 (conditioning: log_Re, AoA, NACA, gap, stagger) left untouched. Arms: p=0.05 (A) / p=0.15 (B). Much lower p than failed #4501 given the model's fragility to channel removal.
 - **#4576 (thorfinn layerscale-geglu):** Re-test LayerScale on the current GeGLU baseline. Arms: γ_init=1e-4 (A, same as successful #4435 Arm A) / γ_init=3e-5 (B, 3× smaller per student's own suggested follow-up). Includes γ trajectory logging from #4435.
+
+---
+
+## 2026-05-17 12:30 — PR #4528: Slice-routing noise (PhysicsAttention logits) — STRONG WIN on SwiGLU baseline; SENT BACK for GeGLU rebase
+
+- **Branch:** charliepai2i48h2-edward/slice-routing-noise
+- **Hypothesis:** Gaussian noise σ=0.10 (A) / σ=0.30 (B) injected onto PhysicsAttention `in_project_slice` output (post-τ division, pre-softmax). Per the #4454 root cause: feature noise on x_norm is absorbed by routing operator; perturbing routing logits directly cannot be absorbed.
+- **Metric artifacts:** `models/model-charliepai2i48h2-edward-slice-routing-noise-A-20260517-094929/metrics.jsonl`, `models/model-charliepai2i48h2-edward-slice-routing-noise-B-20260517-103741/metrics.jsonl`
+
+| Metric | Baseline (SwiGLU #4358) | Arm A (σ=0.10) | Arm B (σ=0.30) **STRONG WIN** |
+|--------|--------------------------|----------------|-------------------------------|
+| **val_avg/mae_surf_p** | 36.5616 | 35.9964 (-1.55%) | **35.1446 (-3.87%)** |
+| **test_avg/mae_surf_p** | 30.9654 | 30.7370 | **30.3049 (-2.13%)** |
+| **val_geom_camber_rc** (OOD) | 52.2589 | 48.7097 (-6.79%) | **46.9147 (-10.23%) ← BREAKTHROUGH** |
+| val_geom_camber_cruise | 20.0733 | 20.0365 | 19.6021 |
+| val_re_rand | 36.4308 | 36.7932 | 36.5653 |
+| val_single_in_dist | 37.4836 | 38.4460 | 37.4963 |
+| Best epoch | 33 | 32 | 33 |
+| Per-epoch time | 53.7s | 54.1s | 54.0s |
+| Peak VRAM | 22.58 GB | 26.38 GB | 26.35 GB |
+
+- **Critical analysis:** The student tested on SwiGLU baseline (without `--glu_act_type geglu`). Arm B val=35.1446 BEATS the current GeGLU baseline (35.5046) by -0.36, and val_geom_camber_rc=46.91 BEATS GeGLU's 50.40 by -3.49 (-6.9%). **First mechanism that produced a substantial OOD breakthrough.**
+- **Why this works (per student):** Routing-logit noise directly diversifies which points get assigned to which slice; the softmax cannot collapse to its preferred mode because the perturbation is on its own input. Train losses unchanged but val improves → genuine regularization, not absorption.
+- **Decision:** SENT BACK for rebase. PR is CONFLICTING (GeGLU merge touches PhysicsAttention). Edward must rebase and re-run BOTH arms with `--glu_act_type geglu` to confirm compound win on current baseline. Result expected: val ≤ 35.15 if it compounds, val ~35.5 if absorbed by GeGLU.
+
+---
+
+## 2026-05-17 12:30 — PR #4514: Re-jitter on log(Re) channel — CLOSED (5th regularization failure)
+
+- **Branch:** charliepai2i48h2-frieren/re-jitter
+- **Result:** Catastrophic; both arms degraded every split monotonically. Arm A (σ=0.05) val=39.38 (+7.7%), val_re_rand=38.03 (+4.4%). Arm B (σ=0.15) val=56.91 (+55.7%), grad-norm 2× baseline.
+- **Root cause (student's analysis):** log(Re) is a *regime-selection* signal, not a smooth interpolation axis. Jittering it tells the model "you don't know which regime" — corrupts gradient signal on regime-specific features without adding any actual Re-extrapolation. val_single_in_dist worst-hit (+18.8% Arm A) — exactly the in-distribution case that most depends on accurate Re conditioning. Bonus observation: val_geom_camber_rc was nearly unchanged in Arm A — that split is dominated by geometric extrapolation, Re is a smaller term there.
+- **Contrast with #4528:** noise on *routing logits* (token-space) succeeds where noise on *channel inputs* (feature-space) fails. Confirms the #4454+#4377 lesson — interventions must operate on the right level.
+- **Decision:** CLOSED. Re-jitter axis fully closed. → frieren reassigned to #4590 pred-head-geglu (structural pivot).
+
+---
+
+## 2026-05-17 12:35 — New assignment: frieren #4590 pred-head-geglu
+
+- **Branch:** charliepai2i48h2-frieren/pred-head-geglu
+- **Hypothesis:** Extend GeGLU activation to the prediction head (last block's `mlp2`) and optionally the preprocess MLP. Both are currently 2-layer GELU MLPs — GeGLU's multiplicative gating is in the FFNs but not at boundary positions.
+- **Arms:** A = prediction head only; B = prediction head + preprocess. Both use `glu_head_hidden_mult=0.6667`.
+- **Param overhead:** Arm A ~+16K (2.5%), Arm B ~+22K. Within budget.
+- **Compounding rationale:** orthogonal to per-block FFN GeGLU (different positions in network); compounds independently with slice-routing-noise (which is in the encoder/aggregation, not the projection).
