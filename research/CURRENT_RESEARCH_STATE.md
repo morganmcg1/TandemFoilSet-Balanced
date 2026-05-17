@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-17 ~00:45 UTC
+- **Last updated:** 2026-05-17 ~01:15 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -162,11 +162,12 @@ Normalized DSDF (dims 4-11) across 100 train files / 108M values:
 | **#4178** | thorfinn | EMA of weights for val/test eval (decay=0.999) | `--n_hidden 176 --use_bf16 --epochs 18 --use_ema --ema_decay 0.999` | WIP |
 | **#4187** | frieren | Pressure-magnitude weighted L1 (top-decile \|p_true\|) | `--use_pmag_weight --pmag_weight_alpha 1.0 --pmag_weight_quantile 0.90 --n_hidden 176 --use_bf16 --epochs 18`, T=45 | WIP (new) |
 | #4190 | tanjiro | n_hidden=144 + bf16 + ep18 (capacity-vs-epochs at 30-min budget) | `--n_hidden 144 --use_bf16 --epochs 18` (no T override) | **CLOSED 00:10** (val=57.05; capacity dominates schedule completion at 30-min budget) |
-| **#4205** | edward | RMSNorm swap for LayerNorm on n_hidden=176+bf16+ep18 baseline | `--use_rmsnorm --n_hidden 176 --use_bf16 --epochs 18` (no T override) | WIP |
+| #4205 | edward | RMSNorm swap for LayerNorm on n_hidden=176+bf16+ep18 baseline | `--use_rmsnorm --n_hidden 176 --use_bf16 --epochs 18` (no T override) | **CLOSED ~01:05** (val=76.02 +49% cut ep12/18; per-epoch ~163s vs baseline 128s — 27% SLOWER from unfused RMSNorm kernel; all 4 splits regress; dual-mode failure: slower throughput AND ~11 points/ep convergence deficit; mean-shift removal breaks slice-attention conditioning; #4270 QK-norm assigned) |
+| **#4270** | edward | QK-norm: LayerNorm on Q and K projections (per-head over head_dim) BEFORE attention dot product | `--use_qk_norm --n_hidden 176 --use_bf16 --epochs 14` (30-min budget) | WIP (new — assigned 01:15) |
 | #4227 | frieren | AdaBelief optimizer swap for AdamW on n_hidden=176+bf16+ep18 baseline | `--optimizer adabelief --n_hidden 176 --use_bf16 --epochs 18` (no T override) | **CLOSED 00:45** — per-epoch equivalent to AdamW; belief-scaling no-op at stable gradient regime; AdaBelief axis closed |
 | **#4252** | frieren | LION optimizer (sign-of-gradient) at nh=176+bf16+ep14 | `--use_lion --lion_lr 1e-4 --lion_wd 1e-3 --n_hidden 176 --use_bf16 --epochs 14` (30-min budget) | WIP (new) |
-| **#4232** | fern | Push width frontier: n_hidden=208 + bf16 + ep18 | `--n_hidden 208 --use_bf16 --epochs 18` (no T override) | WIP (new) |
-| **#4233** | tanjiro | AGC (Adaptive Gradient Clipping) screening at nh=176+bf16+ep14 | `--use_agc --agc_clip_factor 0.01 --n_hidden 176 --use_bf16 --epochs 14` (no T override) | WIP (new — 30-min budget screening) |
+| **#4232** | fern | Push width frontier: n_hidden=208 + bf16 + ep18 → **sent back ~01:10 for clean ep=12+T_max=12 retest** (cap-friendly clean anneal) | `--n_hidden 208 --use_bf16 --epochs 12` (no T override) | WIP (sent back; v1 val=65.77 cut ep13 partial-anneal; ep-matched signal mixed: ep11/12 lead nh=192 by −5%/−15%, ep13 reverses +1.3% but schedule-confounded) |
+| **#4233** | tanjiro | AGC (Adaptive Gradient Clipping) at nh=176+bf16+ep14 → **sent back ~01:00 for clip_factor sweep** at 0.03 and 0.05 | `--use_agc --agc_clip_factor 0.03 / 0.05 --n_hidden 176 --use_bf16 --epochs 14` (30-min cap) | WIP (sent back; v1 val=59.29 clip=0.01 beats #4082 matched-config by −3% at ep14, agc_frac_clipped=0.79 aggressive; clip sweep to find optimum before full-budget confirmation) |
 
 **Note on env timeout (important):** Pod env caps vary. Alphonse and tanjiro pods enforce 30-min hard wall (per #4108, #4111 student flags). Fern and thorfinn pods run 39+ min fine. Future assignments to alphonse/tanjiro must be designed for ≤30-min wall. Instructions to these students should NOT include `SENPAI_TIMEOUT_MINUTES` override since isolation rules prohibit it. Nezuko, askeladd, frieren, edward: budget unknown — assume 30 min unless evidence otherwise.
 

@@ -1,5 +1,52 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-17 01:15 — PR #4205 CLOSED + #4270 assigned; #4233 + #4232 sent back
+
+### #4205 edward RMSNorm at nh=176+bf16+ep18 — **CLOSED** (dual-mode failure)
+
+- **Student:** willowpai2i48h4-edward (branch: `willowpai2i48h4-edward/rmsnorm-swap`)
+- **Hypothesis:** RMSNorm (no mean-shift, no learnable bias) provides faster training (fewer ops) and equivalent regularization vs nn.LayerNorm in Transolver blocks.
+
+#### Results
+
+| Metric | RMSNorm (this PR) | Baseline #4082 (nh=176+ep18) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 76.02 (ep12, cut) | 50.90 (ep18, full) | +49% |
+| test_avg/mae_surf_p | 66.69 | 43.90 | +52% |
+| epoch_time_s | ~163 s/ep | ~128 s/ep | **+27% SLOWER** |
+| best_epoch | 12 | 18 | cut by cap |
+
+- **W&B run:** `e92fo2w3` (group `willow-r8-rmsnorm`)
+- **Pod cap:** 30 min — cut at ep12/18 due to RMSNorm's 27% per-epoch overhead
+
+#### Decision: CLOSE
+- **Dual failure mode:**
+  1. **Eager-mode RMSNorm is 27% SLOWER than fused `nn.LayerNorm` CUDA kernel.** Despite RMSNorm having fewer mathematical ops (no mean subtraction, no bias add), the eager-mode Python implementation has no fused kernel — every op spawns a separate CUDA launch. Fused LayerNorm wins on throughput.
+  2. **Worse per-epoch convergence (~11 points/ep quality deficit).** Comparing matched epochs against #4082 trajectory, RMSNorm trails by 5-15 points throughout. All 4 test splits uniformly worse.
+- **Mechanistic insight:** Transolver slice-attention relies on the **mean-shift in LayerNorm** for implicit conditioning of slice-token activations. Removing the mean-shift breaks the conditioning, degrading convergence per epoch. This is the falsifying mechanism the hypothesis predicted.
+- **Implication:** Norm-placement and norm-mechanic axes appear well-tuned in current LayerNorm setup. Future norm-related work should focus on **attention-internal norms (QK-norm)** rather than swapping the token-norm operator.
+
+#### Follow-up: #4270 QK-norm (LayerNorm on Q and K per-head before attention dot product)
+
+### #4233 tanjiro AGC v1 → sent back for clip_factor sweep
+
+- **W&B run v1:** `7ten5f9f` (clip_factor=0.01); val=59.29 at ep14, test=51.27 at nh=176+bf16+ep14
+- **Signal:** AGC beats matched-config #4082 trajectory from ep10 onward. At ep14, AGC val=59.29 vs baseline #4082 ep14 ≈61.07 → **−3% improvement at matched epoch**. Endgame slope steeper (3.0/ep vs ~1.7/ep). +2.3% wall-clock overhead (acceptable). agc_frac_clipped=0.79 mean — aggressive clipping suggests headroom at higher clip_factor.
+- **Decision:** SEND BACK. Promote-worthy direction but need optimal clip_factor before scaling to full budget. Two arms: clip_factor=0.03 and 0.05 at same nh=176+bf16+ep14 screening config.
+- **Follow-up promotion path:** best clip_factor → full-budget nh=192+ep20 confirmation run on 50-min-cap pod (when available).
+
+### #4232 fern nh=208 v1 → sent back for clean ep=12+T_max=12 retest
+
+- **W&B run v1:** `3d3n60q9` (nh=208 + bf16 + ep18, cut ep13/18 at 30-min cap); headline val=65.77, test=56.87
+- **Signal:** Apples-to-apples ep-matched comparison vs `or5uq1id` (nh=192 ep20 baseline):
+  - ep11: nh=208 leads nh=192 by **−5.2%**
+  - ep12: nh=208 leads nh=192 by **−15.1%**
+  - ep13: nh=208 reverses to +1.3% — but T_max=18 anneal is at 18% peak lr vs T_max=20 at 27% peak lr → **schedule confound**
+- **Decision:** SEND BACK. Width signal is genuinely suggestive (ep11/12 lead) but schedule confound at the cut makes the call ambiguous. Clean ep=12+T_max=12 retest at nh=208 resolves cleanly within 30-min cap.
+- **VRAM data point:** nh=208 used 50.5 GB / 96 GB → big headroom remains.
+
+---
+
 ## 2026-05-17 00:45 — PR #4227 CLOSED + #4252 assigned
 
 ### #4227 frieren AdaBelief optimizer at nh=176+bf16+ep18 — **CLOSED** (per-epoch equivalence with AdamW)
