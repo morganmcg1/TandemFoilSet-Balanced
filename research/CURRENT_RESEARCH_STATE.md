@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 (updated 00:25 — #3975 askeladd MERGED (bf16 autocast, 13th winner, −9.74% val); all WIP PRs notified of new canonical)
+- **Date:** 2026-05-17 (updated 00:40 — #4161/#4070/#3736 CLOSED (AGC over-tight, α=0.5 locked, sw=10 beats sw=5); #4244/#4245/#4247 assigned (wider/deeper Transolver, weight decay))
 - **Branch:** `icml-appendix-willow-pai2i-48h-r3`
 - **Most recent human researcher directive:** None this launch.
 - **Canonical baseline (merged):** `val_avg/mae_surf_p = 41.4446`, `test_avg/mae_surf_p (excl cruise) = 43.2173`
@@ -44,9 +44,9 @@ Old launch baseline: 135.30. Total gain: **−69.4%** over 13 compounding improv
 
 | PR | Student | Hypothesis | Outcome |
 |---|---|---|---|
-| #3140 | alphonse | Width scaling (128→192) | +18.7% — wall-clock penalty |
+| #3140 | alphonse | Width scaling (128→192) | +18.7% — wall-clock penalty (bf16 revisit: #4244) |
 | #3161 | frieren | Per-sample loss normalization | +13.0% |
-| #3165 | nezuko | Depth scaling (5→8 layers) | +25.4% — wall-clock penalty |
+| #3165 | nezuko | Depth scaling (5→8 layers) | +25.4% — wall-clock penalty (bf16 revisit: #4247 at n_layers=6) |
 | #3169 | tanjiro | MLP ratio 2→4 | crashed |
 | #3172 | thorfinn | Fourier (x,z) + slice_num=96 | +14.3% — dead end |
 | #3319 | askeladd | LR warmup duration sweep | flat region |
@@ -60,20 +60,24 @@ Old launch baseline: 135.30. Total gain: **−69.4%** over 13 compounding improv
 | #3926 | askeladd | Cosine LR floor (eta_min) | Design flaw, closed |
 | #3728 | nezuko | EMA decay lower sweep {0.97, 0.95} | Monotone worse, closed |
 | #4139 | fern | β near-L1 sweep {0.005, 0.001, 0.0001} | Non-monotone bowl; β=0.0001 val −0.50% but test +0.27% — wrong-signed |
+| #4161 | nezuko | AGC (λ=0.01) vs global clip=1.0 | +0.68 val — λ=0.01 over-aggressive (2.5× smaller step); arms 2/3 bit-identical |
+| #4070 | alphonse | Lookahead α sweep {0.3, 0.5, 0.7} | α=0.5 optimal on new stack; α=0.3 catastrophic; {k,α} space closed |
+| #3736 | thorfinn | surf_weight {10, 5, 3} rerun | sw=10 ties canonical on val; sw=5 wins test by 1.92% but loses val — not merge-grade |
 
 ## Active WIP experiments (target: val < 41.4446, full canonical stack with --use_bf16)
 
 | PR | Student | Hypothesis | Family | Status |
 |---|---|---|---|---|
 | **#3415** | **frieren** | **Log-Re sinusoidal (freqs=4) on full canonical** | **Inputs** | **WIP — training; bf16 canonical notified.** |
-| **#4070** | **alphonse** | **Lookahead alpha sweep: α ∈ {0.3, 0.5, 0.7}, k=5 fixed** | **Optimization** | **WIP — training on older stack; bf16 canonical notified.** |
-| **#4161** | **nezuko** | **AGC: adaptive gradient clipping (λ=0.01) vs fixed max_norm=1.0** | **Optimization** | **WIP — implementing; bf16 canonical notified.** |
 | **#4200** | **tanjiro** | **Lookahead k sweep: {3, 5, 10} with α=0.5 fixed** | **Optimization** | **WIP — training; bf16 canonical notified.** |
 | **#3952** | **edward** | **Log-pressure aux loss (logp_weight=0.1)** | **Loss tuning** | **WIP — training; bf16 canonical notified.** |
-| **#3736** | **thorfinn** | **surf_weight {10,5} rerun on full canonical** | **Loss weighting** | **WIP — training; bf16 canonical notified.** |
 | **#4216** | **fern** | **LR sweep: {5e-4, 1e-3, 2e-3} on 12-winner canonical** | **Optimization** | **WIP — training; bf16 canonical notified.** |
+| **#4234** | **askeladd** | **Batch size sweep {4, 6, 8} on bf16 canonical** | **Throughput** | **WIP — just assigned.** |
+| **#4244** | **alphonse** | **Wider Transolver n_hidden=192 on bf16 canonical** | **Architecture** | **WIP — just assigned.** |
+| **#4245** | **nezuko** | **Weight decay sweep {1e-4, 1e-3, 1e-2} on bf16 canonical** | **Regularization** | **WIP — just assigned.** |
+| **#4247** | **thorfinn** | **Deeper Transolver n_layers=6 on bf16 canonical** | **Architecture** | **WIP — just assigned.** |
 
-7 students with WIP assignments. askeladd now idle — needs new experiment.
+Zero idle students.
 
 ## Key learnings (cumulative)
 
@@ -90,15 +94,21 @@ Old launch baseline: 135.30. Total gain: **−69.4%** over 13 compounding improv
 ## Next directions (priority order)
 
 ### Immediate (active)
-- **Frieren log-Re (#3415).** −1.20% within-PR on older stack. Now running on bf16 canonical. Input-side, orthogonal — **highest-EV pending result**; expected val ≈ 40-41 if compounding holds.
-- **Fern LR sweep (#4216).** lr=1e-3 never re-tuned on 13-winner stack. bf16+3 extra epochs shifts effective step budget significantly.
-- **Alphonse Lookahead alpha sweep (#4070).** α ∈ {0.3, 0.5, 0.7} — was on older stack; will need to decide merge/request-changes based on within-PR delta.
-- **Nezuko AGC (#4161).** Adaptive per-parameter clipping — orthogonal to bf16.
-- **Tanjiro Lookahead k sweep (#4200).** k={3, 5, 10} — closes the {k, α} Lookahead hyperparameter space.
-- **Thorfinn surf_weight (#3736).** sw=5 expected to beat sw=10.
-- **Edward log-pressure (#3952).** Modest within-PR signal, testing compounding with full canonical.
+- **Frieren log-Re (#3415).** −1.20% within-PR on older stack. Input-side, orthogonal — **highest-EV pending result**; expected val ≈ 40-41 if compounding holds on bf16 canonical.
+- **Fern LR sweep (#4216).** lr=1e-3 never re-tuned on 13-winner stack. bf16+3 extra epochs shifts effective step budget.
+- **Tanjiro Lookahead k sweep (#4200).** k={3, 5, 10} — closes the k space on bf16 canonical.
+- **Edward log-pressure (#3952).** Moderate within-PR signal; compounding test on full canonical.
+- **Architecture unlocks (batch/width/depth):** #4234 askeladd batch sweep, #4244 alphonse n_hidden=192, #4247 thorfinn n_layers=6.
+- **Regularization:** #4245 nezuko weight decay sweep.
 
-### Post-bf16 priority stack (askeladd next assignment)
-1. **Batch size sweep (bs=6, bs=8):** 33 GB VRAM headroom. More compute per step → more stable SOAP curvature estimates. Combined with 1.285× bf16 throughput, should push best_epoch further.
-2. **Wider Transolver (n_hidden=192):** VRAM constraint now lifted. Previous attempt (PR #3140) failed on wall-clock; with bf16 it gets the same ~17 epochs. Fresh test on very different environment.
-3. **SAM on SOAP:** now viable with extra epochs from bf16.
+### What has been confirmed/closed
+- **Lookahead {k=5, α=0.5} locked in.** Both k and α sweeps complete; k=5/α=0.5 optimal.
+- **grad_clip=1.0 is sweet spot.** Lower bounds (0.5, 0.1) and AGC-style all worse.
+- **surf_weight=10 locked in** on Huber β=0.01 L1-dominant stack.
+- **β family closed** — non-monotone below 0.01; pure L1 test-metric wrong-signed.
+
+### Post-current-round stack
+1. **Log-Re sinusoidal (frieren #3415):** if it wins → merge; orthogonal to architecture changes.
+2. **LR re-tune on merged architecture** (batch/width/depth winner): SOAP+Lookahead step size will shift.
+3. **SAM on SOAP:** still viable but lower priority than architecture.
+4. **AGC at larger λ (0.1–0.5):** not urgent — deprioritized vs architecture expansion.

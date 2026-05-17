@@ -1288,3 +1288,55 @@ The arm 4 comparison to new canonical (which also has grad_clip) isolates β=0.0
 1. **Batch size sweep** (33 GB used vs 96 GB available — try bs=6, bs=8)
 2. **Wider Transolver** (n_hidden=192 previously OOM; now ~60 GB budget)
 3. **All future experiments inherit best_epoch=17** — adjust expectations
+
+## 2026-05-17 00:35 — PR #4161 (nezuko): AGC adaptive gradient clipping — **CLOSED**
+
+- Branch: `willowpai2i48h3-nezuko/adaptive-gradient-clipping`
+- W&B runs: `j33gld3z` (arm1 baseline), `oquj57fy` (arm2 AGC-only), `835flwkp` (arm3 AGC+clip)
+
+**Hypothesis:** Per-parameter AGC (λ=0.01, Brock et al. NF-Nets) would refine global grad_clip=1.0 by adapting the clip threshold to each layer's scale.
+
+**Result:**
+
+| Arm | Config | val | test_excl_cruise |
+|---|---|---|---|
+| 1 (baseline) | global clip=1.0 | **48.7547** | **48.6088** |
+| 2 (AGC only) | AGC λ=0.01 | 49.4321 (+0.68) | 48.9601 (+0.35) |
+| 3 (AGC + clip) | AGC λ=0.01 + clip=1.0 | 49.4321 (bit-identical) | 48.9601 (bit-identical) |
+
+Arms 2/3 bit-identical — AGC overwrites global clip entirely (post-AGC ‖g‖max=0.45 < global threshold 1.0). λ=0.01 clips ~85 of ~100 params every step; effective step 2.5× smaller than global clip=1.0 → slower convergence at fixed wall-clock. Brock et al. default calibrated for NF-Nets ImageNet; too tight for 0.66M-param Transolver with L1-dominant Huber β=0.01. AGC family not dead — λ=0.1–0.5 could match global clip — but deprioritized vs post-bf16 architecture unlocks. **CLOSED.**
+
+## 2026-05-17 00:35 — PR #4070 (alphonse): Lookahead α sweep — **CLOSED**
+
+- Branch: `willowpai2i48h3-alphonse/lookahead-alpha-sweep`
+- W&B runs: `ytz1vrmt` (α=0.5), `b7xifgo4` (α=0.7), `r6qtp894` (α=0.3)
+
+**Result (v2 sweep on β=0.01+clip canonical):**
+
+| α | val | test_excl_cruise | Δval vs canonical |
+|---|---|---|---|
+| 0.3 | 50.0186 | 48.7963 | **+4.10 (catastrophic)** |
+| **0.5** | **45.9199** | **45.1094** | **0.0000 (exact match)** |
+| 0.7 | 47.2618 | 46.8420 | +1.34 (worse) |
+
+α=0.5 exactly reproduces canonical to 4 decimal places (strong determinism confirmation). α=0.3 catastrophic; α=0.7 worse on new stack (was better on old β=0.1 stack — stack-dependent). grad_clip+tight Huber smooths precond-noise that α=0.7 was helping with. **Lookahead k=5/α=0.5 locked in. {k, α} space closed. CLOSED.**
+
+## 2026-05-17 00:35 — PR #3736 (thorfinn): surf_weight sweep — **CLOSED**
+
+- Branch: `willowpai2i48h3-thorfinn/surf-weight-finer-ema-sweep`
+- Final run W&B: `e9twd89d` (sw=10), `4iwcd5qj` (sw=5)
+
+**Final result (full β=0.01 canonical stack):**
+
+| sw | val | test_excl_cruise | Δval |
+|---|---|---|---|
+| **10** | **45.9199** | **45.1094** | **0.0000 (ties canonical)** |
+| 5 | 46.0803 | 44.2438 | +0.16 (val worse, test better −1.92%) |
+
+sw=10 ties canonical exactly; sw=5 val +0.35% worse but test −1.92% better. Student correctly flagged test gain as un-replicable without multi-seed. **Val is merge gate** → sw=10 wins, hypothesis falsified on new canonical. Mechanism: Huber β=0.01 near-L1 makes surf_weight=10 NOT over-weighting — it restores the surface gradient magnitude that L1-like loss underweights. The prior SOAP-already-balances-scales story only held under Cauchy/Huber β≥0.1. **CLOSED.**
+
+## 2026-05-17 00:40 — Assignments (post-bf16 architecture unlocks)
+
+- **#4244** alphonse: Wider Transolver n_hidden=192 + bf16 (VRAM headroom unlocked by PR #3975)
+- **#4245** nezuko: Weight decay sweep {1e-4, 1e-3, 1e-2} on bf16 canonical (never tuned on this stack)
+- **#4247** thorfinn: Deeper Transolver n_layers=6 + bf16 (wall-clock headroom partially restored by bf16)
