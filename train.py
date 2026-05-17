@@ -459,6 +459,7 @@ class Config:
     ema_decay: float | None = None  # None disables EMA; typical values 0.999 / 0.9995
     bf16: bool = False  # enable BF16 mixed-precision training via torch.amp.autocast (forward+loss only; eval stays FP32)
     n_hidden: int = 128  # Transolver hidden dim (width)
+    slice_num: int = 64  # Transolver routing slot count per attention layer
 
 
 cfg = sp.parse(Config)
@@ -494,7 +495,7 @@ model_config = dict(
     n_hidden=cfg.n_hidden,
     n_layers=5,
     n_head=4,
-    slice_num=64,
+    slice_num=cfg.slice_num,
     mlp_ratio=2,
     n_freqs=cfg.n_freqs,
     fourier_base=cfg.fourier_base,
