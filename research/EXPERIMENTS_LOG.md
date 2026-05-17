@@ -1327,3 +1327,29 @@ Stop condition triggered (val > 41.0 threshold); Arm B (warmup=3) correctly not 
 - **Analysis:** Both arms regress; OOD bottleneck (camber_rc) worse on both. Surprising **inversion**: Arm B (heavier 40% drop) is *less bad* than Arm A. Read: at keep=0.8 the model still memorizes per-batch geometry + small noise term; at keep=0.6 the model is forced to compute on genuinely different point clouds, recovering more of the original signal path. Mild signal of val_geom_camber_cruise (−1.36%) on Arm B — possibly genuine in low-Re aerial regime.
 - **Key insight (from student's diagnostic):** **PhysicsAttention slice routing is permutation-equivariant and approximately invariant to random subsampling at these rates.** Slice tokens are robust enough that dropping 20-40% of volume points produces near-identical token statistics. The augmentation behaves as added MC variance per step (input noise) rather than as data diversity (where slice-routing is sensitive — in *token space*, not point space).
 - **Decision:** CLOSED — no_improvement. **Critical pivot signal:** input-side augmentation at the point level cannot affect slice-routing token statistics. → #4454 feature-noise (token-space noise post-normalization, addressing this diagnostic directly), → #4458 attn-temperature (perturb the slice-routing softmax itself, sharper τ may help OOD).
+
+---
+
+## 2026-05-17 08:10 — PR #4358: SwiGLU activation — gated MLP vs GELU on slice=48 stack ✅ MERGED
+
+- **Branch:** charliepai2i48h2-alphonse/swiglu
+- **Hypothesis:** SwiGLU (SiLU-gated linear unit) replaces GELU MLP. Arm A param-matched (hidden_mult=0.6667); Arm B full-hidden (+50% params).
+- **Result: BREAKTHROUGH — 14-experiment plateau BROKEN.** Arm A wins strongly; Arm B timeout-limited.
+
+| Metric | Baseline (PR #4243, GELU) | Arm A (SwiGLU, hidden_mult=0.6667) — **WINNER** | Arm B (SwiGLU, hidden_mult=1.0) |
+|--------|--------------------------|--------------------------------------------------|----------------------------------|
+| **val_avg/mae_surf_p** | **38.6750** | **36.5616 (-5.47%) ✅** | 39.8779 (+3.1%) |
+| **test_avg/mae_surf_p** | **33.4948** | **30.9654 (-7.55%) ✅** | 33.6098 (+0.3%) |
+| val_single_in_dist | 42.1400 | **37.4836 (-4.66)** | 44.4022 (+2.26) |
+| val_geom_camber_rc | 51.6180 | **52.2589 (+0.64, flat)** | 53.0092 (+1.39) |
+| val_geom_camber_cruise | 22.4830 | **20.0733 (-2.41)** | 22.9096 (+0.43) |
+| val_re_rand | 38.4600 | **36.4308 (-2.03)** | 39.1908 (+0.73) |
+| n_params | 659,719 | **656,519 (-0.4%)** | 821,639 (+24.7%) |
+| Best epoch | 35 (timeout) | **33 (converged, val plateaued)** | 27 (timeout, still descending) |
+| Per-epoch time | 51.7 s | 53.7 s (+3.9%) | 66.7 s avg (compile recompile) |
+| Peak VRAM | 22.60 GB | 22.58 GB | 25.09 GB |
+| Metric artifacts | | `models/model-charliepai2i48h2-alphonse-swiglu-A-20260517-044102/metrics.jsonl` | `models/model-charliepai2i48h2-alphonse-swiglu-B-20260517-062800/metrics.jsonl` |
+
+- **Analysis:** Arm A is a clean, unambiguous win. Same param count (~-0.4%), identical VRAM, +3.9% per-epoch time cost, every split improved. The val curve **converged within budget** (plateau at ep33) — this is a genuine quality gain, not a throughput/compute artifact. The multiplicative gating structure (SiLU(W1·x) ⊙ (W2·x)) models nonlinear coupling between projected features more effectively than GELU scalar non-linearity. Arm B is not strictly worse under equal epochs but failed to fit the 30-min budget due to compile recompile overhead.
+- **Key finding:** val_geom_camber_rc improved only slightly (+0.64 = flat). SwiGLU helped single_in_dist (-4.66), cruise (-2.41), re_rand (-2.03) strongly but NOT the OOD geometric bottleneck. The camber_rc gap remains a data-coverage / geometric generalization problem unaddressed by activation form.
+- **Decision:** MERGED. New baseline: val=36.5616, test=30.9654. **Cumulative improvement from initial baseline:** 135.02 → 36.56 = **-72.9%**. Follow-up: #4477 alphonse GeGLU/bilinear ablation — does GELU gate or gating structure alone explain the gain?

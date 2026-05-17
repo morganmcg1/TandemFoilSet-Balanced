@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- 2026-05-17 08:00Z — round 15 of `icml-appendix-charlie-pai2i-48h-r2`
+- 2026-05-17 08:15Z — round 15 of `icml-appendix-charlie-pai2i-48h-r2`
 - No active research directives from the human research team
-- **New baseline: val=38.6750** (PR #4243 askeladd slice_num=48 merged, −2.91% from 39.83)
+- **NEW BASELINE: val=36.5616** (PR #4358 alphonse SwiGLU Arm A merged, −5.47% from 38.675) — 14-experiment plateau broken
 
 ## Baseline progression
 
@@ -23,8 +23,9 @@
 | #3953 (frieren, LR×T_max) | 40.6869 | −8.04% | lr: 1.7e-4→2.5e-4; T_max: 30→40 — SUPERSEDED by #4079 |
 | **#4079 (edward, T_max=40)** | **39.8345** | **−9.97%** | **T_max: 30→40; lr=1.7e-4 unchanged — T_max alone drives full gain** |
 | **#4243 (askeladd, slice_num=48)** | **38.6750** | **−2.91%** | **slice_num: 64→48; coarser slicing → lower-variance gradient signal per step** |
+| **#4358 (alphonse, SwiGLU param-matched)** | **36.5616** | **−5.47%** | **SwiGLU hidden_mult=0.6667: multiplicative SiLU gate × value branch; 14-exp plateau broken** |
 
-**Current HEAD (13 mechanisms):** Lion lr=**1.7e-4** + surf_weight=25 + asinh pressure-loss + EMA(0.995) + grad_clip(max_norm=1.0) + bf16 autocast + cosine **T_max=40** + pressure_weight=2.0 + torch.compile(mode=default, dynamic=True) + **slice_num=48**. val=38.675 at epoch 35 (timeout-bound, val still descending).
+**Current HEAD (14 mechanisms):** Lion lr=**1.7e-4** + surf_weight=25 + asinh pressure-loss + EMA(0.995) + grad_clip(max_norm=1.0) + bf16 autocast + cosine **T_max=40** + pressure_weight=2.0 + torch.compile(mode=default, dynamic=True) + **slice_num=48** + **SwiGLU(hidden_mult=0.6667)**. val=36.5616 at epoch 33 (**converged**, not timeout-bound).
 
 **Reproduce baseline:**
 ```bash
@@ -52,17 +53,20 @@ cd target && python train.py --agent <student> \
 | #4306 | askeladd | slice_num coarser: 40 (Arm A), 32 (Arm B) — below new baseline slice=48 | WIP (stale — was rate-limited; GPU active again) | #4243 MERGED (slice=48 strong win); continue coarser direction; trend clear |
 | #4458 | nezuko | Attention temperature: frozen τ=0.25 (A) vs τ=1.0 (B) on slice-routing softmax | WIP — NEW | #4377 closed (slice routing invariant to point subsample); test if sharper/neutral frozen τ helps OOD |
 | #4433 | tanjiro | Y-mirror geometric augmentation: physics-exact data doubling, p=0.5 (A) / p=1.0 (B) | WIP — NEW | #4365 closed (RMSNorm regresses, mean-centering load-bearing); data coverage is bottleneck |
+| #4477 | alphonse | GeGLU / BilinearGLU: ablate SwiGLU gate mechanism (GELU gate A, bilinear B) | WIP — NEW | #4358 MERGED (SwiGLU wins); ablate whether SiLU gate or gating structure drives gain |
 | #4435 | thorfinn | LayerScale (CaiT): per-channel learnable residual gating γ_init=1e-4 (A) / 1e-2 (B) | WIP — NEW | #4362 closed (Lookahead triple-smoothing failure); architecture axis — how much each block contributes |
 | #4454 | edward | Token-space input feature noise: Gaussian σ=0.02 (A), σ=0.05 (B) on x_norm during training | WIP — NEW | #4403 closed (Fourier convergence-budget hit); direct response to slice-routing token-space diagnostic; zero param cost |
 | #4405 | frieren | DropPath stochastic depth: p_max=0.10 (Arm A), 0.20 (Arm B) — block-level vs element-wise | WIP — NEW | #4327 closed (huber regresses); STRUCTURAL REGULARIZATION axis — drops entire blocks not activations |
 
-## Key open questions (round 15 — new baseline 38.675, slice_num=48 — ACTIVE ESCALATION)
+## Key open questions (round 15 — NEW baseline 36.5616 after SwiGLU win)
 
-**Escalation status:** 14 consecutive no_improvement results since slice=48 merged (+#4403 Fourier, +#4377 point-subsample, +#4365 RMSNorm, +#4362 Lookahead, +#4295 per-group-lr, +#4327 huber-loss, +#4253 SGDR, +#4278 attn-dropout, +#4308 ffn-dropout, +#4312 SWA, +#4273 n_head v2, +#4235 mlp-ratio, +#4230 weight-decay, +#4287 batch-size). **Closed axes:** optimizer tuning, loss reshaping, LR-schedule disruption, normalization form, element-level reg, input-representation (Fourier), point-level data aug. **Critical new diagnostic from #4377:** PhysicsAttention slice routing is permutation-equivariant and invariant to point-level perturbation — augmentation must operate in *token space* (post-normalization), not point space. **Active pivots:** (a) **data augmentation** (Y-mirror #4433 physics-exact in-flight); (b) **token-space noise** (feature noise #4454 NEW — direct response to diagnostic); (c) **structural regularization** (DropPath #4405 in-flight); (d) **loss-budget redirection** (surf-p-weight-mult #4414 in-flight); (e) **architecture** (SwiGLU #4358 in-flight, LayerScale #4435 in-flight); (f) **slice-routing softmax** (attn-temperature #4458 NEW — direct response to diagnostic).
+**Status: Plateau broken!** SwiGLU #4358 wins (-5.47%). val_geom_camber_rc (52.26) remains the OOD bottleneck — SwiGLU helped single_in_dist/cruise/re_rand strongly but NOT camber_rc (flat). Active pivot: (a) **GLU ablation** (#4477 geglu/bilinear — what mechanism drove SwiGLU?); (b) **data aug** (Y-mirror #4433 — targets camber_rc directly); (c) **token-space** (#4454 feature-noise, #4458 attn-temp); (d) **structural reg** (#4405 droppath); (e) **architecture** (#4435 layerscale, #4306 coarser slices); (f) **loss** (#4414 surf-p-weight). All 8 students active.
+
+**Closed axes:** optimizer tuning, loss reshaping, LR-schedule disruption, normalization form (LayerNorm locked), element-level reg, input-representation (Fourier — convergence budget hit), point-level data aug (slice routing invariant to point perturbation). **Critical diagnostic from #4377:** PhysicsAttention slice routing is permutation-equivariant — augmentation must operate in *token space*, not point space.
 
 **Key reading from 3 regularization failures (FFN dropout, attention dropout, SWA):** model is NOT over-fitting in the classic sense at 35 epochs. The OOD gap on val_geom_camber_rc (51.62) is driven by **training data coverage**, not by parameter over-fitting. This pivots us toward data augmentation as the right axis.
 
-1. **Does SwiGLU gating improve over GELU in this timeout-limited PDE regime?** (#4358 alphonse) — modern transformer best practice, first clean test of activation function; Arm A param-matched (hidden×2/3), Arm B full-hidden gating.
+1. **Does GELU gate (GeGLU) match SwiGLU, or does bilinear gating alone suffice?** (#4477 alphonse) — SwiGLU MERGED; now ablating GELU gate (Arm A) vs identity gate (Arm B, bilinear); tests if SiLU is essential or if any multiplicative gating works.
 2. **Do even coarser slices (32, 40) continue the slice_num winning trend?** (#4306 askeladd) — slice=48 strong win vs slice=64/96; monotone coarser trend may continue.
 3. **Does up-weighting surface pressure loss (specifically, not uniformly) improve mae_surf_p?** (#4414 fern) — surf_p_weight_mult=1.5 (A) or 2.0 (B); effective surface-p loss weight 3.0 or 4.0 vs uniform 2.0; redirects gradient budget to the primary metric.
 4. **Does token-space input feature noise help where point-space augmentation cannot?** (#4454 edward) — Gaussian σ=0.02 (A) or σ=0.05 (B) on x_norm during training; zero param cost; direct response to slice-routing-invariance diagnostic from #4377.
@@ -150,7 +154,7 @@ cd target && python train.py --agent <student> \
 - **SWA** — CLOSED as #4312; SWALR freezes learning; EMA superior in timeout-limited regime → #4362 Lookahead
 - **n_head sweep** — CLOSED as #4273 v2; n_head=4, head_dim=32, slice=48 is local optimum (strong n_head×slice interaction found); axis closed → #4365 RMSNorm
 - **Slice_num sweep** — MERGED as #4243 (slice=48 STRONG WIN)
-- **SwiGLU gating** — IN PROGRESS as #4358 (alphonse); Arm A param-matched, Arm B full hidden; first clean implementation
+- **SwiGLU gating** — MERGED as #4358 (alphonse); Arm A param-matched wins strongly (-5.47%); gating mechanism unlocks new local optimum → #4477 geglu/bilinear ablation
 - **Lookahead-Lion** — CLOSED as #4362 (thorfinn); triple-smoothing (Lion+EMA+Lookahead); k=5→k=10 monotone trend confirms k→∞ optimal → #4435 LayerScale
 - **RMSNorm** — CLOSED as #4365 (tanjiro); mean-centering load-bearing; both arms regress → #4433 Y-mirror
 - **Huber loss** — CLOSED as #4327 (frieren); asinh already handles outliers; loss-reshaping slows convergence under timeout → #4405 DropPath
@@ -168,7 +172,7 @@ cd target && python train.py --agent <student> \
 - **Attention temperature (slice-routing softmax)** — IN PROGRESS as #4458 (nezuko); frozen τ=0.25/1.0 vs current learnable init=0.5
 
 **Not yet tried (candidates for next round):**
-- GeGLU (GELU gate variant of SwiGLU) — if SwiGLU #4358 shows signal, test sibling variant
+- GeGLU / BilinearGLU — IN PROGRESS as #4477 (alphonse); SwiGLU ablation GELU gate vs identity gate
 - Pre-norm vs post-norm positioning (current model uses pre-norm; post-norm may require warmup)
 - SAM (Sharpness-Aware Minimization) — optimizer meta-algorithm; 2× compute cost; only if clean failing
 - Mixup of geometries — interpolate two training samples in loss space (input-level too complex)
