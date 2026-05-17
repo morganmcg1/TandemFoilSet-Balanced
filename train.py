@@ -746,6 +746,20 @@ if cfg.swa_last_n > 0:
     print(f"SWA enabled: keeping rolling window of last {cfg.swa_last_n} "
           f"slow_weights snapshots (uniform mean used for final eval)")
 
+# SWA variants — each entry is (name, weight_tail). The weight_tail is right-
+# aligned: weight_tail[-1] applies to the latest snapshot, weight_tail[-2] to
+# the one before, and so on. Weights must sum to 1. Variants whose tail is
+# longer than the available snapshot count are skipped at eval time.
+# - last4_uniform: PR #4546 baseline (uniform mean over ep 14-17).
+# - last2_uniform: PR #4546 follow-up Variant A (only ep 16-17, fully converged).
+# - weighted:      PR #4546 follow-up Variant B (ep-17-heavy, downweights still-
+#                  LR-having ep 14 to 10%).
+SWA_VARIANTS: list[tuple[str, list[float]]] = [
+    ("last4_uniform", [0.25, 0.25, 0.25, 0.25]),
+    ("last2_uniform", [0.5, 0.5]),
+    ("weighted",      [0.10, 0.15, 0.25, 0.50]),
+]
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -918,71 +932,136 @@ if best_metrics:
         wandb.summary.update(test_log)
 
     # --- SWA: averaged-snapshot evaluation (separate from the best-checkpoint eval above) ---
-    swa_val_avg_dict = None
-    swa_test_avg_dict = None
+    # Loop over SWA_VARIANTS; each variant gets its own (val + test) eval pass.
+    # Backward-compat keys (no variant suffix) mirror the last4_uniform variant
+    # so existing dashboards keep working.
+    swa_variant_results: dict[str, dict[str, float | dict]] = {}
     if _swa_snapshots:
-        print(f"\nSWA: averaging {len(_swa_snapshots)} slow_weights snapshots "
-              f"from end of epochs {list(_swa_snapshot_epochs)}")
-        ref_state = model.state_dict()
-        swa_state: dict[str, torch.Tensor] = {}
         snap_list = list(_swa_snapshots)
-        n_snap = float(len(snap_list))
-        for k in snap_list[0].keys():
-            acc = snap_list[0][k].float().clone()
-            for snap in snap_list[1:]:
-                acc.add_(snap[k].float())
-            acc.div_(n_snap)
-            if k in ref_state:
-                acc = acc.to(ref_state[k].dtype)
-            swa_state[k] = acc
+        snap_epochs = list(_swa_snapshot_epochs)
+        n_snap = len(snap_list)
+        ref_state = model.state_dict()
+        print(f"\nSWA: collected {n_snap} slow_weights snapshots from end of epochs {snap_epochs}")
+        run.summary["swa/snapshot_epochs"] = snap_epochs
+        run.summary["swa/n_snapshots"] = n_snap
 
-        model.load_state_dict(swa_state)
-        model.eval()
+        # Persist snapshots to disk so future post-hoc variants don't need a
+        # re-train. Files: model_dir/swa_snapshot_epoch_<N>.pt
+        for snap, snap_ep in zip(snap_list, snap_epochs):
+            torch.save(snap, model_dir / f"swa_snapshot_epoch_{snap_ep}.pt")
+        print(f"  saved {n_snap} per-epoch snapshots to {model_dir}/swa_snapshot_epoch_*.pt")
 
-        swa_val_split_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
-            for name, loader in val_loaders.items()
-        }
-        swa_val_avg_dict = aggregate_splits(swa_val_split_metrics)
-        print(f"\n  SWA VAL  avg_surf_p={swa_val_avg_dict['avg/mae_surf_p']:.4f}")
-        for name in VAL_SPLIT_NAMES:
-            print_split_metrics(f"swa_{name}", swa_val_split_metrics[name])
+        for variant_name, weight_tail in SWA_VARIANTS:
+            tail_len = len(weight_tail)
+            if tail_len > n_snap:
+                print(f"  SKIP variant '{variant_name}' (needs {tail_len} snapshots, have {n_snap})")
+                continue
+            # Right-align: take the last tail_len snapshots; weight_tail[i] applies
+            # to snap_list[n_snap - tail_len + i].
+            used_snaps = snap_list[n_snap - tail_len:]
+            used_epochs = snap_epochs[n_snap - tail_len:]
+            w_sum = float(sum(weight_tail))
+            weights = [w / w_sum for w in weight_tail]  # normalise to sum=1 just in case
 
-        swa_test_split_metrics = None
-        if not cfg.skip_test and 'test_loaders' in dir():
-            swa_test_split_metrics = {
+            swa_state: dict[str, torch.Tensor] = {}
+            for k in used_snaps[0].keys():
+                acc = used_snaps[0][k].float() * weights[0]
+                for snap, w in zip(used_snaps[1:], weights[1:]):
+                    acc = acc + snap[k].float() * w
+                if k in ref_state:
+                    acc = acc.to(ref_state[k].dtype)
+                swa_state[k] = acc
+
+            model.load_state_dict(swa_state)
+            model.eval()
+
+            swa_val_split_metrics = {
                 name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
-                for name, loader in test_loaders.items()
+                for name, loader in val_loaders.items()
             }
-            swa_test_avg_dict = aggregate_splits(swa_test_split_metrics)
-            print(f"\n  SWA TEST avg_surf_p={swa_test_avg_dict['avg/mae_surf_p']:.4f}")
-            for name in TEST_SPLIT_NAMES:
-                print_split_metrics(f"swa_{name}", swa_test_split_metrics[name])
+            swa_val_avg_dict = aggregate_splits(swa_val_split_metrics)
+            print(f"\n  SWA[{variant_name}]  epochs={used_epochs}  weights={[round(w,3) for w in weights]}")
+            print(f"    SWA VAL  avg_surf_p={swa_val_avg_dict['avg/mae_surf_p']:.4f}")
+            for name in VAL_SPLIT_NAMES:
+                print_split_metrics(f"swa_{variant_name}_{name}", swa_val_split_metrics[name])
 
-        swa_log: dict[str, float] = {}
-        for split_name, m in swa_val_split_metrics.items():
-            for k, v in m.items():
-                swa_log[f"swa_{split_name}/{k}"] = v
-        for k, v in swa_val_avg_dict.items():
-            swa_log[f"swa_val_{k}"] = v
-        if swa_test_split_metrics is not None:
-            for split_name, m in swa_test_split_metrics.items():
+            swa_test_split_metrics = None
+            swa_test_avg_dict = None
+            if not cfg.skip_test and 'test_loaders' in dir():
+                swa_test_split_metrics = {
+                    name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+                    for name, loader in test_loaders.items()
+                }
+                swa_test_avg_dict = aggregate_splits(swa_test_split_metrics)
+                print(f"    SWA TEST avg_surf_p={swa_test_avg_dict['avg/mae_surf_p']:.4f}")
+                for name in TEST_SPLIT_NAMES:
+                    print_split_metrics(f"swa_{variant_name}_{name}", swa_test_split_metrics[name])
+
+            swa_log: dict[str, float | str | int] = {}
+            for split_name, m in swa_val_split_metrics.items():
                 for k, v in m.items():
-                    swa_log[f"swa_test/{split_name}/{k}"] = v
-            for k, v in swa_test_avg_dict.items():
-                swa_log[f"swa_test_{k}"] = v
-        swa_log["swa/n_snapshots"] = len(_swa_snapshots)
-        wandb.log(swa_log)
-        wandb.summary.update(swa_log)
-        run.summary["swa/snapshot_epochs"] = list(_swa_snapshot_epochs)
+                    swa_log[f"swa_{variant_name}_{split_name}/{k}"] = v
+            for k, v in swa_val_avg_dict.items():
+                swa_log[f"swa_{variant_name}_val_{k}"] = v
+            if swa_test_split_metrics is not None:
+                for split_name, m in swa_test_split_metrics.items():
+                    for k, v in m.items():
+                        swa_log[f"swa_{variant_name}_test/{split_name}/{k}"] = v
+                for k, v in swa_test_avg_dict.items():
+                    swa_log[f"swa_{variant_name}_test_{k}"] = v
+            swa_log[f"swa_{variant_name}/n_snapshots"] = tail_len
+            swa_log[f"swa_{variant_name}/epochs_str"] = ",".join(map(str, used_epochs))
 
-        # Quick A/B delta summary for the PR comment.
-        if swa_val_avg_dict is not None:
+            wandb.log(swa_log)
+            wandb.summary.update(swa_log)
+            run.summary[f"swa_{variant_name}/snapshot_epochs"] = used_epochs
+            run.summary[f"swa_{variant_name}/weights"] = weights
+
+            swa_variant_results[variant_name] = {
+                "val_avg": dict(swa_val_avg_dict),
+                "test_avg": dict(swa_test_avg_dict) if swa_test_avg_dict is not None else None,
+                "val_splits": {k: dict(v) for k, v in swa_val_split_metrics.items()},
+                "test_splits": {k: dict(v) for k, v in (swa_test_split_metrics or {}).items()},
+                "epochs": used_epochs,
+                "weights": weights,
+            }
+
+            # Quick A/B delta summary for the PR comment.
             d_val = swa_val_avg_dict["avg/mae_surf_p"] - best_avg_surf_p
-            print(f"\n  SWA Δ val_avg/mae_surf_p vs best ckpt: {d_val:+.4f}")
-        if swa_test_avg_dict is not None and test_avg is not None:
-            d_test = swa_test_avg_dict["avg/mae_surf_p"] - test_avg["avg/mae_surf_p"]
-            print(f"  SWA Δ test_avg/mae_surf_p vs best ckpt: {d_test:+.4f}")
+            print(f"    Δ val vs best ckpt: {d_val:+.4f}")
+            if swa_test_avg_dict is not None and test_avg is not None:
+                d_test = swa_test_avg_dict["avg/mae_surf_p"] - test_avg["avg/mae_surf_p"]
+                print(f"    Δ test vs best ckpt: {d_test:+.4f}")
+
+        # Back-compat aliases: mirror last4_uniform metrics to the old swa_* keys
+        # so dashboards built against PR #4546 results keep working.
+        if "last4_uniform" in swa_variant_results:
+            r = swa_variant_results["last4_uniform"]
+            compat_log: dict[str, float] = {}
+            for k, v in r["val_avg"].items():
+                compat_log[f"swa_val_{k}"] = v
+            for split_name, m in r["val_splits"].items():
+                for k, v in m.items():
+                    compat_log[f"swa_{split_name}/{k}"] = v
+            if r["test_avg"] is not None:
+                for k, v in r["test_avg"].items():
+                    compat_log[f"swa_test_{k}"] = v
+                for split_name, m in r["test_splits"].items():
+                    for k, v in m.items():
+                        compat_log[f"swa_test/{split_name}/{k}"] = v
+            compat_log["swa/n_snapshots"] = len(r["epochs"])
+            wandb.log(compat_log)
+            wandb.summary.update(compat_log)
+
+        # Concise A/B summary across all variants for log inspection.
+        print("\n  SWA variant summary (Δ vs baseline best-ckpt):")
+        print(f"    {'variant':<16s}  {'val_avg':>10s}  {'test_avg':>10s}  {'Δval':>7s}  {'Δtest':>7s}")
+        for variant_name, r in swa_variant_results.items():
+            v = r["val_avg"]["avg/mae_surf_p"]
+            t = r["test_avg"]["avg/mae_surf_p"] if r["test_avg"] is not None else float("nan")
+            dv = v - best_avg_surf_p
+            dt = (t - test_avg["avg/mae_surf_p"]) if (test_avg is not None and r["test_avg"] is not None) else float("nan")
+            print(f"    {variant_name:<16s}  {v:10.4f}  {t:10.4f}  {dv:+7.4f}  {dt:+7.4f}")
 
     save_model_artifact(
         run=run,
