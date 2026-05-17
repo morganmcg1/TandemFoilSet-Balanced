@@ -32,7 +32,8 @@
 |---|---|---|---|
 | **tanjiro** | **#4424** | **lr push {8e-4, 9e-4} on new best stack** | n=8+lr=7e-4+δ=0.10+slice=32 |
 | **edward** | **#4425** | **wd={0.001, 0.0001} compound on new best stack** | n=8+lr=7e-4+δ=0.10+slice=32 |
-| **alphonse** | **#4448** | **lr=8e-4 + wd=0.001 compound on n=10 stack** | n=10+δ=0.10+slice=32 |
+| **askeladd** | **#4479** | **wd bracket {0.002, 0.0015} on new best stack** | n=8+lr=7e-4+δ=0.10+slice=32 |
+| alphonse | #4448 | lr=8e-4 + wd=0.001 compound on n=10 stack | n=10+δ=0.10+slice=32 |
 | frieren | #4439 | sw bracket {11, 13} on new best stack (n=8+lr=7e-4) | n=8+lr=7e-4+δ=0.10+slice=32 |
 | **nezuko** | **#4449** | **clip={0.20, 0.22} transfer test on new best stack** | n=8+lr=7e-4+δ=0.10+slice=32 |
 | fern | #4396 | n_freqs={8, 12} on n=10 stack | n=10+δ=0.10+slice=32 |
@@ -62,6 +63,7 @@
 - **#4425 edward** — wd compound {0.001, 0.0001}: wd=0.001 helped n=10 stack; does it compound with lr=7e-4 on n=8?
 
 ### Priority 2: Close out n=10 stack experiments
+- **#4479 askeladd** — wd={0.002, 0.0015} on n=8 stack: complements edward #4425 wd={0.001, 0.0001} to build a 4-point bracket; wd=0.002 was the n=10 local optimum
 - **#4448 alphonse** — lr=8e-4 + wd=0.001 compound on n=10 stack: arm-2 lr=8e-4 found best-ever test=47.458 (non-timeout-bound!); compounding with wd=0.001 could push below current best val=55.250
 - **#4406 askeladd** — wd bracket {0.002, 0.003} (fills the val optimum region between confirmed wd=0.001 and wd=0.005)
 - **#4407 thorfinn** — T_max bracket {16, 18} on n=10+wd=0.001 (relevant if T_max window also applies to new best n=8 stack)

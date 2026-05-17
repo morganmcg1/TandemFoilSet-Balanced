@@ -5,6 +5,32 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-17 07:55 — PR #4406 (charliepai2i48h5-askeladd): wd bracket {0.002, 0.003} on n=10+wd=0.001 stack — CLOSED (wd=0.002 best on n=10 stack, doesn't beat new best 55.250)
+
+- branch: `askeladd/wd-sweep-new-best` (repurposed)
+- hypothesis: val optimum between wd=0.001 and wd=0.005 on n=10 stack
+
+| arm | wd | val_avg | Δ vs new best (55.250) | test_avg | best_ep |
+|-----|-----|---------|------------------------|----------|---------|
+| baseline (n=10 prior best) | 0.001 | 55.799 | +0.997% ✗ | 48.846 | 22/22 |
+| **arm-1 n=10 local winner** | **0.002** | **55.751** | **+0.911% ✗** | **48.423** | 22/22 |
+| arm-2 | 0.003 | 57.306 | +3.73% ✗ | 49.570 | 22/22 |
+| current best (#4349) | n=8+lr=7e-4 | 55.250 | — | 47.592 | 22/22 |
+
+Per-split test arm-1 (wd=0.002) vs n=10 baseline (#4322): single+2.99% ✗, rc-1.43% ✓, cruise-2.00% ✓, re_rand-3.44% ✓ — 3/4 wins, single regresses.
+
+- metric artifacts: `models/model-bf16-layerscale-bs2-n10-huber010-slice32-wd002-20260517-055150/metrics.jsonl`, `models/model-bf16-layerscale-bs2-n10-huber010-slice32-wd003-20260517-062616/metrics.jsonl`
+
+**Analysis and conclusions:**
+
+wd=0.002 is the empirical n=10 stack local optimum on both val and test. Train loss invariance at ep22 (identical surf/vol losses across wd=0.001 and 0.002) confirms the lever operates via generalization, not fitting capacity. Non-monotone val landscape at 0.003 is likely seed noise. Closes the n=10 wd story: optimum at 0.002.
+
+However, #4349 (n=8+lr=7e-4) is still better by +0.91% val. wd=0.002 does NOT beat current best.
+
+**Assigned askeladd to**: wd bracket {0.002, 0.0015} on new best n=8+lr=7e-4 stack (#4479) — complements edward #4425 wd={0.001, 0.0001} to build a full 4-point bracket on n=8.
+
+---
+
 ## 2026-05-17 07:10 — PR #4330 (charliepai2i48h5-alphonse): lr={7e-4, 8e-4} compound on n=10+slice=32 — CLOSED (arm-2 lr=8e-4 best test ever; val +0.53% vs best)
 
 - branch: `alphonse/slice-lr-compound`
