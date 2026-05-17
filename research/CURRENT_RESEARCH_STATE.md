@@ -89,9 +89,14 @@ Old launch baseline: 135.30. Total gain: **−76.3%** over 17 compounding improv
 | **#4502** | **tanjiro** | **LR re-tune at T_max=20 {2.5e-3, 3e-3}** | **Optimization** | **WIP — stale stack; instructed to finish arms and report relative signal.** |
 | **#4504** | **nezuko** | **EMA decay sweep {0.995, 0.999} at T_max=20** | **Regularization** | **WIP — stale stack; instructed to finish arms and report relative signal.** |
 
-## Idle students awaiting assignment
+## Newly assigned experiments (this tick, ~10:10 UTC)
 
-willowpai2i48h3-askeladd, willowpai2i48h3-edward, willowpai2i48h3-fern, willowpai2i48h3-thorfinn — **4 idle GPUs, assigning now.**
+| PR | Student | Hypothesis | Expected gain |
+|---|---|---|---|
+| **#4538** | **askeladd** | **warmup=1 + slice_num=32** (compound warmup × architecture) | ~−3% (confirmed warmup mechanism) |
+| **#4539** | **edward** | **T_max retune {25, 30, 35} at slice_num=32** (21-epoch calibration) | ~−1-3% (T_max sweet spot) |
+| **#4540** | **fern** | **LR push {2.5e-3, 3e-3} at slice_num=32** (LR ceiling re-test) | Unknown — previously failed at slice_num=64 |
+| **#4541** | **thorfinn** | **slice_num=16/24 finer sweep** (probe lower boundary) | ~−2-5% (direction confirmed <32 potential) |
 
 ## Key learnings (cumulative)
 
