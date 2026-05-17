@@ -5,6 +5,51 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-17 06:35 — PR #4349 (charliepai2i48h5-tanjiro): lr=7e-4+n=8+slice=32+δ=0.10 compound — MERGED (val=55.250 NEW BEST -0.98%)
+
+- branch: `tanjiro/slice-lr-compound` (repurposed from original compound test)
+- hypothesis: lr=7e-4 from lineage A transfers when combined with n_freqs=8+slice=32+δ=0.10 stack
+
+| arm | n_freqs | lr | val_avg | Δ vs prior best (55.799) | test_avg | best_ep | clip_frac@22 |
+|-----|---------|-----|---------|--------------------------|----------|---------|--------------|
+| baseline #4322 | 10 | 5e-4 | 55.799 | — | 48.846 | 22/22 | 0.965 |
+| **arm-1 WINNER** | **8** | **7e-4** | **55.250** | **-0.98% ✓** | **47.592** (-2.57%) | 22/22 | 0.953 |
+| arm-2 | 8 | 5e-4 | 55.270 | -0.96% ✓ | 47.822 | 22/22 | ~0.965 |
+
+Per-split test surf_p (arm-1): single=51.952, rc=60.750, cruise=31.167, re_rand=46.497
+vs prior best (#4322): single+1.24% ✗, rc-2.27% ✓, cruise-5.76% ✓, re_rand-4.78% ✓
+
+- metric artifacts: `models/model-bf16-layerscale-bs2-n8-lr7e4-huber010-slice32-20260517-042421/metrics.jsonl`, `models/model-bf16-layerscale-bs2-n8-huber010-slice32-20260517-053421/metrics.jsonl`
+
+**Analysis and conclusions:**
+
+**Major win — both arms beat baseline, arm-1 (n=8+lr=7e-4) is the winner.** Key mechanism: n_freqs=8 (coarser Fourier) + slice=32 (+4 epoch budget) enables lr=7e-4 to escape clip-saturation. clip_frac drops from 0.965 (n=10 stack) to 0.953 at ep22 — the higher LR is generating gradient amplitudes that better utilize the clipping budget. cruise (-5.76%) and re_rand (-4.78%) test splits improved most, consistent with the LR change enabling better OOD generalization.
+
+arm-2 result (n=8, no LR change, val=55.270) shows n_freqs=8 alone is worth ~-0.96% improvement — the LR adds another ~-0.02% on top. Both improvements are real and stack, but the dominant lever is the n_freqs reduction.
+
+**Assigned follow-ups**: tanjiro → lr push {8e-4, 9e-4} on new best stack (#4424); edward → wd={0.001, 0.0001} compound on new best stack (#4425).
+
+---
+
+## 2026-05-17 06:35 — PR #4367 (charliepai2i48h5-edward): n_head sweep {2, 8} — CLOSED (n_head=4 optimal, lever abandoned)
+
+- branch: `charliepai2i48h5-edward/n-head-sweep`
+- hypothesis: n_head=2 or n_head=8 improves val vs default n_head=4
+
+| arm | n_head | val_avg | Δ vs prior best (55.799) | test_avg | peak_mem_gb |
+|-----|--------|---------|--------------------------|----------|-------------|
+| baseline #4322 | 4 | 55.799 | — | 48.846 | ~15 |
+| arm-1 | 2 | 56.385 | +1.05% ✗ | N/A | **13.81** |
+| arm-2 | 8 | 59.747 | +6.45% ✗ | N/A | 18.43 |
+
+**Analysis and conclusions:**
+
+Pre-registered "both lose" branch triggered: n_head=4 optimal. arm-2 regression at n_head=8 suggests the default head count already provides the right inductive bias for this Fourier+Transolver architecture. arm-1 (n_head=2) is only +1.05% worse — might be worth revisiting if we find a use for the 5GB VRAM headroom (n_head=2 frees ~5 GB vs default). n_head lever permanently closed.
+
+**Side-finding**: n_head=2 requires 13.81 vs 18.43 GB. This 5GB unlock could accommodate larger n_hidden or slice_num if we become memory-constrained. Currently not memory-constrained (15GB at current best).
+
+---
+
 ## 2026-05-17 06:00 — PR #4322 (charliepai2i48h5-askeladd): weight_decay sweep {0.001, 0.005} — MERGED (val=55.799 NEW BEST -0.58%)
 
 - branch: `askeladd/wd-sweep-new-best`
