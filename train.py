@@ -530,6 +530,7 @@ class Config:
     use_lookahead: bool = False  # wrap AdamW with Lookahead (Zhang et al. 2019)
     lookahead_k: int = 5  # Lookahead inner steps before slow-weights sync
     lookahead_alpha: float = 0.5  # Lookahead slow-weights interpolation factor
+    eta_min: float = 0.0  # CosineAnnealingLR minimum LR floor; 0 = decay to zero (default)
 
 
 cfg = sp.parse(Config)
@@ -598,7 +599,7 @@ if cfg.sgdr_t0 > 0:
         optimizer, T_0=cfg.sgdr_t0, T_mult=1, eta_min=1e-6
     )
 else:
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS, eta_min=cfg.eta_min)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
