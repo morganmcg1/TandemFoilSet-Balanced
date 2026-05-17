@@ -2956,3 +2956,54 @@ Two arms:
 Win condition: val_avg < 33.4710. Primary diagnostic: val_geom_camber_rc. A trade-off (val_geom_camber_rc down, val_single_in_dist slightly up) is informative — report before close.
 
 **8 WIP remaining (H130-H134, H136-H138), 0 idle.**
+
+---
+
+## 2026-05-17 — PR #4527: H133 spectral norm on in_project_slice (edward) — CLOSED, mechanism real but superseded
+
+- Branch: `charliepai2i48h3-edward/h133-spectral-norm-slice`
+- Hypothesis: Lipschitz-1 constraint on `in_project_slice` reduces overfitting to training-set spatial frequencies → improves val_geom_camber_rc.
+
+### Results (vs H125 wd=5e-3 baseline = student's reference; vs H128 for current baseline)
+
+| Metric | H125 baseline | H128 baseline | Arm A (sn_slice) | Arm B (sn_slice+sn_out) |
+|--------|-------------:|-------------:|-----------------:|------------------------:|
+| val_avg | 34.5532 | **33.4710** | 35.3287 | 35.3455 |
+| Δ vs H125 | — | — | +0.78 | +0.79 |
+| **Δ vs H128** | — | — | **+1.86** | **+1.87** |
+| val_single_in_dist | 31.5105 | 31.74 | 34.7246 | 33.5127 |
+| val_geom_camber_rc | 47.7806 | **45.76** | 46.7695 | 46.6121 |
+| val_re_rand | 38.1108 | 36.74 | 39.2395 | 39.0708 |
+| test 3-split | 33.0792 | **32.638** | 33.8224 | 34.3970 |
+
+Artifacts: `models/model-h133-arm-a-specnorm-*/`, `models/model-charliepai2i48h3-edward-h133-arm-b-specnorm-full-*/`
+
+### Analysis
+
+**OOD mechanism is real but already superseded.** Edward's comparison was to H125 (47.78 camber OOD), giving Arm A −1.01 pts on val_geom_camber_rc. But against current H128 baseline (45.76), spectral norm is WORSE (+1.01). H128's compile+T_max=24 already moved this split by −2.02, more than spectral norm can achieve.
+
+**In-dist cost too large:** val_single_in_dist +3.2 (Arm A) / +2.0 (Arm B). Lipschitz-1 is too tight — constrains slice capacity across all training examples, not just OOD. Arm B (adding sn to to_out[0]) provides only +0.16 pts more OOD improvement at +1.4 pts in-dist cost — unfavorable trade-off confirmed.
+
+**Student's follow-up suggestions (captured for backlog):** σ_max > 1 soft bound, layer-selective application, learnable γ scale per layer.
+
+### Decision
+
+Closed. Mechanism is correctly identified (OOD signal real) but the ceiling is too low vs current baseline and the in-dist cost is too high.
+
+**Lever: spectral norm on in_project_slice ❌ CLOSED. Mechanism superseded by H128.**
+
+**7 WIP remaining (H130-H132, H136-H139), edward reassigned to H139 attention temperature.**
+
+---
+
+## 2026-05-17 — Cycle 52: H139 attention temperature τ={1.5, 2.0} (edward, #4582)
+
+Motivated by H133 finding: spectral norm correctly targets attention capacity but too aggressively. Temperature τ > 1 is a softer intervention — makes softmax distribution smoother without hard Lipschitz constraint. Expected better OOD/in-dist trade-off.
+
+Two arms:
+- Arm A: τ=1.5 (mild softening)
+- Arm B: τ=2.0 (stronger softening)
+
+Win condition: val_avg < 33.4710. Primary diagnostic: val_geom_camber_rc vs in-dist regression ratio.
+
+**8 WIP remaining (H130-H132, H136-H139), 0 idle.**
