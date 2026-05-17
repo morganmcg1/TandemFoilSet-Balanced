@@ -1,5 +1,52 @@
 # SENPAI Research Results
 
+## 2026-05-17 ~04:00 UTC — Round 23: Close #4311 (camber sampler) + 1 new assignment (#4347 fern camber-bridging mixup)
+
+### Closed: PR #4311 (fern) — Camber-stratified WeightedRandomSampler (3× oversample)
+
+Run `391niznr`: val=52.9815 (+0.07% marginal regression on val_avg), **test_3split=54.4895 (+3.29% CLEAR regression on test)**. Paper-facing metric blocks merge.
+
+Per-split decomposition (the val/test asymmetry is the central finding):
+
+| Split | Baseline | Sampler 3× | Δ val | Δ test |
+|---|---|---|---|---|
+| val_geom_camber_rc | 64.635 | **62.450** | **−3.38% ← IMPROVED** | — |
+| test_geom_camber_rc | 58.565 | **61.814** | — | **+5.55% ← REGRESSED** |
+| val_re_rand | 50.670 | 52.836 | +4.28% | — |
+| test_re_rand | 43.264 | 44.033 | — | +1.78% |
+| **val_avg** | 52.944 | 52.982 | **+0.07%** | — |
+| **test_3split** | 52.752 | 54.490 | — | **+3.29%** |
+
+**Structural mechanism (fern's analysis, paper-quality)**:
+- Training racecar_tandem has M ∈ {2,3,4,5,9}; held-out test is M ∈ {6,7,8}. **The 3× boost on M=9 makes the model better at M=9 without bridging the gap to M=6,7,8.** This is the structural failure mode of frequency-based interventions on discrete distributions.
+- Cross-domain mass shift: multiplicative formula grew racecar_tandem mass to 47.2% (from balanced 33.3%), causing val_re_rand to regress +4.28%.
+- Val-target-improved-but-test-target-regressed asymmetry: classic 'overfit to oversampled training distribution' pattern.
+
+**Paper-appendix finding**: discrete-distribution frequency reweighting cannot bridge gaps in held-out regions. Instrument is correct (no backbone starvation, mass dynamics caught by diagnostics) but the data distribution doesn't admit a useful frequency stratification. **Camber-stratified sampling axis closed.**
+
+### New assignment: PR #4347 (fern) — Camber-bridging mixup within racecar_tandem (Beta(0.4, 0.4) mixing)
+
+**Hypothesis**: Feature-space interpolation between racecar_tandem samples with DIFFERENT camber values synthesizes the missing M=6,7,8 region directly. For two samples (x₁ at M=5, x₂ at M=9), mix at α ~ Beta(0.4, 0.4) gives effective M values across [5,9] interval — directly populating the held-out region.
+
+This is fern's own suggested follow-up from #4311 closure (option #3). Mechanistically:
+- DIFFERENT from #4311 (frequency reweighting on discrete grid): operates in continuous feature space
+- DIFFERENT from #4267 AoA aug (closed): mixup interpolates between pairs, not rotates whole samples
+- DIFFERENT from #4204 peak-|p| reweighting (closed): no output-distribution feedback loop
+
+Reproduce (single arm):
+```bash
+cd target/ && python train.py --grad_clip 5.0 --huber_delta 0.5 --ema_decay 0.99 --asinh_p_scale 1.0 \
+  --use_swiglu --mlp_ratio 1.333 --n_head 2 --asinh_vel_scale 0.5 --slice_num 8 \
+  --use_lookahead --lookahead_k 5 --lookahead_alpha 0.5 --adamw_beta2 0.95 \
+  --camber_mixup_prob 0.5 --camber_mixup_alpha 0.4 \
+  --wandb_group camber-bridging-mixup --wandb_name mixup-prob0.5-beta0.4-lookahead-b2 \
+  --agent willowpai2i48h2-fern
+```
+
+Expected val ∈ [52.0, 54.0]. If val_geom_camber_rc < 63 AND test_geom_camber_rc < 58, mixup successfully bridges the camber gap. If val improves but test regresses again (#4311 pattern), paper-quality null result: even feature-space mixup can't bridge geometric extrapolation, pointing toward architectural fixes.
+
+---
+
 ## 2026-05-17 ~03:40 UTC — Round 22: Close #4284 (weight_decay sweep) + 1 new assignment (#4334 tanjiro LR warmup)
 
 ### Closed: PR #4284 (tanjiro) — weight_decay sweep (wd=5e-4, wd=1e-3) on Lookahead+β2=0.95
