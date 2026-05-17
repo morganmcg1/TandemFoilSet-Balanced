@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 04:35
+- **Date:** 2026-05-17 05:05
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
@@ -42,14 +42,14 @@
 
 | Student | PR | Hypothesis | Status |
 |---|---|---|---|
-| edward | #4289 | n_hidden capacity {160, 192} on new best (bs=2+n=10+δ=0.10) | wave-15 NEW (just assigned) |
-| fern | #4331 | fourier_base sweep {64, 256} on new best stack | wave-15 NEW (just assigned) |
-| tanjiro | #4349 | 5-way compound (slice=32 + n=8 + lr=7e-4 + δ=0.10) | wave-15 NEW (just assigned) |
-| thorfinn | #4298 | slice_num refinement — slice=40 + slice=48+T_max=24 on new best | wave-15 NEW (just assigned) |
-| frieren | #4352 | surf_weight upper sweep {12, 15} on new best | wave-15 NEW (just assigned) |
-| nezuko | #4293 | sub-unity clip {0.15, 0.10} on bs=2+n=10+δ=0.10 | wave-15 NEW (just assigned) |
-| alphonse | #4330 | slice=32 + lr=7e-4 compound on new best (4-way merge w/lineage A's lr win) | wave-15 NEW (just assigned) |
-| askeladd | #4322 | weight_decay sweep {0.001, 0.005} on new best stack (slice=32+n=10+δ=0.10) | wave-15 NEW (just assigned) |
+| edward | #4367 | n_head sweep {2, 8} — per-head capacity vs diversity | wave-15 NEW (just assigned) |
+| fern | #4331 | fourier_base sweep {1.5, 3.0} on new best stack (corrected from {64,256}) | wave-15 active |
+| tanjiro | #4349 | 5-way compound (slice=32 + n=8 + lr=7e-4 + δ=0.10) | wave-15 active |
+| thorfinn | #4298 | slice_num refinement — slice=40 + slice=48+T_max=24 on new best | wave-15 active |
+| frieren | #4352 | surf_weight upper sweep {12, 15} on new best | wave-15 active |
+| nezuko | #4368 | clip bracket {0.18, 0.20} — fill optimum between 0.15 and 0.25 | wave-15 NEW (just assigned) |
+| alphonse | #4330 | slice=32 + lr=7e-4 compound on new best (4-way merge w/lineage A's lr win) | wave-15 active |
+| askeladd | #4322 | weight_decay sweep {0.001, 0.005} on new best stack (slice=32+n=10+δ=0.10) | wave-15 active |
 
 ## Current research themes
 
@@ -70,6 +70,8 @@
 
 ### Critical findings accumulated this round
 
+- **n_head=4 confirmed best under wall-clock budget** (edward #4289 closed): n_hidden=160/192 wall-clock-bound, not capacity-limited. Per-epoch val curves ~identical across widths. Narrower wins because more epochs in 30 min. Pivot: test n_head {2, 8} (edward #4367) — near-free lever.
+- **clip=0.15 ties current best on val** (nezuko #4293 closed): val=56.127 vs 56.124 (+0.003 = noise). Test improves -0.35%. Monotonicity confirmed: 56.13 < 56.92 < 58.05. Bracket {0.18, 0.20} → nezuko #4368. Per-split: clip tightening helps single+cruise, hurts rc — split-selective lever.
 - **δ=0.30 confirmed optimal for lineage A** (n=8+lr=7e-4). Settling this knob — closed edward #4199.
 - **n=8 × clip=1.0 SUBSTITUTES**: Do NOT combine. clip=1.0 on n=10, n=8 on clip=0.25.
 - **bs=1 ceiling found**: bs=2 is step-count optimum for 30-min budget.
@@ -102,10 +104,12 @@
 
 ## Potential next research directions
 
-- **n_hidden > 192**: if edward #4279 confirms capacity helps, push to 224/256.
+- **clip optimum found ≈ 0.15-0.20**: nezuko #4368 bracket {0.18, 0.20} will confirm exact val optimum. If found, natural compound: clip_best + lr=7e-4 (if alphonse #4330 wins).
+- **n_head {2, 8}**: edward #4367 testing — near-free lever (no VRAM cost). If n_head=2 helps, head_dim=64 is the bottleneck; push n_head=1 next. If n_head=8 helps, pattern diversity matters.
+- **n_hidden expansion revisited**: arm-1 attention scales linearly (not quadratic). Budget ~80 GB unused. With 45-min timeout OR with T_max extension, n_hidden=160 could outperform 128. Deferred until we know if wider T_max (from thorfinn #4298) helps.
 - **δ=0.05 settled**: tanjiro #4220 closed — regresses. δ=0.10 is the floor on n=10.
-- **LR warmup**: 5-epoch warmup on new best — untested.
+- **LR warmup**: 5-epoch warmup on new best — untested lever.
 - **weight_decay {0.001, 0.005}**: askeladd #4322 testing on new best stack.
-- **Per-domain loss weighting**: cruise responds to δ=0.15 distinctly (−2.75%). A domain-specific δ or surf_weight could exploit this.
-- **slice_num=40 middle bracket + slice=48+T_max=24**: thorfinn #4298 testing (refining the slice=32 win).
-- **5-way compound (n=10+δ=0.10+lr=7e-4+clip=1.0)**: frieren #4222 CLOSED (regresses, clip×δ reversal confirmed). tanjiro #4349 testing different 5-way (slice=32+n=8+lr=7e-4+δ=0.10).
+- **Per-domain loss weighting**: cruise responds to clip/δ distinctly. A domain-specific surf_weight could exploit per-split structure.
+- **slice refinement**: thorfinn #4298 testing {40, 48+T_max=24} — will settle slice sweet spot.
+- **5-way compound (slice=32+n=8+lr=7e-4+δ=0.10)**: tanjiro #4349 — the boldest merger. If this wins, it integrates both lineages.

@@ -5,6 +5,64 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-17 05:00 — PR #4293 (charliepai2i48h5-nezuko): clip=0.15 and clip=0.10 on new best stack — CLOSED (val tied, not improved; test -0.35%)
+
+- branch: `nezuko/tight-clip-delta`
+- hypothesis: tighter clip (sub-0.25) compounds with δ=0.10 stack (slice=32 default)
+
+| arm | clip | val_avg | Δ vs new best (56.124) | test_avg | best_ep | clip_frac@ep17 | grad_norm@ep18 |
+|-----|------|---------|------------------------|----------|---------|-----------------|----------------|
+| baseline #4221 | 0.25 | 56.124 | — | 49.696 | 22/22 | — | — |
+| arm-1 | **0.15** | **56.127** | +0.003 ≈ TIED | **49.520** ↓ | 18/18 | 1.000 | 2.010 |
+| arm-2 | 0.10 | 58.048 | +3.43% ✗ | 49.935 | 18/18 | 1.000 | 2.075 |
+
+- metric artifacts: `models/model-bf16-layerscale-bs2-n10-d010-clip015-20260517-025338/metrics.jsonl`, `models/model-bf16-layerscale-bs2-n10-d010-clip010-solo-20260517-035402/metrics.jsonl`
+
+**Analysis and conclusions:**
+
+**Monotonicity prediction realized exactly**: 56.13 < 56.92 (#4103 old baseline) < 58.05. Optimum at clip≈0.15 on n=10+δ=0.10. Tighter than 0.15 over-throttles. clip=0.25 (current baseline with slice=32) is approximately neutral vs clip=0.15 on val (Δ=0.003), but test is slightly better at 0.15 (-0.35%).
+
+**Per-split test surf_p signature**: cruise=32.62 (↓ from 33.96), single=53.89 (↓ from 53.05)… but rc=63.12 (↑ from 62.68). Clip=0.15 helps single+cruise, hurts rc. Mechanism: clip acts as effective LR ceiling; at δ=0.10, shrinking the ceiling trims high-magnitude updates that rc (low-residual split) relies on.
+
+**Mechanism inversion** (noted by student): expected tighter clip → smoother val. Observed clip=0.10 NOISIER in early epochs — tighter clip throws away magnitude signal from sparse useful large updates, increasing early-epoch direction-only variance.
+
+**Not merged** because strict val criterion not met (+0.003 = within noise). Lever confirmed real. Next: clip bracket {0.18, 0.20} (assigned #4368) to find val optimum between 0.15 and 0.25. If alphonse's lr=7e-4 wins, future compound = clip=0.15 + lr=7e-4.
+
+**Assigned nezuko to**: clip bracket {0.18, 0.20} (#4368).
+
+---
+
+## 2026-05-17 04:55 — PR #4289 (charliepai2i48h5-edward): n_hidden=160 and n_hidden=192 on new best stack — CLOSED (val regression +1.20%; model wall-clock-bound not capacity-bound)
+
+- branch: `edward/nhidden-capacity-v2`
+- hypothesis: model capacity-limited at n_hidden=128 (80+ GB VRAM headroom unused)
+
+| arm | n_hidden | val_avg | Δ vs new best (56.124) | test_avg | best_ep | peak GB | s/epoch | n_params |
+|-----|----------|---------|------------------------|----------|---------|---------|---------|---------|
+| baseline #4221 | 128 | 56.124 | — | 49.696 | 22/22 | 18.43 | ~102 | 0.97M |
+| arm-1 | **160** | **56.798** | **+1.20% ✗** | **48.940** ↓ | 16/16 | 21.43 | 117 | 1.04M |
+| arm-2 | 192 | 62.826 | +11.93% ✗ | 55.210 | 14/14 | 24.39 | 130 | 1.49M |
+
+- metric artifacts: `models/model-charliepai2i48h5-edward-bf16-layerscale-bs2-n10-d010-nh160-20260517-022440/metrics.jsonl`, `models/model-charliepai2i48h5-edward-bf16-layerscale-bs2-n10-d010-nh192-20260517-033730/metrics.jsonl`
+
+**Analysis and conclusions:**
+
+**Hypothesis refuted**: model is NOT capacity-limited at n_hidden=128. Per-epoch val curves are nearly identical across widths (val@ep10 ≈ 77 for all three). The bottleneck is wall-clock: at fixed 30-min timeout, narrower wins because it gets more epochs. best_epoch tracks per-epoch slowdown cleanly: 22 (128) → 16 (160) → 14 (192).
+
+**Key insight** (student): attention is over slice tokens (n=64), not mesh nodes — width scales linearly, not quadratically. Peak memory undershot prediction by ~50% (21.43 vs predicted ~29 GB for n_hidden=160). This is important for future n_hidden experiments: the budget is not as tight as feared.
+
+**arm-1 test=48.940 is best test** on this lineage (but val regresses). single_in_dist=52.51 (-1.02% vs current best), rc=60.36 (-3.70%) both improve on test — width helps structure-sensitive splits even if timeout-limited.
+
+**arm-2 (192) undertrained**: val=62.83 at final epoch matches arm-1's val at ep14 — same convergence curve, just runs out of time. Not broken, just slow.
+
+**Not merged**: val regresses +1.20%. Width lever at fixed timeout is dominated by epoch count. To recover: would need ~45-min timeout or fewer epochs with higher lr.
+
+**Pivot**: test per-head capacity rather than total width. n_head is nearly free (no VRAM or wall-clock cost). Assigned edward to n_head sweep {2, 8} (#4367).
+
+**Assigned edward to**: n_head sweep {2, 8} (#4367).
+
+---
+
 ## 2026-05-17 04:30 — PR #4222 (charliepai2i48h5-frieren): lr=7e-4+clip=1.0 compound on bs=2+n=10+δ=0.10 — CLOSED (lr=7e-4 doesn't transfer to lineage B; clip×δ reversal confirmed for 3rd time)
 
 - branch: `frieren/clip-lr-5way-compound`
