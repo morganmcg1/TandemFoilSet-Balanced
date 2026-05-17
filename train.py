@@ -354,7 +354,29 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device, use_bf16: bool = False) -> dict[str, float]:
+
+def per_sample_surface_p_std(
+    y_norm: torch.Tensor, surf_mask: torch.Tensor, min_std: float = 1e-3
+) -> torch.Tensor:
+    """Per-sample std of normalized pressure over surface nodes only.
+
+    Masked std: ``sqrt(E[p^2] - E[p]^2)`` over the per-sample surface points.
+    Returns shape ``[B]`` for broadcasting onto ``[B, N]`` tensors.
+
+    Floor ``min_std`` defaults to 1e-3 to avoid 1/p_std blowups for the rare
+    near-flat pressure case (researcher-agent note).
+    """
+    p = y_norm[..., 2]  # [B, N]
+    surf_f = surf_mask.float()
+    n_surf = surf_f.sum(dim=1).clamp(min=1.0)  # [B]
+    p_mean = (p * surf_f).sum(dim=1) / n_surf
+    p_sq = ((p ** 2) * surf_f).sum(dim=1) / n_surf
+    p_var = (p_sq - p_mean ** 2).clamp(min=0.0)
+    return p_var.sqrt().clamp(min=min_std)
+
+
+def evaluate_split(model, loader, stats, surf_weight, device, use_bf16: bool = False,
+                   per_sample_p_norm: bool = False) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -380,9 +402,19 @@ def evaluate_split(model, loader, stats, surf_weight, device, use_bf16: bool = F
             # Loss and MAE accumulation in fp32 for stable reductions.
             pred = pred.float()
 
-            sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
+
+            if per_sample_p_norm:
+                # H104: model predicts per-sample-normalized pressure (gt_p / p_std).
+                # Compare in that space so train/eval are consistent.
+                p_std = per_sample_surface_p_std(y_norm, surf_mask)  # [B]
+                gt_p_norm = y_norm[..., 2:3] / p_std.view(-1, 1, 1)
+                target_norm = torch.cat([y_norm[..., :2], gt_p_norm], dim=-1)
+                sq_err = (pred - target_norm) ** 2
+            else:
+                sq_err = (pred - y_norm) ** 2
+
             vol_loss_sum += (
                 (sq_err * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
@@ -393,7 +425,14 @@ def evaluate_split(model, loader, stats, surf_weight, device, use_bf16: bool = F
             ).item()
             n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            if per_sample_p_norm:
+                # Undo the per-sample p scaling: pred_p is in per-sample-normalized
+                # space, so multiply by p_std to get back to globally-normalized space.
+                pred_p_global = pred[..., 2:3] * p_std.view(-1, 1, 1)
+                pred_for_denorm = torch.cat([pred[..., :2], pred_p_global], dim=-1)
+            else:
+                pred_for_denorm = pred
+            pred_orig = pred_for_denorm * stats["y_std"] + stats["y_mean"]
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -601,6 +640,7 @@ class Config:
     T_max: int = 15  # CosineAnnealingLR period; default preserves prior behavior
     fourier_pe: bool = False   # Tancik Fourier PE on (x, z) coords (H106)
     fourier_pe_freqs: int = 8  # Number of log-spaced frequencies; adds 4*K features
+    per_sample_p_norm: bool = False  # H104: per-sample p std rescaling at loss/MAE time
 
 
 cfg = sp.parse(Config)
@@ -716,7 +756,19 @@ for epoch in range(MAX_EPOCHS):
         # Loss computation in fp32: reductions on tiny Huber thresholds (0.25, 0.5)
         # benefit from full precision, and Lion only needs gradient signs anyway.
         pred = pred.float()
-        abs_err = (pred - y_norm).abs()  # [B, N, 3]
+        vol_mask = mask & ~is_surface
+        surf_mask = mask & is_surface
+
+        if cfg.per_sample_p_norm:
+            # H104: model predicts per-sample-normalized pressure (gt_p / p_std);
+            # eval rescales pred * p_std before denormalizing back to absolute units.
+            p_std = per_sample_surface_p_std(y_norm, surf_mask)  # [B]
+            gt_p_norm = y_norm[..., 2:3] / p_std.view(-1, 1, 1)
+            target_norm = torch.cat([y_norm[..., :2], gt_p_norm], dim=-1)
+            abs_err = (pred - target_norm).abs()  # [B, N, 3]
+        else:
+            abs_err = (pred - y_norm).abs()  # [B, N, 3]
+
         # Per-channel Huber delta: [Ux, Uy, p]
         delta = torch.tensor(
             [cfg.huber_delta_vel, cfg.huber_delta_vel, cfg.huber_delta_p],
@@ -728,8 +780,6 @@ for epoch in range(MAX_EPOCHS):
             delta * (abs_err - 0.5 * delta),
         )
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
@@ -755,7 +805,9 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, use_bf16=cfg.use_bf16)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                             use_bf16=cfg.use_bf16,
+                             per_sample_p_norm=cfg.per_sample_p_norm)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -793,6 +845,7 @@ for epoch in range(MAX_EPOCHS):
         "T_max": cfg.T_max,
         "fourier_pe": cfg.fourier_pe,
         "fourier_pe_freqs": fourier_pe_freqs,
+        "per_sample_p_norm": cfg.per_sample_p_norm,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "gate_stats": gate_stats,
@@ -826,7 +879,9 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, use_bf16=cfg.use_bf16)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                                 use_bf16=cfg.use_bf16,
+                                 per_sample_p_norm=cfg.per_sample_p_norm)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
