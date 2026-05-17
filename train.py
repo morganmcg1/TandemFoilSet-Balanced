@@ -19,11 +19,13 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -575,6 +577,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    seed: int = 0   # Random seed for weight init, data sampler, dropout, etc. (H92: variance measurement)
 
 
 cfg = sp.parse(Config)
@@ -583,6 +586,13 @@ MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+
+random.seed(cfg.seed)
+np.random.seed(cfg.seed)
+torch.manual_seed(cfg.seed)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(cfg.seed)
+print(f"Seed: {cfg.seed}")
 
 if cfg.norm_type == "rmsnorm":
     _rms_check = RMSNorm(4)
@@ -596,11 +606,14 @@ stats = {k: v.to(device) for k, v in stats.items()}
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
+sampler_gen = torch.Generator()
+sampler_gen.manual_seed(cfg.seed)
 if cfg.debug:
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              shuffle=True, **loader_kwargs)
+                              shuffle=True, generator=sampler_gen, **loader_kwargs)
 else:
-    sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
+    sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds),
+                                    replacement=True, generator=sampler_gen)
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               sampler=sampler, **loader_kwargs)
 
