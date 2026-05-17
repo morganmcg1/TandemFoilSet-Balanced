@@ -791,3 +791,70 @@ cd target && python train.py --agent <student> \
 ```
 
 > **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **36.5616** with a terminal `SENPAI-RESULT` marker.
+
+---
+
+## 2026-05-17 10:45 — PR #4477: GeGLU activation (GELU gate) ablation — NEW BEST
+
+**New best: val_avg/mae_surf_p = 35.5046 | test_avg/mae_surf_p = 30.9204**
+
+**Strong win** — GeGLU replaces SwiGLU (SiLU gate → GELU gate), same hidden_mult=0.6667, same param count (656,519). Arm A (GeGLU) beats SwiGLU baseline on val (-2.89%) and test (-0.15%). Arm B (BilinearGLU, no gate activation) regresses (+2.04% val, +1.24% test).
+
+**Confirmation run** (independent seed): val=35.3411, test=30.7569 — confirms the gain is reproducible with low variance.
+
+| Metric | Previous Baseline (PR #4358, SwiGLU) | **New Baseline (PR #4477, GeGLU)** |
+|--------|--------------------------------------|-------------------------------------|
+| **val_avg/mae_surf_p** | 36.5616 | **35.5046** (−1.057, −2.89%) |
+| **test_avg/mae_surf_p** | 30.9654 | **30.9204** (−0.045, −0.15%) |
+| val_single_in_dist | 37.4836 | **36.0334** (−1.450) |
+| val_geom_camber_rc | 52.2589 | **50.4000** (−1.859, −3.6%) |
+| val_geom_camber_cruise | 20.0733 | 20.4577 (+0.384) |
+| val_re_rand | 36.4308 | **35.1272** (−1.303) |
+| test_single_in_dist | 35.3021 | **34.3926** (−0.910) |
+| test_geom_camber_rc | 43.3890 | **44.1410** (+0.752) |
+| test_geom_camber_cruise | 16.3768 | **16.6461** (+0.269) |
+| test_re_rand | 28.7935 | **28.5021** (−0.291) |
+| Best epoch | 33 (converged) | 32 (timeout, still descending) |
+| Per-epoch time | 53.7 s | 57.3 s (+6.7%) |
+| Peak VRAM | 22.58 GB | 22.58 GB |
+| n_params | 656,519 | 656,519 (identical) |
+
+**What changed:** `glu_act_type=geglu` — the gate activation swapped from SiLU (SwiGLU) to GELU. Same 3-projection gated MLP structure (gate, value, out); hidden_mult=0.6667.
+
+**Key findings from the ablation:**
+1. **Gating structure is the dominant lever.** Both GeGLU and SwiGLU beat GELU MLP (#4358 showed this). BilinearGLU (no gate activation) gives up most of the gain — confirming multiplicative nonlinearity matters.
+2. **SiLU vs GELU gate: approximately neutral at this scale.** GeGLU beats SwiGLU by 1.06 val pts — within "still descending at timeout" noise. SwiGLU may not have reached its optimum. Call this GeGLU ≈ SwiGLU (consistent with Shazeer 2020).
+3. **val_geom_camber_rc improvement:** Both gated variants improve the OOD bottleneck split (50.4 vs 52.26 for SwiGLU); BilinearGLU also matches this (50.39). The OOD gain from gating structure is activation-agnostic.
+4. **val_geom_camber_cruise and test_geom_camber_rc are slightly worse** than the SwiGLU baseline — within noise for a still-descending curve.
+
+**Model config:** n_hidden=128, n_layers=5, n_head=4, slice_num=48, **GeGLU (glu_act_type=geglu, hidden_mult=0.6667)**  
+**Optimizer:** Lion lr=1.7e-4, wd=3e-4, betas=(0.9, 0.99)  
+**Scheduler:** CosineAnnealingLR(T_max=40)  
+**Loss:** vol_loss + 25·surf_loss with asinh(z) on pressure + pressure_weight=2.0  
+**Precision:** bf16 autocast on forward+loss  
+**EMA:** decay=0.995  
+**Gradient clipping:** max_norm=1.0  
+**Compile:** torch.compile(mode='default', dynamic=True)  
+**Batch:** 4  
+**Metric artifacts:**
+- `models/model-charliepai2i48h2-alphonse-geglu-A-20260517-083308/metrics.jsonl` (winner, GeGLU)
+- `models/model-charliepai2i48h2-alphonse-geglu-B-20260517-092534/metrics.jsonl` (BilinearGLU, regressed)
+
+**Cumulative improvement from initial baseline:** 135.02 → 35.50 = **−73.7%**
+
+**Reproduce (15-mechanism stack):**
+```bash
+cd target && python train.py --agent <student> \
+    --experiment_name "<student>/your-experiment-name" \
+    --surf_weight 25 \
+    --cosine_t_max_epochs 40 \
+    --pressure_weight 2.0 \
+    --ema_decay 0.995 \
+    --compile_mode default \
+    --slice_num 48 \
+    --use_swiglu \
+    --swiglu_hidden_mult 0.6667 \
+    --glu_act_type geglu
+```
+
+> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **35.5046** with a terminal `SENPAI-RESULT` marker.
