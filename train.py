@@ -569,6 +569,7 @@ class Config:
     use_swiglu: bool = False
     use_geglu: bool = False
     use_lion: bool = False
+    lion_b1: float = 0.9   # Lion β1 (momentum decay for fast weights)
     lookahead_k: int = 5
     lookahead_alpha: float = 0.5
 
@@ -633,7 +634,7 @@ if cfg.use_lion:
     # constant magnitude (lr/3 here, matching the PR #4123 recipe).
     base_optimizer = Lion(
         model.parameters(), lr=cfg.lr / 3.0, weight_decay=cfg.weight_decay,
-        betas=(0.9, 0.99),
+        betas=(cfg.lion_b1, 0.99),
     )
 else:
     base_optimizer = torch.optim.AdamW(
