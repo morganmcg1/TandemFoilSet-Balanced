@@ -1,5 +1,43 @@
 # SENPAI Research Results
 
+## 2026-05-17 10:30 — #4471 #4420 CLOSED (Findings #53-54: lr×T_max=22 grid closed, surf_weight upward closed); thorfinn→#4531 (R13 H95 basin-pairing), nezuko→#4533 (R13 H96 surfw-down)
+
+### #4471 thorfinn — R13 H89: lr downward probe {1.5e-4,1.7e-4} at T_max=22 (CLOSED — Finding #53)
+
+5-point lr × T_max=22 grid summary (combining with tanjiro #4391 upward probes):
+
+| lr     | LR_end (epoch 13) | val_avg | Δ vs BL |
+|--------|-------------------|---------|---------|
+| 1.5e-4 | ~5.4e-5 | 56.815 | +7.07 (exyw9aca) |
+| 1.7e-4 | ~6.1e-5 | 54.232 | +4.48 (efwnup17) |
+| **2.0e-4** | **~7.18e-5** | **49.752** | **0.00 (BL `1neonugr`)** |
+| 2.3e-4 | ~8.26e-5 | 51.66 | +1.91 (#4391) |
+| 2.5e-4 | ~8.98e-5 | 49.87 | +0.12 (#4391) |
+
+Asymmetric U-shape: downward regressions far steeper than upward (+4.48, +7.07 vs +1.91, +0.12). Every split degrades monotonically as lr drops — camber_rc and re_rand suffer most. lr=2.5e-4 within σ_T22 ≈ 1.86.
+
+**Finding #53**: lr × T_max=22 grid fully closed. Operating point lr=2.0e-4 robust; lr=2.5e-4 within σ. **Refined basin mechanism (student proposed)**: basin in (peak_LR, LR_end) plane — not a single LR_end target. Peak LR controls representation learning during bulk training; LR_end ≥ ~6e-5 controls final fine-tuning. Both must clear thresholds. Below LR_end ~6e-5 (lr < 1.7e-4), under-training at the epoch cap. Natural follow-up: T_max=24 + lr=2.5e-4 basin pairing test (shifting both to maintain a higher LR_end while preserving peak magnitude).
+
+New assignment: thorfinn → #4531 (R13 H95 T_max×lr basin pairing {T_max=24,T_max=26} × lr=2.5e-4).
+
+---
+
+### #4420 nezuko — R13 H84: surf_weight {15,20} at T_max=22 (CLOSED — Finding #54)
+
+| Arm | surf_weight | run | val_avg | test_avg | Δ val vs BL |
+|-----|-------------|-----|---------|----------|---|
+| BL | 10 | 1neonugr | 49.75 | 42.89 | — |
+| A (2-seed) | 15 | 0cfc70wi / 8i5ahxoo | 53.51 / 54.32 | 45.32 / 46.60 | **+3.76 / +4.57** ✗ |
+| B | 20 | 3f4z3lae | 55.51 | 47.21 | **+5.76** ✗ |
+
+Per-split val at w=15 vs BL: in_dist +5.79, camber_rc +5.38, camber_cruise +1.86, re_rand +2.02. 2-seed var at w=15: 0.81 val (within σ_T22=1.86). Both surface AND volumetric MAE rose together — strictly worse on both heads.
+
+**Finding #54**: surf_weight upward direction closed at T_max=22. Monotonic regression on both heads — not a trade of vol→surf. camber_rc hit hardest at high surf_weight (opposite of hypothesis). Split is **representation-limited, not gradient-balance-limited**. Volumetric loss provides useful auxiliary signal for shared encoder features; down-weighting it hurts both heads. Optimum at this substrate likely moves **downward** from default w=10. Student's 2-seed check solid (0.81 val var within σ).
+
+New assignment: nezuko → #4533 (R13 H96 surf_weight downward probe {7.5, 5} at T_max=22).
+
+---
+
 ## 2026-05-17 09:30 — #4437 #4408 CLOSED (Findings #51-52: σ_T22 calibrated, Lion β2 axis closed); fern→#4507 (R13 H93 spec_norm-input), frieren→#4508 (R13 H94 n_fourier)
 
 ### #4437 fern — R13 H87: Multi-seed BL replication at T_max=22 (CLOSED — Finding #51)
