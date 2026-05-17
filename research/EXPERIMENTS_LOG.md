@@ -1,5 +1,40 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-17 07:30 — Plateau extends (12 consecutive non-improvements): 3 PRs CLOSED + 1 send-back
+
+### #4416 edward LayerScale (γ_init=1e-4) — **SENT BACK for γ_init=1.0 retest**
+- W&B run: `9l99z2pv` (finished). SENPAI-RESULT posted with full diagnostic.
+- val=56.94 (+21.2% regress), test=48.31 (+19.3% regress) — uniform regression all 4 splits (+13-33%)
+- **Smoking gun:** per-layer γ trajectory shows mean |γ| stuck at O(10⁻²) after 14 epochs, two orders of magnitude below 1.0. Model effectively trains identity-plus-tiny-perturbation residuals.
+- **Mechanism:** γ=1e-4 multiplies residual branch outputs by ~10⁻⁴ → model starts at identity map → must grow γ through its own (tiny) gradient. CaiT used γ=1e-4 for 18-24-layer ViTs (depth-instability regime). Our 5-layer Transolver is the wrong regime for sub-identity init.
+- **Decision:** SEND BACK for γ_init=1.0 (identity-residual, canonical for shallow nets). Per student's recommendation #1: smallest-change experiment that isolates "is LayerScale useful at all?" from "init scale tuned for deep nets". Same PR, change `--layer_scale_init` flag only.
+
+### #4409 frieren mlp_ratio=3 + QK-norm — **CLOSED (FFN width axis closed)**
+- W&B run: `747zb0ih` (finished, no SENPAI-RESULT posted). Config: mlp_ratio=3 + QK-norm + Lion + nh=176 + ep12.
+- val=50.76 (+8.0% regress), test=42.82 (+5.8% regress) — second seed `cjzt0lnl` mid-training with similar trajectory
+- **Mechanism:** FFN expansion at mlp_ratio=2 (SwiGLU inner ≈ 235) is the local optimum at nh=176. mlp_ratio=3 (inner ≈ 352) over-expands FFN relative to attention capacity; extra params dilute gradient signal at fixed ep12 cap.
+- **Decision:** CLOSE FFN-width axis on this stack. Compute saved goes to deeper-narrower (n_layers=6 at nh=128) or physics-informed loss.
+
+### #4410 nezuko huber loss + QK-norm — **CLOSED (loss reformulation axis closed)**
+- W&B run: `mhqhsbo3` (finished, no SENPAI-RESULT posted). Config: huber + QK-norm + Lion + nh=176 + ep14.
+- val=54.27 (+15.5% regress), test=46.12 (+13.9% regress) — large regression across all metrics
+- **Mechanism:** Huber's δ=1 transition down-weights gradients on large errors. But pressure extremes (LE/TE peaks, camber junctions) ARE the samples we most need to fit precisely. L1's uniform large-error gradient is the right inductive bias here.
+- **Generalization:** Tail-suppressing losses (huber, smooth_l1) are wrong direction. Tail-emphasizing losses (focal-style, gradient-weighted) are the correct candidate for future loss reformulation.
+
+### #4412 alphonse batch_size=2 + QK-norm — **CLOSED (smaller batch axis closed)**
+- W&B run: `p0gfieh1` (finished, no SENPAI-RESULT posted). Config: bs=2 + QK-norm + Lion + nh=176 + ep14.
+- val=50.54 (+7.6% regress), test=43.18 (+6.7% regress) — second seed `9p681gvh` mid-training with similar regression
+- **Mechanism:** Lion's sign-update needs variance reduction from larger batches to stabilize sign estimate; bs=2 doubles step count without proportional convergence speedup at 30-min cap.
+- **Generalization:** bs=8 (larger batches with VRAM headroom) would be the more interesting probe — adds to Round-11 backlog.
+
+### Plateau count update — 12 consecutive non-improvements
+
+Plateau sequence now: [9 prior] → #4409 (mlp3 regress) → #4410 (huber regress) → #4412 (bs2 regress) → #4416 (LayerScale γ=1e-4 regress).
+
+Still in-flight: #4411 tanjiro coord_noise (arm 1 close-tie val=47.03, arm 2 running), #4383 thorfinn surf_weight (sw=5 close-tie val=47.36, sw=15 running), #4417 fern SWA (running), #4418 askeladd Lion β1=0.95 (running), #4416 edward γ_init=1.0 retest (just sent back).
+
+---
+
 ## 2026-05-17 06:45 — Plateau confirmed (9 consecutive non-improvements): 3 PRs CLOSED + 3 plateau-breaking assignments
 
 ### #4382 edward V-norm — **CLOSED (catastrophic regress)**
