@@ -571,6 +571,7 @@ class Config:
     use_lion: bool = False
     lookahead_k: int = 5
     lookahead_alpha: float = 0.5
+    n_hidden: int = 128
 
 
 cfg = sp.parse(Config)
@@ -609,7 +610,7 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=cfg.n_hidden,
     n_layers=5,
     n_head=4,
     slice_num=64,
