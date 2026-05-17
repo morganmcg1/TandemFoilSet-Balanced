@@ -74,6 +74,25 @@ class EMAModel:
                 esd[k].copy_(v)
 
 
+def adaptive_clip_grad(parameters, clip_factor: float = 0.01, eps: float = 1e-3) -> int:
+    """Per-parameter adaptive gradient clipping (Brock et al. 2021, NF-Nets).
+
+    For each parameter, clip ||g|| <= clip_factor * max(||p||, eps). Returns
+    the number of parameter tensors that were actually clipped.
+    """
+    n_clipped = 0
+    for p in parameters:
+        if p.grad is None:
+            continue
+        param_norm = p.data.norm().clamp(min=eps)
+        g_norm = p.grad.data.norm()
+        max_norm = param_norm * clip_factor
+        if g_norm > max_norm:
+            p.grad.data.mul_(max_norm / g_norm)
+            n_clipped += 1
+    return n_clipped
+
+
 class Lookahead:
     """Lookahead optimizer wrapper (Zhang et al., NeurIPS 2019, arxiv:1907.08610).
 
@@ -471,6 +490,8 @@ class Config:
     lookahead_k: int = 5           # Lookahead sync period (steps between slow-weight syncs).
     lookahead_alpha: float = 0.5   # Lookahead interpolation weight (slow += alpha*(fast-slow)).
     grad_clip: float = 0.0  # PR #3497: max_norm for clip_grad_norm_; 0 disables (norm still logged)
+    use_agc: bool = False           # PR #4161: enable per-parameter adaptive gradient clipping
+    agc_clip_factor: float = 0.01   # AGC ratio: ||g|| <= clip_factor * ||p||
 
 
 cfg = sp.parse(Config)
@@ -639,17 +660,32 @@ for epoch in range(MAX_EPOCHS):
         # PR #3497: log pre-clip grad_norm every step; clip if grad_clip > 0.
         # `clip_grad_norm_` returns the un-clipped total norm regardless of max_norm,
         # so float('inf') is a no-op clip that still gives the diagnostic.
-        clip_max = cfg.grad_clip if cfg.grad_clip > 0 else float("inf")
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), clip_max)
+        # PR #4161: optional per-parameter AGC applied before global clip.
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), float("inf"))
+        n_agc_clipped = 0
+        grad_norm_post_agc = None
+        if cfg.use_agc:
+            n_agc_clipped = adaptive_clip_grad(
+                model.parameters(), clip_factor=cfg.agc_clip_factor
+            )
+            grad_norm_post_agc = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), float("inf")
+            )
+        if cfg.grad_clip > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
         optimizer.step()
         if ema is not None:
             ema.update(model)
         global_step += 1
-        wandb.log({
+        log_payload = {
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
             "global_step": global_step,
-        })
+        }
+        if cfg.use_agc:
+            log_payload["train/n_agc_clipped"] = n_agc_clipped
+            log_payload["train/grad_norm_post_agc"] = grad_norm_post_agc.item()
+        wandb.log(log_payload)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
