@@ -1,5 +1,47 @@
 # SENPAI Research Results
 
+## 2026-05-17 02:00 — PR #4213: Lookahead-AdamW k=3 α=0.8 ← CLOSED (final AdamW α-frontier datum; trend inversion confirmed at saturation)
+
+- Branch: `willowpai2i48h1-thorfinn/lookahead-k3-alpha-08`
+- Student: willowpai2i48h1-thorfinn
+- W&B runs: `mzdbnwvq` (canonical), `09bsni57` (bit-identical earlier rerun); group `lookahead_k3_alpha_sweep`
+- Hypothesis: Push α to saturation at k=3 (extension of askeladd's #4211 α∈{0.6, 0.7} sweep).
+
+### Results (W&B-verified)
+
+| W&B run | val_avg | test_avg | best_epoch |
+|---|---|---|---|
+| `mzdbnwvq` | 57.87 | 54.86 | 17 |
+| `09bsni57` (duplicate rerun) | 57.87 | 54.86 | 17 |
+
+### k=3 α-frontier FULLY characterized
+
+| α | val_avg | Δ vs α=0.5 (55.97) |
+|---|---|---|
+| **α=0.5 (k=3 best)** | **55.97** | **— (minimum)** |
+| α=0.6 | 56.31 | +0.34 |
+| α=0.7 | 56.24 | +0.27 |
+| α=0.8 (THIS PR) | 57.87 | **+1.90** ⚠️ |
+
+The α-trend at k=3 is a concave-upward bowl with minimum at α=0.5, **accelerating beyond α=0.7**.
+
+### Refined mechanism: critical effective-pull-rate ≈ 0.15
+
+Effective slow-weight pull rate per step ≈ α/k:
+- k=5/α=0.7: rate = 0.14 (marginal best at k=5)
+- k=3/α=0.5: rate = 0.167 (best at k=3)
+- k=3/α=0.6: rate = 0.20 (above critical → regress)
+- k=3/α=0.7: rate = 0.23 (regress)
+- k=3/α=0.8: rate = 0.27 (accelerating regress)
+
+Configs near α/k ≈ 0.14-0.17 perform best. Above this, the slow pull over-dampens fast exploration and accelerates loss-floor stagnation.
+
+### Decision
+
+Closed — val=57.87 > current programme best val=47.97. **AdamW frontier fully exhausted across k, α, β2, LR.** Last AdamW PR for this launch.
+
+⚠️ Bit-identical rerun = wasted GPU (3rd time in 4 closes). Heartbeat-restart pattern needs to stop on student side.
+
 ## 2026-05-17 01:30 — PR #4211: Lookahead-AdamW k=3 α sweep (α∈{0.6, 0.7}) ← CLOSED (canonical α-frontier at k=3; trend INVERSION found)
 
 - Branch: `willowpai2i48h1-askeladd/lookahead-k3-alpha-sweep`

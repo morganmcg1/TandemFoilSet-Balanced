@@ -1,7 +1,7 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 01:35
-- **Launch:** willow-pai2i-48h-r1 (round 14 — Lookahead-Lion era; programme best val=47.97, seed-robust ✓; all AdamW frontiers closed)
+- **Date:** 2026-05-17 02:05
+- **Launch:** willow-pai2i-48h-r1 (round 15 — Lookahead-Lion era; programme best val=47.97, seed-robust ✓; **all AdamW PRs closed; Plateau Protocol triggered → architectural escalation begun**)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN)
 - **Latest direction from human team:** None (no open issues scoped to this launch)
@@ -66,16 +66,32 @@ These findings suggest the optimal Lookahead-Lion hyperparameters are likely (k=
 
 | PR | Student | Hypothesis | Status | Priority |
 |----|---------|-----------|--------|----------|
-| #4271 | alphonse | Lion β1 sweep (β1∈{0.85, 0.95}) at k=5/α=0.5 | **NEW** | Complements frieren's β2 |
-| #4269 | askeladd | Lookahead-Lion α sweep at k=5 (α∈{0.3, 0.7}) | **NEW** | Lion-era α frontier (3 mechanism branches) |
-| #4268 | tanjiro | Lookahead-Lion k=2 (extend k-sweep to new era) | **NEW** | Pairs with edward k=3 to characterize Lion k-curve |
+| #4286 | thorfinn | **Lookahead-Lion + mlp_ratio=3 (architectural — FFN capacity boost)** | **NEW — architectural** | First architectural escalation per Plateau Protocol |
+| #4271 | alphonse | Lion β1 sweep (β1∈{0.85, 0.95}) at k=5/α=0.5 | Running | Complements frieren's β2 |
+| #4269 | askeladd | Lookahead-Lion α sweep at k=5 (α∈{0.3, 0.7}) | Running | Lion-era α frontier (3 mechanism branches) |
+| #4268 | tanjiro | Lookahead-Lion k=2 (extend k-sweep to new era) | Running | Pairs with edward k=3 to characterize Lion k-curve |
 | #4265 | fern | Lookahead-Lion LR sweep (cfg.lr∈{3e-4, 7.5e-4}) | Running | Probe Lion-era LR frontier vs paper /3 default |
 | #4264 | frieren | Lookahead-Lion β2 scan (Lion m-buffer EMA ∈ {0.95, 0.98}) | Running | Lion-era β2 frontier vs default 0.99 |
 | #4242 | nezuko | Lookahead-Lion seed=2 (complete 3-seed canonical for new best) | Running | Closes paper-facing seed-variance story |
-| #4241 | edward | Lookahead-Lion k=3 (compose k=3 finding with Lion-era) | Running | Highest expected delta |
-| #4213 | thorfinn | Lookahead-AdamW k=3 + α=0.8 (last AdamW sweep in flight) | Running | Will close as AdamW canonical on return |
+| #4241 | edward | Lookahead-Lion k=3 (compose k=3 finding with Lion-era) | Running | Highest expected delta in Lion HP space |
 
 **Note:** All currently-running AdamW sweeps were assigned before Lookahead-Lion's val=47.97 result landed. Let them run to completion — their k/α/LR/β2 findings still inform the Lookahead-Lion hyperparameter space. Once they return, those students will be reassigned to Lion-era experiments.
+
+## Plateau Protocol triggered (round 15)
+
+12 closes since last winner (PR #4123, val=47.97 at 2026-05-16 23:45). All hyperparameter tuning has been pulling diminishing returns within the Lookahead-Lion neighborhood. Per the Plateau Protocol, the lab is escalating to **architectural changes**:
+
+- Round 15 begins architectural escalation (thorfinn #4286: mlp_ratio=3 — first architectural arm)
+- When other students return, assign architectural variants (h=192, cross-slice attention, layer-wise LR decay, etc.) and/or loss reformulations (physics-informed continuity loss)
+- Continue Lion-era HP sweeps for those already in flight; do not start new HP-only sweeps until architectural arms have landed
+
+### Refined α/k mechanism: critical effective-pull-rate ≈ 0.15
+
+Across the full AdamW Lookahead α/k frontier closed this round, optimal configs sit near α/k ≈ 0.14-0.17. Configs above this rate over-dampen fast exploration and accelerate loss-floor stagnation. This predicts Lookahead-Lion's α/k landscape will also center around 0.15, which means at k=3, α≈0.45-0.5 (matching the AdamW finding).
+
+## Round-15 closure
+
+- **#4213 thorfinn (Lookahead-AdamW k=3 α=0.8)** CLOSED: val=57.87 — **AdamW α-frontier fully exhausted**. Confirms accelerating regression beyond critical pull rate. Last AdamW PR for this launch.
 
 ## Round-14 closures (k-sweep U-curve confirmed; α-trend inversion; k=3 3-seed canonical clean)
 
@@ -147,12 +163,18 @@ T_max=17 cosine has no stationary tail for either fast or slow trajectories. Onl
 - **Lookahead-Lion β1 scan** (alphonse #4271) — Lion update-direction weighting β1 ∈ {0.85, 0.95}
 - **Lookahead-Lion LR sweep** (fern #4265) — cfg.lr ∈ {3e-4, 7.5e-4} → Lion lr ∈ {1e-4, 2.5e-4} vs default 1.667e-4
 
-### Priority 2 (Lion-era follow-ups, queue for next idle assignments)
+### Priority 2 (Architectural escalation — pipeline for next idle assignments)
 
-- **Lookahead-Lion + h=192 or mlp_ratio=3** — scale-up (Lion saves VRAM via no v_t)
-- **Lookahead-Lion + LR cosine restart** — extend training at cosine floor + slow-weight pull
-- **Combined-Lion-optima compound** — if multiple Lion knobs each give −0.3 to −1.0 MAE, compose them
+- **Lookahead-Lion + h=192** — hidden-dim scale-up (VRAM-tighter than mlp_ratio=3; gated on #4286 VRAM measurement)
+- **Lookahead-Lion + cross-slice attention** — break slice-independence assumption in Transolver
+- **Lookahead-Lion + layer-wise LR decay** — finer-grained LR control to head vs. backbone
+- **Combined-Lion-optima compound** — once HP sweeps return, compose multiple −0.3 to −1.0 MAE wins
 - **3-seed canonical for any new Lion-era best** that arises from current sweeps
+
+### Priority 3 (Loss reformulation — escalation tier 2 if architectural changes plateau)
+
+- **Physics-informed loss:** soft continuity-equation constraint on surface velocity field
+- **Pressure-relative target normalization:** scale-invariant pressure prediction
 
 ### Priority 3 (architectural / compositional)
 
