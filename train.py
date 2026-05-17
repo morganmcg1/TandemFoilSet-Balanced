@@ -475,14 +475,32 @@ class Config:
     sgdr_t0: int = 0  # CosineAnnealingWarmRestarts cycle length; 0 disables (use plain cosine)
     slice_num: int = 64  # physics-attention slice count (node partitioning granularity)
     adamw_beta2: float = 0.999  # AdamW second-moment EMA decay; default 0.999
+    surf_channel_weights: str = "1.0,1.0,1.0"  # per-channel surface loss weights in (Ux, Uy, p) order; mean-preserving normalization applied so (1.0,1.0,1.0) is a no-op
 
 
 cfg = sp.parse(Config)
+
+# Parse and validate surf_channel_weights — comma-separated 3 floats in (Ux, Uy, p) order
+surf_channel_weights = tuple(float(x) for x in cfg.surf_channel_weights.split(","))
+assert len(surf_channel_weights) == 3, (
+    f"--surf_channel_weights must be 3 comma-separated floats (Ux, Uy, p); got {surf_channel_weights}"
+)
+assert all(w > 0 for w in surf_channel_weights), (
+    f"--surf_channel_weights must be positive; got {surf_channel_weights}"
+)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+
+# Mean-preserving per-channel surface weights: w / w.mean() so uniform (1,1,1) is a no-op
+_surf_ch_w_raw = torch.tensor(surf_channel_weights, dtype=torch.float32, device=device)
+surf_ch_w = _surf_ch_w_raw / _surf_ch_w_raw.mean()
+print(
+    f"Surface channel weights (Ux, Uy, p) raw={surf_channel_weights} "
+    f"normalized={tuple(surf_ch_w.tolist())}"
+)
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -553,6 +571,8 @@ run = wandb.init(
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
         "ema_decay": ema_decay,
+        "surf_channel_weights_parsed": list(surf_channel_weights),
+        "surf_channel_weights_normalized": surf_ch_w.cpu().tolist(),
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -583,6 +603,7 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_surf_ch = torch.zeros(3, dtype=torch.float64, device=device)
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -619,7 +640,12 @@ for epoch in range(MAX_EPOCHS):
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (elem_loss * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (elem_loss * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        # Per-channel surface loss (Ux, Uy, p). Each surf_ch_loss[c] is sum_surface(err[c]) / n_surface_nodes
+        # so sum_c(surf_ch_loss[c]) reproduces the prior scalar surf_loss exactly.
+        n_surf_safe = surf_mask.sum().clamp(min=1)
+        surf_ch_loss = (elem_loss * surf_mask.unsqueeze(-1)).sum(dim=(0, 1)) / n_surf_safe  # [3]
+        # Mean-preserving channel weights (sum=3 same as uniform) → no loss-scale change vs baseline
+        surf_loss = (surf_ch_w * surf_ch_loss).sum()
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -641,11 +667,14 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_surf_ch += surf_ch_loss.detach().double()
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_surf_ch /= max(n_batches, 1)
+    epoch_surf_ch_list = epoch_surf_ch.cpu().tolist()  # [Ux, Uy, p]
 
     # --- Validate ---
     model.eval()
@@ -674,6 +703,9 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/surf_loss_ux": epoch_surf_ch_list[0],
+        "train/surf_loss_uy": epoch_surf_ch_list[1],
+        "train/surf_loss_p": epoch_surf_ch_list[2],
         "train/ema_lag": ema_lag,
         "train/ema_lag_rel": ema_lag_rel,
         "train/model_param_norm": model_norm,
