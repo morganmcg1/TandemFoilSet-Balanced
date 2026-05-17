@@ -2597,3 +2597,46 @@ Lion is a pure **sign-projection** optimizer — every gradient update is exactl
 ### Follow-up
 
 **frieren → new assignment**: n_layers depth sweep {3, 4, 5, 7} at SF-AdamW lr=3e-3 + seed=1. (Requires --n_layers Config/CLI edit.)
+
+---
+
+## 2026-05-17 02:38 — PR #4114 [CLOSED/NULL]: Batch size sweep under SF-AdamW — bs ∈ {4, 6, 8, 9}
+
+- **Student branch:** `charliepai2i48h4-thorfinn/sf-bs-r1`
+- **Hypothesis:** Larger batch sizes reduce gradient variance (lower CV), and SF-AdamW's Polyak averaging may amplify cleaner-gradient benefit enough to offset the step-count reduction within the 30-min budget.
+- **Stack:** SF-AdamW lr=5e-4 (stale — ran before lr=2e-3 canonical update)
+
+### Results
+
+| Arm | bs | best ep | val_avg/mae_surf_p | Δ vs A | sec/ep | total steps | peak GB |
+|-----|----|---------|--------------------|--------|--------|-------------|---------|
+| A (control) | 4 | 17 | **65.168** | +0.00% | 111.5 | 6,375 | 38.92 |
+| B | 6 | 16 | 73.655 | +13.02% | 116.1 | 4,000 | 58.35 |
+| C | 8 | 16 | 80.192 | +23.05% | 118.1 | 3,008 | 77.82 |
+| D | 9 | 16 | 84.107 | +29.06% | 119.9 | 2,672 | 87.51 |
+
+Note: bs=10 and bs=12 OOM'd at SF-AdamW full optimizer-state footprint (peak 94.8/93.7 GB). Practical ceiling: bs=9.
+
+### Mechanism analysis
+
+- **Gradient CV drops monotonically** (0.88 → 0.54 for bs=4 → bs=9): cleaner gradients confirmed mechanistically.
+- **Step-count dominates** despite cleaner gradients: bs=9 gets 2,672 total steps vs bs=4's 6,375 — a 2.4× deficit within the 30-min budget.
+- **Warmup-share confounder**: fixed 500-step warmup consumes 7.8% of budget for bs=4 but 12.3% for bs=9, amplifying the epoch-1 regression (209 → 313).
+- Polyak averaging does not amplify the cleaner-gradient benefit enough to offset the throughput loss.
+
+### Conclusions
+
+Hypothesis **decisively rejected**. bs=4 wins by 13-29% paired Δ across all splits and on the test 3-split mean. The regression magnitudes (13-29%) far exceed the 3% stale-LR gate — re-testing at lr=3e-3 is not warranted. bs=4 is a fixed point of this stack.
+
+**Key lesson:** The binding constraint under SF-AdamW in this budget is total step count, not gradient quality. The warmup-share effect compounds this for large batches. Treat bs=4 as canonical.
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-thorfinn-sf-bs-r1-arma-bs4-r4-20260516-233055/metrics.jsonl`
+- `models/model-charliepai2i48h4-thorfinn-sf-bs-r1-armb-bs6-r4-20260517-000550/metrics.jsonl`
+- `models/model-charliepai2i48h4-thorfinn-sf-bs-r1-armc-bs8-r4-20260517-004008/metrics.jsonl`
+- `models/model-charliepai2i48h4-thorfinn-sf-bs-r1-armd-bs9-r4-20260517-012908/metrics.jsonl`
+
+### Follow-up
+
+**thorfinn → new assignment #4303**: slice_num sweep {32, 64, 96, 128} at SF-AdamW lr=3e-3 + seed=1. Third primary Transolver architecture axis (alongside n_hidden and n_layers).

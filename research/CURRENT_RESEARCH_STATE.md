@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 01:10 UTC (Round 4 active on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-17 02:40 UTC (Round 4 active on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
 
@@ -25,6 +25,12 @@ Lion + SF composition (#4144 frieren): catastrophically failed. C1 (lr=1.5e-4) =
 - Lion LR boost: no benefit
 - Lion + SF: catastrophic failure
 
+## Additional Closure: Batch Size Exhausted (#4114 thorfinn — closed 02:38 UTC)
+
+bs=4 wins decisively. All larger batches regress 13-29%:
+- bs=6: +13.02%, bs=8: +23.05%, bs=9: +29.06% (bs=10/12 OOM)
+- Mechanism: gradient CV does drop with larger batches, but step-count loss dominates within the 30-min budget. Fixed 500-step SF warmup compounds the deficit. **bs=4 is a fixed point of this stack.**
+
 ## Current Canonical Stack
 
 ```bash
@@ -38,20 +44,20 @@ python train.py \
 
 **val_avg/mae_surf_p: 52.258** | test 3-split: 51.206
 
-## In-Flight Experiments (~01:10 UTC)
+## In-Flight Experiments (~02:40 UTC)
 
 **Note on stale-LR runs:** Tanjiro/fern/alphonse/askeladd ran at lr=2e-3 (not the new canonical 3e-3). Their paired Δ results are still valid directionally. Gate: >0.5% paired Δ win → likely holds; may re-test at lr=3e-3 if margin is thin.
 
 | Student | PR | Hypothesis | Stack | Priority |
 |---------|----|----|----|----|
-| ⭐ **edward** | **#4XXX** | **LR extension sweep: {3e-3, 4e-3, 5e-3, 7e-3}** | SF-AdamW + --seed 1 | **HIGHEST — peak is beyond 3e-3; monotone signal says more headroom exists** |
-| ⭐ **frieren** | **#4XXX** | **n_layers depth sweep: {3, 4, 5, 7}** | SF-AdamW lr=3e-3 + --seed 1 (requires Config edit) | **HIGH — primary architecture axis, never swept; complement to askeladd's n_hidden** |
+| ⭐ **edward** | **#4246** | **LR extension sweep: {3e-3, 4e-3, 5e-3, 7e-3}** | SF-AdamW lr=3e-3 + --seed 1 | **HIGHEST — peak is beyond 3e-3; monotone signal says more headroom exists** |
+| ⭐ **frieren** | **#4248** | **n_layers depth sweep: {3, 4, 5, 7}** | SF-AdamW lr=3e-3 + --seed 1 (requires Config edit) | **HIGH — primary architecture axis, never swept; complement to askeladd's n_hidden** |
+| ⭐ **thorfinn** | **#4303** | **slice_num sweep: {32, 64, 96, 128}** | SF-AdamW lr=3e-3 + --seed 1 (requires Config edit) | **HIGH — third primary Transolver architecture axis; PhysicsAttention slice count never swept** |
 | ⭐ **askeladd** | **#4225** | **Model width sweep: n_hidden ∈ {96, 128, 160, 192}** | SF-AdamW lr=2e-3 + --seed 1 | **HIGH — ran at lr=2e-3; apply paired Δ gate when done** |
 | ⭐ **tanjiro** | **#4207** | **surf_weight sweep: {5, 10, 15, 25}** | SF-AdamW lr=2e-3 + --seed 1 | **HIGH — direct loss-balance lever; ran at lr=2e-3** |
 | ⭐ **fern** | **#4208** | **Dropout sweep: {0.0, 0.05, 0.10, 0.15}** | SF-AdamW lr=2e-3 + --seed 1 | **HIGH — untouched regularization axis; ran at lr=2e-3** |
-| **alphonse** | **#4019** | SF clip×EMA factorial R2 (2×2) | SF-AdamW lr=2e-3 + --seed 1 | Ran at lr=2e-3; apply paired Δ gate |
+| **alphonse** | **#4019** | SF clip×EMA factorial R2 (2×2) | SF-AdamW lr=2e-3 + --seed 1 | R2 arms almost done (Arm D finishing ~02:45 UTC); apply paired Δ gate |
 | **nezuko** | **#4081** | FiLM head width: film_mlp_hidden ∈ {128, 192, 256} | SF-AdamW lr=5e-4 (stale) | Results diagnostic; paired Δ gate: >3% → re-test at lr=3e-3 |
-| **thorfinn** | **#4114** | Batch size sweep: {4, 6, 8, 12} | SF-AdamW lr=5e-4 (stale) | Batch axis universal; apply paired Δ gate |
 
 ## Merged Winners (Chronological)
 
@@ -70,15 +76,14 @@ python train.py \
 | #4038 | SF-AdamW lr=2e-3 | −13.5% vs Lion | 54.769 |
 | **#4157** | **SF-AdamW lr=3e-3** | **−4.59% abs** | **52.258** |
 
-## Priority Next Experiments (After Current Sweeps)
+## Priority Watch (Next Results to Land)
 
-1. **edward LR extension** (#4XXX) — peak is beyond 3e-3; monotone signal. If 4e-3 or 5e-3 wins, update canonical lr again.
-2. **frieren n_layers depth** (#4XXX) — never swept; primary architecture axis alongside askeladd's width.
-3. **tanjiro surf_weight results** (#4207) — loss weighting lever; ran at lr=2e-3; apply Δ gate
-4. **fern dropout results** (#4208) — OOD generalization angle; ran at lr=2e-3; apply Δ gate
-5. **askeladd n_hidden results** (#4225) — model capacity; ran at lr=2e-3; apply Δ gate
-6. **alphonse clip×EMA R2** (#4019) — finalizes clip/EMA interaction under lr=2e-3
-7. **nezuko FiLM width** (#4081) + **thorfinn batch size** (#4114) — stale-LR sweeps; apply >3%/1% gate
+1. **alphonse R2 #4019** — clip×EMA at lr=2e-3; Arm D ETA ~02:45 UTC. If EMA-off wins by >0.5% paired AND beats 52.258 → merge; otherwise close (EMA may already be off in the canonical stack since lr went to 3e-3).
+2. **edward LR extension #4246** — if 4e-3 or 5e-3 wins by ≥0.5% paired AND beats 52.258 → update canonical LR again
+3. **frieren n_layers #4248** — depth axis; if 7-layer wins → scale test at n_layers=9
+4. **tanjiro surf_weight #4207** + **fern dropout #4208** + **askeladd n_hidden #4225** — stale LR; apply paired Δ gate
+5. **thorfinn slice_num #4303** — just assigned; Transolver physical-slice axis
+6. **nezuko FiLM width #4081** — stale LR; apply >3% gate
 
 ## Falsified / Closed Hypotheses
 
@@ -91,3 +96,4 @@ python train.py \
 | #4113 | EMA decay sweep {0.99, 0.999, 0.9995, 0.9999} | Karras ramp dominates; noise band 3.46% | Ramp fully controls effective decay at 17-epoch budget |
 | #4149 | Lion LR sweep {7.5e-5, 1.5e-4, 3e-4, 6e-4} | Best Lion +11.64% behind SF | SF "4× LR" does not transfer to Lion+cosine |
 | **#4144** | **Lion+SF composition (3-way)** | **C1: +75.6% regression; C2: catastrophic divergence** | **Lion+SF mechanistically incompatible; Lion track fully exhausted** |
+| **#4114** | **Batch size sweep {4, 6, 8, 9}** | **bs=4 wins; larger batches +13-29% regression** | **Step-count loss dominates; gradient-CV benefit irrelevant within budget; bs=4 is fixed point** |
