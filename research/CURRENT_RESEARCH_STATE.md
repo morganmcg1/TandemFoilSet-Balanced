@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-17 (~09:30 UTC) — #4328 #4315 CLOSED (Findings #38-39); #4391 tanjiro (R13 H80: lr×T_max=22), #4393 frieren (R13 H81: warmup) assigned. 8/8 staffed.
+- **Date:** 2026-05-17 (~10:00 UTC) — #4393 CLOSED (Finding #40: effective warmup=0 throughout programme); frieren reassigned to #4408 (R13 H82: Lion β2 sweep). #4326 alphonse (β=0.03 worse, β=0.10 running); #4329 edward (β1=0.85 worse, β1=0.95 running). 8/8 staffed.
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
@@ -51,16 +51,18 @@ Key mechanism: Lower cosine-endpoint LR at T_max=22 (~1.24e-4 within 14 epochs v
 
 | PR | Student | Hypothesis | Status | Substrate |
 |----|---------|------------|--------|-----------|
-| **#4391** | **tanjiro** | **R13 H80: LR {2.3e-4, 2.5e-4} at T_max=22 (compose Findings #37+#39)** | **Just assigned** | T_max=22 — highest-priority |
-| **#4393** | **frieren** | **R13 H81: warmup_epochs {1,5} at T_max=22 (first warmup sweep)** | **Just assigned** | T_max=22 |
+| **#4408** | **frieren** | **R13 H82: Lion β2 {0.95, 0.995} at T_max=22 (first β2 sweep at new BL)** | **Just assigned** | T_max=22 — optimizer-state axis |
+| **#4391** | **tanjiro** | **R13 H80: LR {2.3e-4, 2.5e-4} at T_max=22 (compose Findings #37+#39)** | **In flight** | T_max=22 — highest-priority |
 | #4372 | thorfinn | R12 H79: T_max {21,23} fine grid around T_max=22 BL | WIP | T_max=22 — cliff-edge probe |
+| #4326 | alphonse | R12 H75: Huber β {0.03, 0.10} | β=0.03 DONE (worse), β=0.10 running | T_max=22 (directional) |
+| #4329 | edward | R12 H77: Lion β1 {0.85, 0.95} | β1=0.85 DONE (worse), β1=0.95 running | T_max=22 (directional) |
 | #4318 | askeladd | R12 H72: ls magnitude {1e-3, 5e-5} | WIP (pinged) | T_max=20 (directional) |
 | #4319 | nezuko | R12 H73: WD sweep {5e-4, 2e-3} | WIP (pinged) | T_max=20 (directional) |
-| #4326 | alphonse | R12 H75: Huber β {0.03, 0.10} | WIP | T_max=20 (directional) |
-| #4329 | edward | R12 H77: Lion β1 {0.85, 0.95} | WIP | T_max=20 (directional) |
-| #4346 | fern | R12 H78: Multi-seed BL replication (T_max=20) | WIP | T_max=20 (σ tightening) |
+| #4346 | fern | R12 H78: Multi-seed BL replication | WIP | T_max=20 (σ tightening) |
 
-**R13 transition**: #4391 (tanjiro lr×T_max=22) and #4393 (frieren warmup at T_max=22) are the first R13 experiments at the actual new BL substrate. Remaining R12 experiments at T_max=20 will close as directional findings — leads for subsequent R13 assignments.
+**R13 transition**: #4408 (frieren β2) and #4391 (tanjiro lr×T_max=22) are now both at the actual new BL substrate. Finding #40 added: effective warmup_epochs=0 throughout programme (no warmup mechanism in train.py). Remaining R12 experiments will close as directional findings — leads for subsequent R13 assignments.
+
+**R12 H75+H77 partial results**: Both β=0.03 (Huber) and β1=0.85 (Lion) show significant regression (+4-6 val vs BL 49.75). Second arms (β=0.10, β1=0.95) still training. If β=0.10 and β1=0.95 also regress, these axes are robustly closed at the new BL substrate.
 
 ## Recent closures
 
@@ -77,7 +79,7 @@ Key mechanism: Lower cosine-endpoint LR at T_max=22 (~1.24e-4 within 14 epochs v
 | #4231 | tanjiro | LR recalibration: lr=1.7e-4 directional winner at old substrate. Test regresses vs new BL. **Finding #32**: LR finding for follow-up at new BL → #4315. | CLOSED |
 | #4214 | frieren | EMA@layer_scale+T_max=20: timeout-truncated. **Finding #28**: layer_scale stabilises ema=0.999 but slow. | CLOSED |
 
-## Key findings (cumulative, 39)
+## Key findings (cumulative, 40)
 
 1. **FiLM on log(Re)** contributes −4.35 val / −4.56 test under n_fourier=0.
 2. **EMA(0.997)** contributes +4.4 val on top of Lion.
@@ -117,6 +119,7 @@ Key mechanism: Lower cosine-endpoint LR at T_max=22 (~1.24e-4 within 14 epochs v
 36. **lr=1.5e-4 is a SHARP local minimum at T_max=24+clip+no-ls**: all wider LR arms ({1.3, 1.7, 2.0}×1e-4) regress ≥2.2 val. Finding #22 (clip shifts lr optimum to 2e-4 at T_max=14) does NOT generalize to T_max=24; elevated late-schedule LR at T_max=24 already provides effective high-LR. LR axis fully closed at old substrate.
 37. **T_max=22 is the new optimum — first sub-50 val, camber_cruise regression fixed**: lower cosine-endpoint LR (~1.24e-4 at epoch 14) vs T_max=20 (~1.34e-4) gives the small-gradient cruise domain better convergence. Win is broad-based (all 4 val splits, 3 of 4 test). T_max=16 regresses (+1.97 val) confirming the mechanism: higher time-averaged LR (more T_max) is beneficial IF the endpoint LR is simultaneously lower. Safe range with ls: T_max ∈ [20, 22]; T_max=24 diverges (Finding #33). Follow-up: T_max=23 cliff-edge probe (#4372).
 38. **EMA axis closed at new BL substrate** (T_max=20+ls+clip+lr=2e-4): ema=0.995 regresses +1.48 val, ema=0.999 catastrophically bad +6.46 val (worst on ALL 4 splits). Root cause: 13-epoch wall-clock budget means ema=0.999's long averaging window is dominated by early-training weights — starvation-bottlenecked, not stability-bottlenecked. Layer_scale does NOT allow ema=0.999 to compete within this budget. EMA axis robustly closed across all 3 substrates (Findings #28+#34+#38): ema=0.997 is the optimum everywhere.
+40. **Effective warmup_epochs=0 throughout programme** (Finding #40): train.py:799 constructs plain `CosineAnnealingLR` — no LambdaLR/SequentialLR wrapper, no warmup flag. Every BL run has used zero linear warmup; LR starts at peak on epoch 0. Zero warmup is stable at the new BL substrate (lr=2e-4 + clip=1.0 + ls=1e-4). If implemented, warmup would be a novel untested positive axis, not a correction of broken status quo.
 39. **lr=2.3e-4 directional winner at T_max=20+ls+clip substrate**: val −0.41 / test −0.48 vs lr=2e-4 BL (old BL, doesn't reach new BL). Key per-split finding: camber_cruise improves strongly (−2.45 val / −2.11 test) while camber_rc regresses (+1.83 val / +1.95 test). The endpoint LR mechanism is consistent with Finding #37: higher lr at T_max=20 → slightly lower noise at convergence for the small-gradient regime. Lead for R13: lr=2.3e-4 at T_max=22 may compose additively (#4391 tanjiro).
 
 ## R12 focus: T_max=22 established as new BL — fine-grid probe ongoing

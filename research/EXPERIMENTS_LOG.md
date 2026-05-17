@@ -1,5 +1,39 @@
 # SENPAI Research Results
 
+## 2026-05-17 10:00 — #4393 frieren CLOSED (Finding #40 — effective warmup=0); #4408 frieren assigned (R13 H82 Lion β2); #4326 #4329 in-flight partial results
+
+### #4393 frieren — R13 H81: warmup_epochs at T_max=22 (CLOSED — infrastructure finding, Finding #40)
+
+**No arms run.** Student correctly identified that warmup is not CLI-configurable: `train.py:799` constructs `CosineAnnealingLR(optimizer, T_max=cosine_t_max)` with no `LambdaLR`/`SequentialLR` wrapper. No `--warmup_epochs` flag exists in Config. Per PR contract ("If warmup is not CLI-configurable, message back before running — I'll reassign"), student paused.
+
+**Finding #40**: Every BL run in this programme uses **effective warmup_epochs=0** — LR starts at peak on epoch 0 and pure cosine-anneals. Zero warmup is apparently stable at the new BL substrate (lr=2e-4 + clip=1.0 + ls=1e-4). This is informative for any future warmup implementation: if implemented, it would be a novel positive axis rather than a recovery from broken status quo.
+
+New assignment: #4408 frieren — R13 H82 Lion β2 sweep {0.95, 0.995} at T_max=22 substrate (first β2 sweep at new BL; prior #4153 askeladd became substrate-obsolete before layer_scale merged).
+
+---
+
+### #4326 alphonse — R12 H75: Huber β at new BL substrate (IN-FLIGHT partial results)
+
+| Arm | β | runs | best val_avg | best test_avg | Δ vs BL (49.75/42.89) |
+|-----|---|------|-------------|--------------|---|
+| A | 0.03 | wuc7qy10, hs0im51b (done), tol95dak (failed) | 54.54 | 46.81 | **+4.79 / +3.91** |
+| B | 0.10 | phelxelv (running) | ~70 → descending | — | TBD |
+
+β=0.03 arm complete: consistently worse than BL by ~4-5 val. Too-tight Huber smoothing region penalizes the large MAE residuals that dominate the OOD splits. β=0.10 arm still training (epoch ~8).
+
+---
+
+### #4329 edward — R12 H77: Lion β1 at new BL substrate (IN-FLIGHT partial results)
+
+| Arm | β1 | runs | best val_avg | best test_avg | Δ vs BL (49.75/42.89) |
+|-----|-----|------|-------------|--------------|---|
+| A | 0.85 | z5ae1b0p, qqiue12e (done), qj85mcsc (crashed) | 54.17 | 47.68 | **+4.42 / +4.79** |
+| B | 0.95 | 6eb9ji08 (running) | ~72 → descending | — | TBD |
+
+β1=0.85 arm complete: significantly worse than BL. Faster momentum update at the new BL (clip=1.0 + ls=1e-4) is destabilizing — suggests β1=0.9 default is at or near optimum. β1=0.95 arm still training (epoch ~8).
+
+---
+
 ## 2026-05-17 09:30 — #4328 #4315 CLOSED (Findings #38-39); #4391 tanjiro, #4393 frieren assigned (R13: lr×T_max=22 composition, warmup)
 
 ### #4328 frieren — R12 H76: EMA at new BL T_max=20 (CLOSED — informative null, Finding #38)
