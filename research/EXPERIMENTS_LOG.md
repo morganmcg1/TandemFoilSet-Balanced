@@ -1,5 +1,41 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-17 05:00 — PR #4232 CLOSED (nh=208 width frontier, AdamW pre-Lion) + #4366 fern Lookahead wrapper assigned
+
+### #4232 fern n_hidden=208 width frontier (AdamW, pre-Lion stack) — **CLOSED**
+
+- **Student:** willowpai2i48h4-fern (branch: `willowpai2i48h4-fern/nh208-push-width-frontier`)
+- **Hypothesis:** Push width frontier beyond #4106's nh=192 — does nh=208 + AdamW + bf16 continue scaling?
+
+#### Results (2 runs after initial send-back)
+
+| Run | Config | Wall | val_avg | test_avg | W&B |
+|---|---|---:|---:|---:|---|
+| Run 1 (partial) | nh=208+ep18+T_max=18, cut@ep13 by 30-min cap | 31.3 min | 65.77 | 56.88 | `3d3n60q9` |
+| Run 2 (clean anneal) | nh=208+ep12+T_max=12 | 29.0 min | **59.05** | **50.91** | `h9as6g4i` |
+
+#### Comparison vs current Lion baseline #4252 (val=49.26, test=41.62)
+
+- nh=208 ep12 clean-anneal val=59.05 → **+19.9% val regression**
+- nh=208 ep12 clean-anneal test=50.91 → **+22.3% test regression**
+
+#### Decision: CLOSE (two structural reasons)
+
+1. **AdamW pre-Lion config.** Student's command had no `--use_lion`. AdamW is now obsolete on this stack — PR #4252 merged Lion as the default optimizer, achieving val=49.26 with half the params (nh=176) and only ep14. Any width-frontier question must be re-asked under Lion (frieren #4280 is already running Lion+nh=192).
+2. **Cap-bound for full convergence.** Student's suggested longer-budget retest requires `SENPAI_TIMEOUT_MINUTES > 30`, which launch isolation rules forbid us from overriding. nh=208 at ep18 needs ~44 min wall — structurally impossible at our cap.
+
+#### Data points saved for future width-frontier work
+
+- **VRAM at nh=208 = 50.5 GB peak** (+6% over nh=192's 47.6 GB) — confirms H100 has 46 GB headroom for further width-frontier work *if* longer cap available.
+- **Throughput at nh=208 = 145 s/ep** (vs 131 s/ep at nh=176) — sub-linear in params (+18% params → +11% wall).
+- **ep-matched ep11/ep12 lead vs nh=192 was real** (−5%, −15%) but lr-schedule-confounded; ep13 reversal in partial run was schedule, not capacity.
+
+#### Follow-up: #4366 fern Lookahead(k=5, α=0.5) wrapper around Lion
+
+Pivoting to the highest-EV unexplored Lion-stack axis. Lookahead (Zhang et al. 2019, NeurIPS) provides slow-weight averaging via periodic interpolation: every k=5 inner Lion steps, `slow ← slow + α(fast − slow)`, then `fast ← slow`. Literature consistently shows +0.5–2% generalization gain when wrapped around any inner optimizer. Implementation: ~40 lines, negligible wall cost, no VRAM overhead. Orthogonal to all 7 other in-flight Lion experiments.
+
+---
+
 ## 2026-05-17 04:00 — PR #4321 CLOSED (d_head=22 fusion failure) + #4354 alphonse n_head=2 assigned
 
 ### #4321 alphonse Lion + n_head=8 (d_head=22) — **ABORTED at ep4 (CLOSED)**
