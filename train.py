@@ -570,6 +570,10 @@ class Config:
     optimizer: str = "adamw"   # 'adamw' or 'lion'
     beta1: float = 0.9   # Optimizer momentum coefficient (Adam/Lion)
     beta2: float = 0.999  # Optimizer second-moment coefficient (Adam) / EMA coeff (Lion)
+    scheduler: str = "cosine"  # 'cosine' (default) or 'wsd' (warmup-stable-decay)
+    warmup_epochs: int = 2     # WSD: linear warmup epochs (start_factor=0.01 → 1.0)
+    stable_epochs: int = 43    # WSD: constant-LR plateau epochs at peak
+    decay_epochs: int = 5      # WSD: cosine decay epochs from peak to 0
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -640,9 +644,39 @@ elif cfg.optimizer == "adamw":
     print(f"Optimizer: AdamW (lr={cfg.lr}, betas=({cfg.beta1}, {cfg.beta2}), wd={cfg.weight_decay})")
 else:
     raise ValueError(f"Unknown optimizer: {cfg.optimizer!r} (expected 'adamw' or 'lion')")
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer, T_max=15, eta_min=cfg.eta_min
-)
+if cfg.scheduler == "wsd":
+    # Warmup-Stable-Decay: linear warmup → constant peak → cosine decay to 0.
+    # Schedule is defined over (warmup + stable + decay) epochs; the wall-clock
+    # timeout may stop training before reaching the decay phase, in which case
+    # the run effectively trains at peak LR after a brief warmup.
+    from torch.optim.lr_scheduler import (
+        ConstantLR,
+        CosineAnnealingLR,
+        LinearLR,
+        SequentialLR,
+    )
+    _warmup = LinearLR(
+        optimizer, start_factor=0.01, end_factor=1.0,
+        total_iters=cfg.warmup_epochs,
+    )
+    _stable = ConstantLR(optimizer, factor=1.0, total_iters=cfg.stable_epochs)
+    _decay = CosineAnnealingLR(optimizer, T_max=cfg.decay_epochs, eta_min=0.0)
+    scheduler = SequentialLR(
+        optimizer,
+        schedulers=[_warmup, _stable, _decay],
+        milestones=[cfg.warmup_epochs, cfg.warmup_epochs + cfg.stable_epochs],
+    )
+    print(
+        f"Scheduler: WSD (warmup={cfg.warmup_epochs}, stable={cfg.stable_epochs}, "
+        f"decay={cfg.decay_epochs}; total={cfg.warmup_epochs + cfg.stable_epochs + cfg.decay_epochs} epochs)"
+    )
+elif cfg.scheduler == "cosine":
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=15, eta_min=cfg.eta_min
+    )
+    print(f"Scheduler: CosineAnnealingLR (T_max=15, eta_min={cfg.eta_min})")
+else:
+    raise ValueError(f"Unknown scheduler: {cfg.scheduler!r} (expected 'cosine' or 'wsd')")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -745,6 +779,7 @@ for epoch in range(MAX_EPOCHS):
         gate_stats = collect_gate_stats(model, val_loaders["val_single_in_dist"], stats, device)
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    epoch_lr = optimizer.param_groups[0]["lr"]
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -756,6 +791,8 @@ for epoch in range(MAX_EPOCHS):
         "clip_grad_norm": cfg.clip_grad_norm,
         "norm_type": cfg.norm_type,
         "ffn_act": cfg.ffn_act,
+        "scheduler": cfg.scheduler,
+        "lr_post_step": epoch_lr,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "gate_stats": gate_stats,
