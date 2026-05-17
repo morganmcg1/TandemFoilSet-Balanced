@@ -281,6 +281,58 @@ def invert_asinh_vel(pred, scale):
 
 
 # ---------------------------------------------------------------------------
+# Lookahead optimizer wrapper (Zhang et al., NeurIPS 2019)
+# ---------------------------------------------------------------------------
+
+class Lookahead(torch.optim.Optimizer):
+    """Wraps a base optimizer; maintains slow weights that periodically pull fast
+    weights via slow += alpha * (fast - slow) every k inner steps, then resets
+    fast to slow. Reduces trajectory variance without post-hoc averaging.
+    """
+
+    def __init__(self, base_optimizer, k=5, alpha=0.5):
+        self.base = base_optimizer
+        self.k = k
+        self.alpha = alpha
+        self.step_count = 0
+        self.slow_weights = [
+            [p.data.clone() for p in group["params"]]
+            for group in base_optimizer.param_groups
+        ]
+        self.defaults = base_optimizer.defaults
+        self.param_groups = base_optimizer.param_groups
+        self.state = base_optimizer.state
+
+    def step(self, closure=None):
+        loss = self.base.step(closure)
+        self.step_count += 1
+        if self.step_count % self.k == 0:
+            for group_idx, group in enumerate(self.base.param_groups):
+                for p_idx, p in enumerate(group["params"]):
+                    slow = self.slow_weights[group_idx][p_idx]
+                    slow.add_(p.data - slow, alpha=self.alpha)
+                    p.data.copy_(slow)
+        return loss
+
+    def zero_grad(self, set_to_none=True):
+        self.base.zero_grad(set_to_none=set_to_none)
+
+    def slow_lag(self):
+        """Diagnostic: L2 distance and relative distance between fast and slow weights."""
+        with torch.no_grad():
+            lag_sq = 0.0
+            fast_norm_sq = 0.0
+            for group_idx, group in enumerate(self.base.param_groups):
+                for p_idx, p in enumerate(group["params"]):
+                    slow = self.slow_weights[group_idx][p_idx]
+                    lag_sq += (p.data - slow).pow(2).sum().item()
+                    fast_norm_sq += p.data.pow(2).sum().item()
+            lag = lag_sq ** 0.5
+            fast_norm = fast_norm_sq ** 0.5
+            return lag, lag / max(fast_norm, 1e-12)
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
@@ -475,6 +527,9 @@ class Config:
     sgdr_t0: int = 0  # CosineAnnealingWarmRestarts cycle length; 0 disables (use plain cosine)
     slice_num: int = 64  # physics-attention slice count (node partitioning granularity)
     adamw_beta2: float = 0.999  # AdamW second-moment EMA decay; default 0.999
+    use_lookahead: bool = False  # wrap AdamW with Lookahead (Zhang et al. 2019)
+    lookahead_k: int = 5  # Lookahead inner steps before slow-weights sync
+    lookahead_alpha: float = 0.5  # Lookahead slow-weights interpolation factor
 
 
 cfg = sp.parse(Config)
@@ -527,12 +582,17 @@ for p in ema_model.parameters():
     p.requires_grad_(False)
 ema_decay = cfg.ema_decay
 
-optimizer = torch.optim.AdamW(
+base_optimizer = torch.optim.AdamW(
     model.parameters(),
     lr=cfg.lr,
     weight_decay=cfg.weight_decay,
     betas=(0.9, cfg.adamw_beta2),
 )
+if cfg.use_lookahead:
+    optimizer = Lookahead(base_optimizer, k=cfg.lookahead_k, alpha=cfg.lookahead_alpha)
+    print(f"Optimizer: Lookahead(k={cfg.lookahead_k}, alpha={cfg.lookahead_alpha}) wrapping AdamW(beta2={cfg.adamw_beta2})")
+else:
+    optimizer = base_optimizer
 if cfg.sgdr_t0 > 0:
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer, T_0=cfg.sgdr_t0, T_mult=1, eta_min=1e-6
@@ -683,6 +743,10 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "global_step": global_step,
     }
+    if cfg.use_lookahead:
+        slow_lag, slow_lag_rel = optimizer.slow_lag()
+        log_metrics["train/lookahead_slow_lag"] = slow_lag
+        log_metrics["train/lookahead_slow_lag_rel"] = slow_lag_rel
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
