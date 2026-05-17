@@ -530,6 +530,7 @@ class Config:
     use_lookahead: bool = False  # wrap AdamW with Lookahead (Zhang et al. 2019)
     lookahead_k: int = 5  # Lookahead inner steps before slow-weights sync
     lookahead_alpha: float = 0.5  # Lookahead slow-weights interpolation factor
+    warmup_steps: int = 0  # linear LR warmup steps before cosine annealing; 0 disables. When >0, scheduler steps per batch.
 
 
 cfg = sp.parse(Config)
@@ -593,12 +594,37 @@ if cfg.use_lookahead:
     print(f"Optimizer: Lookahead(k={cfg.lookahead_k}, alpha={cfg.lookahead_alpha}) wrapping AdamW(beta2={cfg.adamw_beta2})")
 else:
     optimizer = base_optimizer
+steps_per_epoch = len(train_loader)
+total_steps = MAX_EPOCHS * steps_per_epoch
+
 if cfg.sgdr_t0 > 0:
+    if cfg.warmup_steps > 0:
+        raise ValueError("--warmup_steps is incompatible with --sgdr_t0; set only one.")
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer, T_0=cfg.sgdr_t0, T_mult=1, eta_min=1e-6
     )
+    scheduler_per_batch = False
+elif cfg.warmup_steps > 0:
+    warmup_iters = min(cfg.warmup_steps, total_steps)
+    start_factor = 1.0 / max(warmup_iters, 1)
+    warmup_sched = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=start_factor, end_factor=1.0, total_iters=warmup_iters
+    )
+    cosine_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=max(total_steps - warmup_iters, 1)
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup_sched, cosine_sched], milestones=[warmup_iters]
+    )
+    scheduler_per_batch = True
+    print(
+        f"Scheduler: LinearLR warmup({warmup_iters} steps, start_factor={start_factor:.2e}) "
+        f"→ CosineAnnealingLR(T_max={total_steps - warmup_iters}); per-batch stepping "
+        f"[steps_per_epoch={steps_per_epoch}, total_steps={total_steps}]"
+    )
 else:
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+    scheduler_per_batch = False
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -690,6 +716,8 @@ for epoch in range(MAX_EPOCHS):
                 model.parameters(), cfg.grad_clip
             ).item()
         optimizer.step()
+        if scheduler_per_batch:
+            scheduler.step()
         with torch.no_grad():
             for ema_p, p in zip(ema_model.parameters(), model.parameters()):
                 ema_p.data.mul_(ema_decay).add_(p.data, alpha=1 - ema_decay)
@@ -697,13 +725,16 @@ for epoch in range(MAX_EPOCHS):
         step_log = {"train/loss": loss.item(), "global_step": global_step}
         if grad_norm_preclip is not None:
             step_log["train/grad_norm_preclip"] = grad_norm_preclip
+        if scheduler_per_batch:
+            step_log["train/lr"] = scheduler.get_last_lr()[0]
         wandb.log(step_log)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
+    if not scheduler_per_batch:
+        scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
