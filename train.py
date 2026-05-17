@@ -138,7 +138,7 @@ class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
     def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64,
-                 use_qk_norm=False):
+                 use_qk_norm=False, use_linear_attn=False):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
@@ -158,6 +158,7 @@ class PhysicsAttention(nn.Module):
         if use_qk_norm:
             self.q_norm = nn.LayerNorm(dim_head)
             self.k_norm = nn.LayerNorm(dim_head)
+        self.use_linear_attn = use_linear_attn
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
 
         # Set _log_diag=True before a forward to capture per-vector L2-norm
@@ -206,11 +207,27 @@ class PhysicsAttention(nn.Module):
             self._diag["q_norm_post"] = q.detach().float().norm(dim=-1).mean().item()
             self._diag["k_norm_post"] = k.detach().float().norm(dim=-1).mean().item()
 
-        out_slice = F.scaled_dot_product_attention(
-            q, k, v,
-            dropout_p=self.dropout.p if self.training else 0.0,
-            is_causal=False,
-        )
+        if self.use_linear_attn:
+            # LinearNO-style linear attention (Wu 2024; feature map = Katharopoulos 2020
+            # elu+1). Φ(Q)·(Φ(K)^T·V) / (Φ(Q)·Φ(K).sum(-2)^T). QK-norm above keeps
+            # φ activations well-conditioned. Divide in fp32 for bf16 stability.
+            phi_q = F.elu(q) + 1.0
+            phi_k = F.elu(k) + 1.0
+            kv = phi_k.transpose(-2, -1) @ v  # [B, H, d_head, d_head]
+            num = phi_q @ kv  # [B, H, N_slice, d_head]
+            denom = phi_q @ phi_k.sum(dim=-2, keepdim=True).transpose(-2, -1)  # [B, H, N_slice, 1]
+            out_slice = (num.float() / (denom.float() + 1e-6)).to(num.dtype)
+            if log_diag:
+                self._diag["lin_kv_mean"] = kv.detach().float().mean().item()
+                self._diag["lin_kv_std"] = kv.detach().float().std().item()
+                self._diag["lin_denom_min"] = denom.detach().float().min().item()
+                self._diag["lin_denom_mean"] = denom.detach().float().mean().item()
+        else:
+            out_slice = F.scaled_dot_product_attention(
+                q, k, v,
+                dropout_p=self.dropout.p if self.training else 0.0,
+                is_causal=False,
+            )
 
         out_x = torch.einsum("bhgc,bhng->bhnc", out_slice, slice_weights)
         out_x = rearrange(out_x, "b h n d -> b n (h d)")
@@ -220,13 +237,14 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 use_qk_norm=False):
+                 use_qk_norm=False, use_linear_attn=False):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num, use_qk_norm=use_qk_norm,
+            use_linear_attn=use_linear_attn,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = SwiGLUFFN(hidden_dim, hidden_dim * mlp_ratio, hidden_dim)
@@ -251,7 +269,7 @@ class Transolver(nn.Module):
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
-                 use_qk_norm=False):
+                 use_qk_norm=False, use_linear_attn=False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -272,7 +290,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
-                use_qk_norm=use_qk_norm,
+                use_qk_norm=use_qk_norm, use_linear_attn=use_linear_attn,
             )
             for i in range(n_layers)
         ])
@@ -566,6 +584,7 @@ class Config:
     lion_lr: float = 1e-4  # Lion lr; canonical: AdamW_lr / 3..10
     lion_wd: float = 1e-3  # Lion wd; canonical: AdamW_wd * 3..10
     use_qk_norm: bool = False  # ViT-22B-style LayerNorm(head_dim) on Q and K before SDPA
+    use_linear_attn: bool = False  # LinearNO-style linear slice-attention with elu+1 feature map (Wu 2024)
 
 
 cfg = sp.parse(Config)
@@ -605,6 +624,7 @@ model_config = dict(
     slice_num=64,
     mlp_ratio=cfg.mlp_ratio,
     use_qk_norm=cfg.use_qk_norm,
+    use_linear_attn=cfg.use_linear_attn,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
