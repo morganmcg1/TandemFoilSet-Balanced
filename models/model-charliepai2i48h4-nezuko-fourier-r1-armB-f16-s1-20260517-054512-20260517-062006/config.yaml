@@ -1,0 +1,63 @@
+agent: null
+amp_dtype: bf16
+batch_size: 4
+cosine_t_max: null
+debug: false
+ema_decay: 0.999
+epochs: 50
+experiment_name: charliepai2i48h4-nezuko-fourier-r1-armB-f16-s1-20260517-054512
+film_cond: true
+film_mlp_hidden: 128
+fourier_feats: true
+fourier_num_freqs: 16
+fourier_sigma: 1.0
+grad_clip_norm: 1.0
+lion_betas: 0.9,0.99
+lion_lr: 0.00015
+lion_weight_decay: 0.0003
+lr: 0.003
+model_config:
+  film_cond: true
+  film_cond_dim: 11
+  film_cond_slice:
+  - 13
+  - 24
+  film_mlp_hidden: 128
+  fourier_feats: true
+  fourier_in_dim: 2
+  fourier_num_freqs: 16
+  fourier_sigma: 1.0
+  fun_dim: 22
+  mlp_ratio: 2
+  n_head: 4
+  n_hidden: 128
+  n_layers: 5
+  out_dim: 3
+  output_dims:
+  - 1
+  - 1
+  - 1
+  output_fields:
+  - Ux
+  - Uy
+  - p
+  slice_num: 64
+  space_dim: 2
+  two_shot_film: true
+n_params: 853207
+optimizer: adamw
+seed: 1
+sf_warmup_steps: 500
+skip_test: false
+splits_dir: /mnt/new-pvc/datasets/tandemfoil/splits_v2
+surf_weight: 10.0
+train_samples: 1499
+two_shot_film: true
+use_ema: true
+use_schedule_free: true
+val_samples:
+  val_geom_camber_cruise: 100
+  val_geom_camber_rc: 100
+  val_re_rand: 100
+  val_single_in_dist: 100
+weight_decay: 0.0001
