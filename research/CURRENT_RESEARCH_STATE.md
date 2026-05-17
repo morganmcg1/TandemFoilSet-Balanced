@@ -1,25 +1,25 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-17 ~09:40 UTC
+- **Last updated:** 2026-05-17 ~10:50 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
-- **Most recent direction from human researcher team:** None (no open issues at 09:40 UTC)
+- **Most recent direction from human researcher team:** None (no open issues at 10:50 UTC)
 
-## Current best baseline — AdamW eps=1e-9 (PR #4401 edward, merged ~08:32 UTC)
+## Current best baseline — n_layers=4 (PR #4453 alphonse, merged ~10:45 UTC)
 
 | Metric | Value | Source |
 |---|---|---|
-| `val_avg/mae_surf_p` | **50.1657** | PR #4401 edward eps=1e-9 Lookahead k=3 slice=8 `hpjl79he` |
-| `test_3split/mae_surf_p` | **50.3401** | PR #4401 edward |
+| `val_avg/mae_surf_p` | **50.1193** | PR #4453 alphonse n_layers=4 Lookahead k=3 slice=8 `uiy4eks9` |
+| `test_3split/mae_surf_p` | **50.2103** | PR #4453 alphonse (manual 3-split, cruise NaN excluded) |
 
-Per-split val (PR #4401, run `hpjl79he`):
+Per-split val (PR #4453, run `uiy4eks9`):
 
-| Split | mae_surf_p | Δ vs prior baseline (51.3066) |
+| Split | mae_surf_p | Δ vs prior baseline (50.1657) |
 |---|---|---|
-| val_single_in_dist | 57.870 | +0.07 (flat) |
-| **val_geom_camber_rc** | **62.561** | **−1.293 (−2.0%)** |
-| val_geom_camber_cruise | 31.988 | −0.421 (−1.3%) |
-| **val_re_rand** | **48.243** | **−2.916 (−5.7%)** |
-| **val_avg** | **50.1657** | **−1.141 (−2.2%)** |
+| val_single_in_dist | 60.392 | +2.52 (regressed vs eps baseline) |
+| **val_geom_camber_rc** | **60.666** | **−1.895 (−3.0%)** ← biggest gain |
+| val_geom_camber_cruise | 31.444 | −0.544 |
+| val_re_rand | 48.656 | +0.41 |
+| **val_avg** | **50.1193** | **−0.047 (−0.09%)** |
 
 Reproduce:
 ```bash
@@ -28,9 +28,11 @@ cd target/ && python train.py \
   --use_swiglu --mlp_ratio 1.333 --n_head 2 --asinh_vel_scale 0.5 \
   --slice_num 8 \
   --use_lookahead --lookahead_k 3 --lookahead_alpha 0.5 \
-  --adamw_eps 1e-9 \
+  --n_layers 4 \
   --agent <student>
 ```
+
+**Note on eps**: this baseline uses DEFAULT eps=1e-8. The eps=1e-9 axis (PR #4401) and n_layers=4 axis are INDEPENDENT. The n_layers=4 + eps=1e-9 stack is the immediate highest-priority follow-up (PR #4552).
 
 ## Stack progression
 
@@ -41,53 +43,58 @@ cd target/ && python train.py \
 | PR #4142 nezuko (Lookahead k=5 α=0.5, slice=8) | 54.299 | 52.879 | −3.77% |
 | PR #4249 nezuko (Lookahead + β2=0.95, slice=8) | 52.944 | 52.752 | −2.49% |
 | PR #4266 alphonse (Lookahead k=3, β2=0.999, slice=8) | 51.307 | 51.886 | −3.09% |
-| **PR #4401 edward (eps=1e-9, Lookahead k=3)** | **50.166** | **50.340** | **−2.22%** |
+| PR #4401 edward (eps=1e-9, Lookahead k=3) | 50.166 | 50.340 | −2.22% |
+| **PR #4453 alphonse (n_layers=4, default eps)** | **50.119** | **50.210** | **−0.09%** |
 
 Total improvement since raw seed: **−64.9%** on val.
 
 ## Target proximity
 
-**Target**: val < 50.0, test < 50.0. Current: **50.17 / 50.34**. Need: −0.33% val (0.17 abs), −0.68% test (0.34 abs). **Very close to target.**
+**Target**: val < 50.0, test < 50.0. Current: **50.12 / 50.21**. Need: −0.24% val (0.12 abs), −0.42% test (0.21 abs).
+
+**Critically close.** The n_layers=4 merge and prior eps=1e-9 win are INDEPENDENT axes. If they stack even at 60% additivity, the combined config should land at **val≈49.9, test≈49.9** — clearing both targets simultaneously. This is the campaign's primary hypothesis right now (#4552).
 
 ## Active PRs (8 WIP, 0 idle — zero idle GPUs)
 
 | PR | Student | Hypothesis | On baseline | Status |
 |----|---------|-----------|-------------|--------|
-| **#4490** | **edward** | eps fine grid (3e-9, 3e-10, 1e-10) | eps=1e-9 baseline | WIP — highest priority |
-| **#4491** | **tanjiro** | β1 bracket (0.85, 0.95) on eps=1e-9 baseline | eps=1e-9 baseline | WIP |
-| **#4534** | **nezuko** | Lookahead k=4 retest on eps=1e-9 (2 seeds) | eps=1e-9 baseline | NEW — k-axis retest with smoother trajectory |
-| **#4468** | **askeladd** | FiLM conditioning on camber M channel | k=3 baseline (pre-eps) | WIP — architectural intervention for camber_rc=62.56 |
-| **#4469** | **frieren** | surf_weight bracket (5, 20) on k=3 baseline | k=3 baseline (pre-eps) | WIP |
-| **#4453** | **alphonse** | n_layers depth bracket (3, 7) on k=3 | k=3 baseline (pre-eps) | WIP |
-| **#4404** | **thorfinn** | mlp_ratio bracket (1.0, 1.667) on k=3 | k=3 baseline (pre-eps) | WIP |
-| **#4400** | **fern** | Cosine eta_min floor (5e-5, 1e-5) on k=3 | k=3 baseline (pre-eps) | WIP |
+| **#4552** | **alphonse** | **n_layers=4 + eps=1e-9 stack (2 seeds)** | **n_layers=4 baseline** | **NEW — TARGET-CLEARING RUN. Highest EV of campaign.** |
+| **#4554** | **askeladd** | weight decay bracket (5e-5, 3e-4) on n_layers=4 | n_layers=4 baseline | NEW — wd untested on current stack |
+| **#4490** | **edward** | eps fine grid (3e-9, 3e-10, 1e-10) on eps=1e-9 stack | eps=1e-9+n_layers=5 | WIP — eps fine-grid; results on OLD n_layers=5 stack |
+| **#4491** | **tanjiro** | β1 bracket (0.85, 0.95) on eps=1e-9 baseline | eps=1e-9+n_layers=5 | WIP |
+| **#4534** | **nezuko** | Lookahead k=4 retest on eps=1e-9 (2 seeds) | eps=1e-9+n_layers=5 | WIP |
+| **#4469** | **frieren** | surf_weight bracket (5, 20) on k=3 baseline | old k=3 (pre-eps, n_layers=5) | WIP (stale_wip) |
+| **#4404** | **thorfinn** | mlp_ratio bracket (1.0, 1.667) on k=3 baseline | old k=3 (pre-eps, n_layers=5) | WIP (stale_wip) |
+| **#4400** | **fern** | Cosine eta_min floor (5e-5, 1e-5) on k=3 baseline | old k=3 (pre-eps, n_layers=5) | WIP (stale_wip) |
 
-**Note on pre-eps PRs**: #4468, #4469, #4453, #4404, #4400 were assigned against the old k=3 baseline (51.31). They now need to beat 50.17 to merge. They will still provide axis characterization even if they don't clear the new bar.
+**Note on pre-n_layers=4 PRs**: #4490, #4491, #4534, #4469, #4404, #4400 were assigned against older baselines (val=50.17 or 51.31). They now need to beat **50.12** to merge. Most will still provide axis characterization even if they don't clear the new bar. An eps fine-grid result below the n_layers=4 baseline (50.12) on the OLD n_layers=5 stack would suggest eps stacking is especially powerful.
 
-All 8 GPUs occupied. Zero idle students.
-
-## Recent closures (round 37)
+## Recent closures (round 39)
 
 | PR | Student | Hypothesis | val | Action |
 |----|---------|-----------|-----|--------|
-| ✗ **#4461** | **nezuko** | **Lookahead α=0.7 multi-seed (3 seeds) on k=3** | **53.67 mean (3 seeds)** | ✗ **Closed — α-axis CLOSED at k=3 (α=0.5 is optimal). α=0.7 is +4.60% worse, mechanism doesn't transfer from k=5.** |
+| ✓ **#4453** | **alphonse** | **n_layers=4 depth bracket** | **50.12** | ✓ **MERGED — NEW BASELINE** |
+| ✗ **#4468** | **askeladd** | **FiLM conditioning on camber M** | **56.89** | ✗ **Closed — +5.58 val regression. M already in input features; post-block residual modulation too destructive. FiLM conditioning direction CLOSED.** |
 
-## Prior closures (round 32)
+## Prior closures (rounds 37/32)
 
 | PR | Student | Hypothesis | val | Action |
 |----|---------|-----------|-----|--------|
-| ✓ **#4401** | **edward** | **AdamW eps=1e-9 on k=3** | **50.166** | ✓ **MERGED — NEW BASELINE** |
-| ✗ **#4370** | **tanjiro** | **Lookahead k=2+k=4 bracket** | **52.73 (k=4) / 52.87 (k=2)** | ✗ **Closed — k-axis FULLY CHARACTERIZED {2,3,4,5,10}. k=3 is sharp val minimum.** |
+| ✗ **#4461** | **nezuko** | Lookahead α=0.7 (3 seeds on k=3) | 53.67 mean | ✗ Closed — α-axis CLOSED at k=3 (α=0.5 optimal) |
+| ✓ **#4401** | **edward** | AdamW eps=1e-9 on k=3 | 50.166 | ✓ MERGED |
+| ✗ **#4370** | **tanjiro** | Lookahead k=2+k=4 bracket | 52.73/52.87 | ✗ Closed — k-axis characterized; k=4 retesting on eps=1e-9 stack (#4534) |
 
 ## Key mechanism insights
 
-- **eps=1e-9 mechanism confirmed**: smaller eps = tighter adaptive step sizes; camber_rc and re_rand most responsive; monotone direction (1e-7 hurts, 1e-9 helps); eps follow-up in flight (#4490)
+- **n_layers=4 mechanism confirmed**: depth-axis points DOWN at 30-min wall-clock budget. n=4 (22 epochs) beats n=5 (17 epochs). n=7 (10 epochs) collapses. More Lookahead syncs > deeper per-block capacity. The depth bracket is now characterized: n=4 is the sweet spot (n=3 slightly worse on val despite more epochs, n=7 catastrophic).
+- **val_geom_camber_rc most improved by depth reduction**: 63.85 → 60.67 (−3.18 absolute, −5.0% over n=5 on old stack). The hardest split is most responsive to update-count increases.
+- **eps=1e-9 mechanism confirmed**: smaller eps = tighter adaptive step sizes; camber_rc and re_rand most responsive; monotone direction (1e-7 hurts, 1e-9 helps)
 - **k=3 sharp val minimum**: per-epoch trajectory shows k=4 leads for 17 epochs but k=3 wins the final epoch sprint — budget/checkpoint-selection artifact; k-axis bracket {2,3,4,5,10} closed
 - **k=2 highly unstable**: 4/5 seeds catastrophically worse — tight sync amplifies slow-weight trajectory noise
-- **α-axis on k=3 CLOSED**: α=0.3 (failed prior), α=0.5 (optimal), α=0.7 (PR #4461, failed — 3 seeds, mean +4.60% vs baseline). The k=5+α=0.7 win does NOT transfer to k=3 — at k=3 there are too few fast steps to average before α absorbs the gap.
-- **camber_rc residual now 62.56** (down from 63.85 after eps=1e-9 merge). FiLM experiment (#4468) targets this directly.
+- **α-axis on k=3 CLOSED**: α=0.3 (failed), α=0.5 (optimal), α=0.7 (PR #4461, +4.60% worse, 3 seeds). The k=5+α=0.7 win does NOT transfer to k=3.
+- **FiLM conditioning CLOSED**: scalar M conditioning fails. M is already in input features; post-block modulation destroys residual structure; camber_rc gap is about tandem wake interactions, not M-extrapolation.
 - **Capacity axis closed**: n_hidden≥192 doubles epoch time; n_head=4 at n_hidden=128 below expressive threshold
-- **Data-side axis CLOSED**: frequency reweighting + feature-space mixup both failed; architecture conditioning (#4468) is remaining path
+- **Data-side axis CLOSED**: frequency reweighting + feature-space mixup both failed; FiLM conditioning also closed
 - **Slice axis closed at 8**: unimodal optimum, both directions degrade
 
 ## What works on the full stack
@@ -95,45 +102,47 @@ All 8 GPUs occupied. Zero idle students.
 - EMA decay=0.99, grad_clip=5.0
 - asinh(pressure) scale=1.0, SwiGLU gated MLP (mlp_ratio=1.333), n_head=2, vel-asinh=0.5
 - Huber δ=0.5, slice_num=8
-- **AdamW β2=0.999, lr=5e-4, wd=1e-4, eps=1e-9** ← NEW
+- **n_layers=4** ← NEW (was 5)
+- AdamW β2=0.999, lr=5e-4, wd=1e-4
 - **Lookahead k=3 α=0.5 — dominant lever on 30-min budget**
+- eps=1e-9 (independently valid on n_layers=5 stack; stacking with n_layers=4 unverified but expected)
 
 ## What does NOT work
 
-- β1 axis: β1=0.85 or β1=0.95 on OLD pre-Lookahead stack (retesting now on new full stack via #4491)
+- FiLM conditioning on camber M (scalar M conditioning, post-block residual modulation)
+- β1 axis: β1=0.85 or β1=0.95 on OLD pre-Lookahead stack (retesting on new full stack via #4491)
 - β2=0.95 under Lookahead k=3 (substitutive at short excursion window)
+- n_layers=7 (too few epochs, severe under-training at 30-min budget)
 - EMA=0.995 (substitutes with Lookahead)
 - AGC, grad_clip=1.0; bs=8, DropPath, dropout, SWA
 - All loss-shape axes tested: Huber δ bracket, asym Huber, log-cosh, Welsch
 - Per-sample/per-channel surface loss reweighting
 - AoA rotation augmentation; camber-stratified frequency oversampling; camber-bridging mixup
-- Lookahead+slice=16+β2=0.95 triple (anti-compounding)
 - weight_decay > 1e-4; LR warmup; n_hidden=192; lr=1e-3
 - LLRD under Lookahead (substitutive on test)
-- slice_num ≠ 8; n_head=4 at n_hidden=128; Lookahead α=0.3
-- Lookahead α=0.7 at k=3 (PR #4461, 3 seeds, mean val=53.67, +4.60% worse — α-axis CLOSED at k=3)
-- k=2 (unstable, high variance); k=4 tied on test but worse on val (OLD stack; retesting on eps=1e-9 stack in #4534)
+- slice_num ≠ 8; n_head=4 at n_hidden=128; Lookahead α=0.3, α=0.7 (k=3)
+- k=2 (unstable); k=4 tied test on OLD stack (retesting on eps+n_layers=4 stack #4534)
 
 ## Strategic outlook
 
-**Target**: val < 50.0, test < 50.0. Need: −0.17 val, −0.34 test from current 50.17/50.34.
+**Target**: val < 50.0, test < 50.0. Current: **50.12 / 50.21**. Gap: 0.12 val, 0.21 test.
 
-**Very close to target.** The eps=1e-9 merge puts us within striking distance. Priority focus:
+1. **#4552 alphonse — n_layers=4 + eps=1e-9 stack** ← **HIGHEST PRIORITY, expected to clear BOTH targets** if axes compound at ≥60% additivity (expected val≈49.9, test≈49.9)
+2. **#4554 askeladd — wd bracket on n_layers=4** ← orthogonal probe; wd untested on current stack
+3. **#4490 edward — eps fine grid** ← will tell us the eps floor on n_layers=5; informs whether eps stacking adds on top of n_layers=4 change
+4. **#4491 tanjiro — β1 bracket** ← β1 untested on current configuration
+5. **#4534 nezuko — k=4 retest** ← k-axis with smoother eps trajectory
+6. **#4469/#4404/#4400** — axis characterization on old stack; useful reference data even if they don't clear new bar
 
-1. **eps fine grid (#4490 edward)** — highest EV given confirmed monotone direction; eps=3e-10 may clear both targets
-2. **β1 bracket (#4491 tanjiro)** — β1 axis untested on current optimizer configuration
-3. **FiLM conditioning (#4468 askeladd)** — architectural intervention for remaining camber_rc=62.56 residual
-4. **k=4 retest (#4534 nezuko)** — k-axis retested on eps=1e-9 stack; prior k=4 result was on old stack; smoother trajectory may shift optimum
-5. **surf_weight bracket (#4469 frieren)** / **n_layers (#4453 alphonse)** / **mlp_ratio (#4404 thorfinn)** / **eta_min (#4400 fern)** — axis characterization
+**If #4552 clears both targets**: look for further gains on combined stack. Possible next axes: mlp_ratio at n_layers=4, lr reduction (3e-4 vs 5e-4), β1 fine-grid.
 
-**α-axis CLOSED at k=3** (PR #4461): α=0.5 is optimal; α=0.7 fails 3/3 seeds; mechanism doesn't transfer from k=5. Do not revisit α-axis at k=3.
+**If #4552 does NOT clear targets**: eps and n_layers gains are partially substitutive. Next bold move: n_layers=3 + eps=1e-9 (even more epochs), or architecture changes (cross-attention between two-body patches for camber_rc).
 
 ## Operational notes
 
 - **cruise NaN**: fleet-wide data/scoring.py bug; test_3split = (test_single_in_dist + test_geom_camber_rc + test_re_rand)/3
 - **W&B test namespace**: `test/test_*/mae_surf_p` (not bare `test_*`)
-- **Per-run budget**: 30 min, ~15-18 epochs at slice=8 (~108s/epoch)
-- **GPU utilization**: 100% — all 8 students assigned as of 08:40 UTC
-- **API rate limit**: shared student GH token (user 20516801) hits limit when 8 students poll simultaneously → "No work assigned" false positives AND result-submission failures. Cycles ~50 min usage / 10-15 min blocked. No advisor intervention possible.
-- **Pod health check 10:25 UTC (round 38)**: rate limit cycling again — 3 hits in last 80 lines of every pod. 7/8 pods at GPU 0% (between train/eval cycles, results likely stashed locally awaiting rate-limit clearance to post). Only edward (#4490 eps grid) still actively training at 100%. PR #4400 fern picked up assignment at iter 137 (09:24 UTC) ~60 min ago — at 28 min/seed × 2 arms, results should be ready but PR shows 0 comments due to rate-limit-blocked submission. Same expected pattern for other 6 stale_wip PRs.
-- **eps baseline for ALL in-flight PRs**: even if a PR was assigned against k=3 baseline (51.31), it now needs to beat 50.17 to merge
+- **Per-run budget**: 30 min; ~22 epochs at n_layers=4/slice=8 (~82s/epoch); ~17 epochs at n_layers=5
+- **GPU utilization**: 100% — all 8 students assigned as of 10:50 UTC
+- **API rate limit**: shared student GH token (user 20516801) hits limit when 8 students poll simultaneously. Cycles ~50 min usage / 10-15 min blocked. No advisor intervention possible — auto-clears.
+- **New baseline bar for ALL in-flight PRs**: must beat val=50.12 / test=50.21 to merge

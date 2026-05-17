@@ -1,5 +1,58 @@
 # SENPAI Research Results
 
+## 2026-05-17 ~10:45 UTC — Round 39: MERGE #4453 (n_layers=4 NEW BASELINE) + Close #4468 (FiLM null) + 2 assignments
+
+### MERGED: PR #4453 (alphonse) — n_layers=4 depth bracket ✓ **NEW BEST**
+
+**NEW BEST BASELINE** — depth axis points down at 30-min wall-clock budget. n_layers=4 (22 epochs) beats n_layers=5 (17 epochs) on both val and test.
+
+| Arm | n_layers | params | epochs | val_avg | test_3split | Δval vs eps=1e-9 baseline |
+|---|---|---|---|---|---|---|
+| A (o1yoxwmd) | 3 | 0.44M | ~26 | 50.841 | 50.196 | +0.675 |
+| **C (uiy4eks9)** | **4** | **0.57M** | **~22** | **50.119** | **50.210** | **−0.047 (−0.09%)** |
+| B (bai1blz6) | 7 | 0.96M | ~10 | 66.069 | 64.957 | +15.90 |
+
+W&B spot-check on run uiy4eks9: all values confirmed, config=n_layers=4/k=3/α=0.5/default eps, state=finished.
+
+Per-split val for n_layers=4 vs current eps=1e-9 baseline (val_avg 50.166):
+| Split | n_layers=4 | Δ |
+|---|---|---|
+| val_single_in_dist | 60.392 | +2.52 (regressed) |
+| **val_geom_camber_rc** | **60.666** | **−1.895 (−3.0%)** |
+| val_geom_camber_cruise | 31.444 | −0.544 |
+| val_re_rand | 48.656 | +0.41 |
+
+**Key mechanism**: More Lookahead slow-weight syncs per wall-clock beats deeper per-block capacity. ~22 epochs (n=4) vs ~17 epochs (n=5) = 29% more updates AND 29% more k=3 sync events. n=7 collapses to ~10 epochs → catastrophic under-training.
+
+**Dominant gain on hardest split**: val_geom_camber_rc 62.561 → 60.666 (−1.90 absolute, −3.0%) — consistent direction.
+
+**Note on eps**: this PR used default eps=1e-8, NOT eps=1e-9. The n_layers=4 and eps=1e-9 axes are INDEPENDENT — stacking is the obvious next step.
+
+**New assignments:**
+- **PR #4552 (alphonse)**: n_layers=4 + eps=1e-9 stack — **highest EV of campaign, expected to clear val<50 and test<50 targets**
+- **PR #4554 (askeladd)**: weight decay bracket (5e-5, 3e-4) on n_layers=4 baseline — completely untested axis on current stack
+
+---
+
+### Closed: PR #4468 (askeladd) — FiLM conditioning on camber M ✗
+
+**Clear negative result.** FiLM conditioning regressed ALL metrics: +5.58 val_avg (+5.09 val_geom_camber_rc — the target split). Arm B (no-FiLM) reproduced baseline within ±0.22, confirming regression is FiLM-only.
+
+| Arm | val_avg | val_camber_rc | test_3split |
+|---|---|---|---|
+| Arm A FiLM-ON (wp2qj9cr) | 56.890 | 68.948 | 56.914 |
+| Arm B no-FiLM (sujr33bv) | 51.529 | 63.733 | 51.656 |
+| Baseline | 51.307 | 63.854 | 51.886 |
+
+**Three-reason diagnosis (student's analysis confirmed)**:
+1. M is already in input features (feature 15, broadcast to all nodes) — FiLM added a redundant second pathway
+2. Post-block residual modulation (γ·h+β on full residual stream) destroys residual structure — too aggressive vs AdaLN-Zero which scales only branch output
+3. The camber_rc gap is about tandem aerodynamic wake interactions, NOT M-extrapolation — M∈{6,7,8} ARE in training set via single-foil geometries
+
+**Architectural conditioning direction closed with scalar M**: root cause is #3 — the gap is tandem-configuration-specific, not M-specific. Any richer conditioning (cross-attention between two-body features, multi-dim tandem conditioner) would need to capture wake interactions, not just the camber digit.
+
+---
+
 ## 2026-05-17 ~09:40 UTC — Round 37: Close #4461 (α=0.7 k=3 null) + Assign #4534 (k=4 retest on eps=1e-9)
 
 ### Closed: PR #4461 (nezuko) — Lookahead α=0.7 multi-seed (3 seeds) on k=3 baseline ✗
