@@ -1,5 +1,60 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-17 06:30 — Baseline shift cleanup: 4 PRs CLOSED (W&B data), 4 new PRs ASSIGNED + 2 send-backs
+
+### #4366 fern Lookahead(k=5, α=0.5) — **SENT BACK for k=3 + QK-norm retest**
+
+- W&B run: `d3u3ipay` (finished). Config: Lion+nh=176+bf16+ep14+Lookahead(k=5,α=0.5), canonical slow-weight eval.
+- val=49.06, test=41.94 — **against old Lion baseline (+0%)** but **against new QK-norm+Lion baseline: val +4.4%, test +3.6% REGRESS**
+- Per-split: single_in_dist +3.07 (hard regression), geom_camber_rc −1.13 (win), geom_camber_cruise +0.26 (flat), re_rand −0.93 (win)
+- **Mechanism:** over-smoothing of in-distribution regime (slow-weight averaging drifts from fast weights over k=5 steps)
+- **Decision:** SEND BACK for k=3 + QK-norm stack. Student's diagnosis was sharp — k=3 gives less drift accumulation. One more arm, rubric: val < 46.99 AND test < 40.48 to merge, else close Lookahead axis entirely.
+
+### #4324 askeladd Lion-wd sweep (wd=5e-4, wd=3e-4) — **SENT BACK for wd=5e-4+QK-norm retest**
+
+- W&B runs: `a8v4bhx6` (wd=5e-4, val=47.68, test=40.86), `rducjf9x` (wd=3e-4, val=47.99, test=40.86)
+- Both beat OLD Lion baseline but both REGRESS vs NEW baseline #4270 (val=46.99, test=40.48): val +1.47%, test +0.94%
+- Per-split (wd=5e-4 best): geom_camber_rc −2.36 (strong win on hard split), single_in_dist +0.50, cruise +0.25, re_rand −1.43
+- **Decision:** SEND BACK for wd=5e-4 + QK-norm stack. wd and QK-norm are orthogonal (optimizer regularization vs attention input stabilization). geom_camber_rc gain at wd=5e-4 suggests genuine capacity unlock. Rubric: val < 46.99 AND test < 40.48 to merge.
+
+### #4280 frieren Lion+nh=192+ep12 — **CLOSED (converged regressive)**
+
+- W&B runs: `tw0el2ph` (val=50.86), `lba4la8i` (val=49.56, best), `di559ckr` (val=50.38) — 3 seeds on same config
+- Best val=49.56 vs new baseline 46.99 = **+5.5% regress**; test 42.86 vs 40.48 = **+5.9% regress**
+- Student ran 4+ times without posting SENPAI-RESULT — stuck in Claude session loop
+- **Decision:** CLOSE. Width saturates at nh=192+ep12 (per PR's own promotion rule). QK-norm stacked would project ~47.3 (still worse than current 46.99). Width frontier mapped.
+
+### #4285 nezuko Lion LR=2e-4 sweep — **CLOSED (converged regressive)**
+
+- W&B runs: `k0iq163v` (val=49.24, best), `ypjy3nxt` (val=49.70) — 2 seeds at lr=2e-4
+- Best val=49.24 vs new baseline 46.99 = **+4.8% regress**; test 41.22 vs 40.48 = **+1.8% regress**
+- Arm B (lr=5e-5) not run; lower LR unlikely to beat optimum at lr=1e-4
+- **Decision:** CLOSE. lr=1e-4 confirmed as local optimum. LR axis closed.
+
+### #4233 tanjiro AGC clip=0.03 — **CLOSED (catastrophic regress)**
+
+- W&B run: `2u2pznvg` (finished). val=57.37, test=49.63 vs new baseline (46.99, 40.48) = **+22.1% val, +22.6% test**
+- clip=0.03 is too aggressive; arm B (clip=0.05) untested but gap too large to recover
+- **Decision:** CLOSE. AGC redundant with Lion's sign-update gradient stability. Axis closed.
+
+### #4354 alphonse Lion+n_head=2 — **CLOSED (uniform regression, no split signal)**
+
+- W&B runs: `ng6kemvf` (val=48.82, test=41.43, all 4 splits regress), `8rur1psn` (val=49.17)
+- Per-split (best run): single_in_dist +2.2%, geom_camber_rc +3.5%, geom_camber_cruise +3.0%, re_rand +0.5%
+- No asymmetric split signal — all splits regress, unlike askeladd's geom_camber_rc win
+- **Decision:** CLOSE. Wider heads (d_head=88) without QK-norm don't capture different generalization. No mechanism to chase.
+
+### New PRs Assigned (4 students now with fresh experiments)
+
+| PR | Student | Hypothesis | Key mechanism |
+|---|---|---|---|
+| **#4409** | frieren | mlp_ratio=3 + QK-norm + Lion + nh=176 + ep12 | FFN capacity scaling (1.47× inner_dim), untested under Lion+QK-norm |
+| **#4410** | nezuko | loss_type=huber + QK-norm + Lion + nh=176 + ep14 | Outlier-robust loss (L2→L1 transition), previously tested pre-Lion |
+| **#4411** | tanjiro | coord_noise_std {0.005, 0.02} + QK-norm + Lion + nh=176 + ep14 | Data augmentation strength sweep under new stack |
+| **#4412** | alphonse | batch_size=2 + QK-norm + Lion + nh=176 + ep14 | Finer gradient steps under Lion sign-update, implicit regularization |
+
+---
+
 ## 2026-05-17 05:30 — PR #4270 MERGED (QK-norm + Lion, new baseline) + PR #4178 CLOSED (EMA no signal)
 
 ### #4270 edward QK-norm + Lion at nh=176+bf16+ep14 — **MERGED ← NEW BASELINE**
