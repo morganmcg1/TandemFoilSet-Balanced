@@ -564,6 +564,7 @@ class Config:
     lion_betas: str = "0.9,0.99"  # Lion (beta1, beta2) as comma-separated floats
     seed: int = 0  # RNG seed for model init + data sampler; enables paired-arm reproducibility
     n_layers: int = 5  # number of TransolverBlock layers
+    n_head: int = 4  # Transolver attention head count (n_hidden must be divisible by n_head)
 
 
 cfg = sp.parse(Config)
@@ -601,7 +602,7 @@ model_config = dict(
     out_dim=3,
     n_hidden=128,
     n_layers=cfg.n_layers,
-    n_head=4,
+    n_head=cfg.n_head,
     slice_num=64,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
