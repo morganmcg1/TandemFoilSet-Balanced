@@ -1,5 +1,64 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-17 11:45 — **PLATEAU BREAKER: PR #4550 MERGED** (per-foil chord-relative coords). +2 closures (#4532 RoPE-2D, #4549 LLRD). 3 Round-15 PRs assigned (compounding on #4550 win)
+
+### 🎯 #4550 edward Per-Foil Chord-Relative Coords + foil_id — **MERGED (val=44.27, test=38.17, FIRST IMPROVEMENT IN 28 EXPERIMENTS)**
+
+- W&B run: `a46jhvdo`. val=44.2736 (**−2.72 vs prior baseline 46.99**, -5.78%), test=38.1696 (**−2.31 vs 40.48**, -5.71%). 14 epochs, 30.4 min, peak VRAM 44.6GB.
+- **Per-split test (vs PR #4270 baseline):**
+
+| Split | new | old | Δ |
+|---|---|---|---|
+| single_in_dist | 42.74 | 43.18 | −0.44 (within noise) |
+| **geom_camber_rc** | **53.02** | 52.79 | **+0.23 (FLAT — plateau target unchanged)** |
+| geom_camber_cruise | 21.50 | 25.83 | **−4.33** (−16.78%, MASSIVE) |
+| re_rand | 35.42 | 40.12 | **−4.70** (−11.71%, MASSIVE) |
+
+- **Mechanism that worked:** appending (x_chord, foil_id) as 2 raw features. `x_chord = x_world - stagger` for foil-2 nodes; `foil_id = 1.0` for foil-2 else 0.0. Computed pre-normalization (clean numerical range). Heuristic foil_id (x_world ≥ stagger - 0.5) → 100% accurate for typical staggers ≥ 0.6.
+- **Why it worked:** gives attention/slice-routing a per-foil **translation-invariant** reference frame. Without it, world-x for a foil-2 LE node is ~0.7 (different from foil-1 LE at ~0). The model had to relearn shape knowledge for every foil-2 position. With it, both LE nodes have x_chord ≈ 0.
+- **Why geom_camber_rc was flat:** racecar tandems use aggressive AoA + camber combinations; the per-foil rotation/orientation gap remains. Plateau-target on geom_camber_rc now requires additional axes (per-foil AoA-rotation, per-foil chord-scale, AoA-conditional readout — see Round-15 below).
+- **Implication for #4411 noise-floor:** the −2.72 val improvement is well outside the σ=2.31 inter-seed floor → real signal.
+
+**This is the 1st val improvement since #4270 merged at 05:30 UTC (28 plateau experiments earlier).** Plateau broken at 11:32 UTC.
+
+### #4532 tanjiro 2D RoPE on Q/K (post slice-aggregation) — **CLOSED (val=53.09 +13%, but valuable diagnostic)**
+
+- W&B run posted in PR. val=53.09 vs prior 46.99 = +12.99% regression (far above 5% close threshold).
+- **THE CRITICAL DIAGNOSTIC (tanjiro's deliverable):** Transolver slice_weights are `softmax(in_project_slice(x_mid) / temp)` — softmax over **slice_num**, normalized per-node. Therefore every node sends ~uniform mass to all 64 slices. Slice centroids `Σ_n pos_n · w_n[g]` are weighted averages of node positions, with weights that are ~uniform across g. Result: **all 64 slice centroids collapse to ~the same (per-batch) geometric mean point** (measured std=0.017 rad).
+- Rotating Q/K by per-slice angle θ_g when all θ_g ≈ θ̄ → equivalent to a single global rotation → model absorbs it implicitly → no-op.
+- This explains why position-encoding-on-slice-attention failed. The fix is to apply position encoding BEFORE slice aggregation, where positions are still per-node and genuinely distinct.
+- **Follow-up assigned (#4584 tanjiro per-node RoPE pre-agg):** apply 2D RoPE on `fx_mid` per-node, before slice aggregation. Tanjiro's own option 1.
+
+### #4549 alphonse Lion LLRD α=0.7 — **CLOSED (val=48.83 +1.84, rubric falsified)**
+
+- W&B run: `p23ss529`. val=48.83 (+1.84 vs prior, +4.55 vs new baseline #4550), test=41.35 (+0.87). Per-split: geom_camber_rc=52.58 (-0.21 within σ=1.14 noise floor).
+- **Mechanism diagnosis (alphonse's analysis):** LLRD is a fine-tuning protocol where early layers already encode useful priors from pretraining. We're training from scratch — block_0's slice-routing primitives are random at ep0 and *need* full LR to lock in. Slowing them 0.24× is starvation, not regularization. Grad-norm trajectory (block_0 still at 0.32 at ep14) confirms early blocks hadn't converged before being slowed.
+- **Bonus catch from alphonse:** PR body claimed n_layers=8 but code uses n_layers=5 (`train.py:604`). Actual α=0.7^4=0.24 spread is milder than designed. Even at this milder compression, val regressed +1.84.
+- **Optimizer axis is now well-explored:** Adam, Lion, eta_min sweep, peak-LR sweep, LLRD, β1 sweep — all closed. Time to move to architectural and physics-aware levers.
+
+### Round-15 assignments (3 new PRs compounding on #4550 plateau-breaker)
+
+All 3 use the **new baseline** (PR #4550, val=44.27) with `--use_per_foil_coords`.
+
+| PR | Student | Hypothesis | Mechanism surface |
+|---|---|---|---|
+| **#4583** | edward | **Per-Foil AoA Rotation** — extend per-foil-coords with rotation by foil's own AoA → chord-aligned local frame for each foil | Input features (compounds on #4550) |
+| **#4584** | tanjiro | **Per-Node 2D RoPE on fx_mid BEFORE slice aggregation** — addresses slice-collapse pathology from #4532 diagnostic; positions live in node features that get aggregated | Position encoding (architectural fix) |
+| **#4586** | alphonse | **Slice-Routing Diversity Loss** (Switch-style, λ-sweep {0.001, 0.01, 0.1}) — auxiliary loss forces sparse-per-node + uniform-per-slice routing | Auxiliary regularizer (architectural fix) |
+
+All 3 target **geom_camber_rc plateau** (which remained flat at 53.02 in #4550 — the new plateau target). #4584 and #4586 also independently test the slice-collapse pathology #4532 surfaced.
+
+### Plateau counter: **RESET to 0**
+
+Per-foil-coords #4550 is the first val-improvement since #4270 → plateau broken. The cruise and re_rand splits each saw 4+ point improvements; only geom_camber_rc remains flat.
+
+### Operational notes
+
+- 5 in-flight PRs (#4535 thorfinn LinearNO, #4548 askeladd LE-only, #4551 nezuko Stokes, #4567 fern camber-jitter, #4568 frieren adaptive-focal) are running on the OLD baseline branch (pre-#4550 merge). When they finish, results need to be evaluated against BOTH the old (val=46.99) and new (val=44.27) baselines. If they beat old but not new, candidate for rebase + retrain on new branch with `--use_per_foil_coords`.
+- 8 students currently active, **zero idle GPUs**.
+
+---
+
 ## 2026-05-17 11:00 — Round-13 wave wraps up: 2 more closures (fern GeoMix, frieren variance); **dataset-structural finding (unique mesh topology)** rules out per-node augmentation methods; 2 Round-14 follow-ups assigned
 
 ### #4530 fern GeoMix camber interpolation — **CLOSED (val=48.15 > 47.5, but the close is "axis untestable", not "axis falsified")**

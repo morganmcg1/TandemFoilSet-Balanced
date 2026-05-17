@@ -1,39 +1,64 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-17 11:00 UTC
+- **Last updated:** 2026-05-17 11:45 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Primary metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
 
-## Current baseline (QK-norm + Lion)
+## 🎯 NEW BASELINE — PR #4550 (plateau broken)
 
-**PR #4270** — QK-norm (LayerNorm on Q,K) + Lion + n_hidden=176 + bf16 + epochs=14 (edward), merged 2026-05-17 ~05:30 UTC
-- **val_avg/mae_surf_p = 46.9886** (W&B `oospddft`)
-- **test_avg/mae_surf_p = 40.4803**
-- Per-split test: single_in_dist=43.18, geom_camber_rc=52.79, geom_camber_cruise=25.83, re_rand=40.12
-- Wall: ~30.6 min / 14 ep (~131 s/ep), Peak VRAM: 44.6 GB
-- Reproduce: `cd "target/" && python train.py --n_hidden 176 --epochs 14 --use_bf16 --use_lion --lion_lr 1e-4 --lion_wd 1e-3 --use_qk_norm`
+**PR #4550** — Per-Foil Chord-Relative Coords + foil_id (edward), MERGED 2026-05-17 11:32 UTC
+- **val_avg/mae_surf_p = 44.2736** (W&B `a46jhvdo`, −2.72 vs prior #4270)
+- **test_avg/mae_surf_p = 38.1696** (−2.31 vs prior)
+- Per-split test: single_in_dist=42.74, **geom_camber_rc=53.02 (flat — new plateau target)**, geom_camber_cruise=21.50 (−4.33!), re_rand=35.42 (−4.70!)
+- Wall: ~30.4 min / 14 ep, Peak VRAM: 44.6 GB
+- Reproduce: `cd "target/" && python train.py --n_hidden 176 --epochs 14 --use_bf16 --use_lion --lion_lr 1e-4 --lion_wd 1e-3 --use_qk_norm --use_per_foil_coords`
 
-**QK-NORM IS NOW STANDARD.** All new experiments must include `--use_qk_norm` unless specifically testing its removal.
+**STANDARD STACK NOW INCLUDES:** `--use_qk_norm --use_per_foil_coords`. New experiments must include both unless specifically testing their removal.
+
+**Plateau broken:** First val improvement after 28 consecutive non-improvements since #4270 merged at 05:30. Plateau counter RESET to 0.
 
 ## Most recent research direction from human researcher team
 
-No GitHub Issues open for this track as of 2026-05-17 06:30 UTC. Proceeding from program contract.
+No GitHub Issues open for this track as of 2026-05-17 11:45 UTC. Proceeding from program contract.
+
+## Current research focus & themes (post-plateau-break)
+
+**Active plateau target:** `geom_camber_rc` (53.02 in new baseline, flat vs #4270 53.79). The per-foil-coords win came from cruise/re_rand splits which have stronger AoA variation. geom_camber_rc tests racecar-camber-OOD where the foil shapes are heavily extrapolated — this remains the hardest split.
+
+**Working mechanism axes after #4550 win:**
+1. **Per-foil local frame extensions** — translation gave us −2.72 val. Natural next axes: AoA-rotation, chord-scale (camber-relative), per-foil readout.
+2. **Slice-collapse architectural fix** — tanjiro's #4532 diagnostic exposed a real pathology in Transolver: slice_weights are softmax-per-node → all slice centroids collapse → slice_attention has nothing to specialize on. Two complementary fixes assigned: per-node RoPE before aggregation (#4584), and load-balancing aux loss (#4586).
+3. **Pair-free OOD augmentation** — #4567 camber-jitter is the only pair-free augmentation feasible given unique mesh topology per sample. Still in flight.
+4. **Physics-aware auxiliary objectives** — #4551 Stokes div(u) loss still in flight.
+
+**Closed/dead axes (cumulative since round-10):** Loss-shaping (Huber, Focal-L1 two-sided null), eta_min, skip-residual variance, LR-schedule, batch-size both sides, surf_weight, FFN width, num-layers/n-hidden trade, LayerScale γ, EMA, SWA, Post-LN, AGC, n_head=2, β1=0.95, Lion lr=2e-4, wd-only sweeps, V-norm, TTA, constant-LR, GeoMix-style mesh pairing, variance loss, zonal TE+LE loss, LLRD, 2D RoPE on slice-Q/K.
 
 ## Current in-flight experiments (8 active, zero idle)
 
-| PR | Student | Axis being tested | Status |
-|---|---|---|---|
-| **#4532** | tanjiro | **2D RoPE on mesh coords** (Su 2021 / EVA-02, d_rope=32) | WIP — Round-13 (position-encoding tier) |
-| **#4535** | thorfinn | **LinearNO drop-in linear attention** (Wu 2024 NeurIPS) | WIP — Round-13 (attention-compute tier) |
-| **#4548** | askeladd | **LE-emphasis-only loss** (w=3 on x_norm<0.1, w=1 elsewhere) | WIP — Round-14 (loss-zonal LE-only) |
-| **#4549** | alphonse | **Lion LLRD α=0.7** layer-wise lr decay | WIP — Round-14 (optimization geometry, NOW TRAINING) |
-| **#4550** | edward | **Per-foil chord-relative coords + foil_id** | WIP — Round-14 (input features) |
-| **#4551** | nezuko | **Stokes incompressibility aux** (λ=0.01, kNN div(u)) | WIP — Round-14 (physics regularizer) |
-| **#4567** | fern | **Camber-M jittering** (σ=0.5 on x[:, 15] training-only) | WIP — Round-14 (pair-free augmentation) |
-| **#4568** | frieren | **Adaptive surface focal-loss** (γ=0.5 mean-normalized) | WIP — Round-14 (error-mag-aware loss) |
+| PR | Student | Axis being tested | Round | Branch baseline |
+|---|---|---|---|---|
+| **#4535** | thorfinn | LinearNO drop-in linear attention (Wu 2024) | R-13 | old (pre-#4550) |
+| **#4548** | askeladd | LE-emphasis-only loss (w=3 on x_norm<0.1) | R-14 | old |
+| **#4551** | nezuko | Stokes incompressibility aux (λ=0.01) | R-14 | old |
+| **#4567** | fern | Camber-M jittering (σ=0.5 on x[:, 15]) | R-14 | old |
+| **#4568** | frieren | Adaptive surface focal-loss (γ=0.5 mean-norm) | R-14 | old |
+| **#4583** | edward | **Per-Foil AoA Rotation** (chord-aligned local frame) | R-15 | NEW (#4550) |
+| **#4584** | tanjiro | **Per-Node 2D RoPE on fx_mid BEFORE slice agg** (fixes #4532 collapse) | R-15 | NEW |
+| **#4586** | alphonse | **Slice-Routing Diversity Loss** (Switch-style λ-sweep {0.001, 0.01, 0.1}) | R-15 | NEW |
 
-**Zero idle students. Zero idle GPUs.** 6 of 8 in-flight are fresh Round-14 PRs. All Round-13 PRs reviewed except #4532 RoPE and #4535 LinearNO (architectural — may take longer).
+**Zero idle students. Zero idle GPUs.** 3 fresh Round-15 PRs (compound on new baseline) + 5 Round-13/14 PRs running on old baseline.
+
+### Round-14 / Round-13 PRs running on OLD baseline (post-merge reconciliation needed)
+
+The 5 R-13/R-14 in-flight PRs (#4535, #4548, #4551, #4567, #4568) all started before #4550 merged at 11:32. When they return results, evaluation needs to be against BOTH:
+- **Old baseline (#4270, val=46.99):** for the original hypothesis test as-designed
+- **New baseline (#4550, val=44.27):** to determine if the result merits merging now
+
+Decision rules for R-13/R-14 returns:
+- If val < 44.27 → MERGE (improves on new baseline, despite being on old branch — the mechanism is independent of per-foil-coords)
+- If val ∈ [44.27, 46.99] → request rebase onto advisor branch + retrain with `--use_per_foil_coords` (compounding test)
+- If val > 46.99 → CLOSE per original rubric
 
 ### Round-13 / Round-14 design logic
 
@@ -84,10 +109,21 @@ No GitHub Issues open for this track as of 2026-05-17 06:30 UTC. Proceeding from
 | **#4478** | nezuko | eta_min=0.05 rerun: val=47.92 (+0.93), test=41.68 (+1.20), all splits regress; NON-MONOTONE vs 0.10 floor | CLOSED (eta_min axis dead) |
 | **#4530** | fern | GeoMix p=0.15: val=48.15. **DATASET-STRUCTURAL FINDING:** unique mesh topology per sample (0/457 racecar_tandem pairs feasible). Rules out per-node pairing methods. | CLOSED (axis untestable as-stated) |
 | **#4510** | frieren | Variance+Mean α=0.8: val=48.81 (+1.82), geom_camber_rc=53.20 (+0.41 wrong dir). Spatial uniformity regularizer pulls capacity FROM physically-real spikes. | CLOSED (variance-loss axis dead) |
+| **#4532** | tanjiro | 2D RoPE on slice-Q/K (post-aggregation): val=53.09 (+13%). **Diagnostic: slice centroids collapse to ~same point (std=0.017 rad) → rotation is no-op.** | CLOSED — diagnostic motivates #4584 per-node RoPE pre-agg follow-up |
+| **#4549** | alphonse | Lion LLRD α=0.7: val=48.83 (+1.84), rubric falsified. LLRD is fine-tune protocol; we train from scratch → early blocks need full LR. | CLOSED (optimizer axis well-explored) |
 
-## PLATEAU PROTOCOL EXTENDED (2026-05-17 11:00 UTC)
+## PLATEAU BROKEN at 2026-05-17 11:32 UTC (PR #4550 merged, val=44.27)
 
-**28 consecutive non-improvements since #4270 merged at 05:30 UTC.** +2 closures this cycle (#4530 GeoMix, #4510 variance-loss). Round-13 wave fully reviewed (except #4532 RoPE-2D and #4535 LinearNO — architectural, may take longer wall).
+**Plateau counter RESET to 0** after #4550 edward per-foil-coords delivered the first val improvement (−2.72) since #4270. Plateau lasted 28 experiments (16 Round-10/11 closures + 12 Round-12/13 closures).
+
+**Mechanism of the breakthrough:** Two raw features appended to inputs — `x_chord` (world-x minus stagger for foil-2) and `foil_id` (0/1 indicator). Gives attention/slice-routing a per-foil translation-invariant frame. Massive gains on geom_camber_cruise (−4.33) and re_rand (−4.70). geom_camber_rc flat (53.02) — NEW plateau target.
+
+**Round-15 follow-ups** (3 PRs assigned, all compound on #4550 with `--use_per_foil_coords`):
+- #4583 edward — per-foil AoA rotation (translation + rotation completion of local-frame story)
+- #4584 tanjiro — per-node 2D RoPE BEFORE slice aggregation (fixes the slice-collapse pathology #4532 surfaced)
+- #4586 alphonse — slice-routing diversity loss (Switch-style aux, independent fix for slice-collapse)
+
+**Historical PLATEAU PROTOCOL note (2026-05-17 11:00 UTC):**
 
 **Two valuable diagnostic findings this cycle:**
 1. **Dataset-structural (fern #4530):** TandemFoilSet has unique mesh topology per sample. Rules out per-node pairing methods (MixUp, GeoMix as-stated, paired distillation, sample interpolation). The only pair-based augmentation possible without infra work is at INPUT scalar level (NACA params) — implemented in fern's follow-up #4567 camber-M jittering.
