@@ -1450,3 +1450,117 @@ Note: both #4186 and #4155 were trained on the **old pre-SF baseline** since the
 - **Per-split picture:** val_re_rand regressed +0.97% — the cross-regime split breaks first when slice budget drops. Consistent with "re_rand needs more slice-level features to cover Re-domain shift."
 - **Followup (not assigned):** slice_num=4 likely regresses further per the per-split pattern. n_head × slice_num joint sweep would be interesting but n_head was previously closed at 4 (on old baseline) — would need careful re-test.
 
+
+---
+
+## 2026-05-17 01:20 — PR #4069 — torch.compile(dynamic=True) on full stack (MERGED, new baseline)
+
+- **Branch:** `charliepai2i48h1-nezuko/torch-compile-on-sf-geglu-bf16`
+- **Hypothesis:** torch.compile with dynamic=True fuses Python dispatch overhead + element-wise ops (FiLM affine, GEGLU gate, QKV projections) on the full bf16+GEGLU+SF+slice=8 stack, giving more epochs within the 30-min cap.
+- **Results:**
+
+| Metric | Value | Baseline (PR #4107) | Δ |
+|--------|-------|---------------------|---|
+| `val_avg/mae_surf_p` (primary) | **37.31** | 43.82 | **-14.9%** |
+| `test_avg/mae_surf_p` | **32.81** | 38.05 | **-13.8%** |
+| val_single_in_dist | 37.19 | 47.39 | -21.5% |
+| val_geom_camber_rc | 50.50 | 55.44 | -8.9% |
+| val_geom_camber_cruise | 21.48 | 26.97 | -20.4% |
+| val_re_rand | 40.09 | 45.50 | -11.9% |
+| test_single_in_dist | 36.49 | 42.38 | -13.9% |
+| test_geom_camber_rc | 46.33 | 50.51 | -8.3% |
+| test_geom_camber_cruise | 17.85 | 22.71 | -21.4% |
+| test_re_rand | 30.54 | 36.58 | -16.5% |
+| sec/epoch | **42.4** | 72.3 | **-41.3%** |
+| epochs in 30-min cap | **42** | 25 | +17 |
+| peak VRAM | **18.88 GB** | 25.96 GB | -27% |
+| n_params | 736,831 | 737,491 | -660 (rounding) |
+| best epoch | 42 (last) | 25 (last) | still descending |
+
+- **Metrics path:** `models/model-charliepai2i48h1-nezuko-torch-compile-on-sf-geglu-bf16-20260516-235435/metrics.jsonl`
+- **Decision:** MERGED. New programme baseline. All 8 val+test splits improved.
+- **Analysis:** The -41.3% wall-clock saving comes primarily from fusing the GEGLU gate (two element-wise ops + matmul per block) and the FiLM affine, plus eliminating Python dispatch overhead across 5 blocks × forward/backward. bf16 already shrank kernel work, making dispatch a larger fraction of per-step time — exactly where compile wins. The -27% VRAM drop (25.96→18.88 GB) opens ~7 GB headroom for wider models or larger batches. Val still descending at 0.12 pt/epoch at terminal epoch 42 — still compute-bound.
+- **Total improvement from calibration baseline:** 143.52 → 37.31 = **-74.0%**
+
+## 2026-05-17 01:20 — PR #4068 — n_layers 5→4 on compile+SF+GEGLU+bf16+slice=8 (SENT BACK)
+
+- **Branch:** `charliepai2i48h1-edward/n-layers-4-on-bf16-geglu-sf-slice8`
+- **Hypothesis:** Removing one Transolver block saves ~18% per-step compute → more epochs in 30-min cap; with compute-bound thesis, this beats the baseline.
+- **Results (on pre-compile baseline, val=43.82):**
+
+| Metric | Value | Baseline | Δ |
+|--------|-------|----------|---|
+| val_avg/mae_surf_p | 42.18 | 43.82 | **-3.74%** |
+| test_avg/mae_surf_p | 36.52 | 38.05 | **-4.02%** |
+| sec/epoch | 59.09 | 72.3 | -18.3% |
+| epochs reached | 31 | 25 | +6 |
+| peak VRAM | 20.76 GB | 25.96 GB | -20% |
+| n_params | 600,883 | ~737K | -18.7% |
+
+- **Metrics path:** `models/model-charliepai2i48h1-edward-n-layers-4-on-bf16-geglu-sf-slice8-20260516-225101/metrics.jsonl`
+- **Decision:** SENT BACK for retest. The result is a win on the old baseline (43.82) but does not beat the new compile baseline (37.31). n_layers=4 and torch.compile are orthogonal: predicted combined sec/epoch ~35s → ~51 epochs in cap, predicted val ≤ 35. Student has been asked to rebase onto advisor branch (which now includes compile, PR #4069) and re-run.
+
+## 2026-05-17 01:20 — PR #4134 — Cosine T_max=50→25 on bf16+GEGLU baseline (CLOSED — superseded)
+
+- **Branch:** `charliepai2i48h1-thorfinn/cosine-tmax-25`
+- **Hypothesis:** With only ~23 effective epochs, cosine T_max=25 lets LR fully anneal within the training horizon.
+- **Results (against bf16+GEGLU, pre-SF baseline):**
+
+| Metric | Value | Baseline (50.57) | Δ |
+|--------|-------|------------------|---|
+| val_avg/mae_surf_p | 49.87 | 50.57 | -1.39% |
+| test_avg/mae_surf_p | 43.56 | 43.94 | -0.86% |
+
+- **Metrics path:** `models/model-cosine-tmax-25-20260516-235156/metrics.jsonl`
+- **Decision:** CLOSED. Does not beat current baseline (37.31). Hypothesis confirmed in isolation (polishing-tail insight validated), but Schedule-Free AdamW (PR #4071) supersedes cosine T_max tuning entirely.
+
+## 2026-05-17 01:20 — PR #4206 — GEGLU gate on attention to_out (CLOSED — regression)
+
+- **Branch:** `charliepai2i48h1-alphonse/geglu-on-attn-to-out`
+- **Hypothesis:** Extend GEGLU gating from FFN (TransolverBlock.mlp) to attention output projection (to_out).
+- **Results:**
+
+| Metric | Value | Baseline (43.82) | Δ |
+|--------|-------|------------------|---|
+| val_avg/mae_surf_p | 45.36 | 43.82 | +3.5% |
+| test_avg/mae_surf_p | 39.50 | 38.05 | +3.8% |
+| sec/epoch | 80.3 | 72.3 | +11% |
+| epochs reached | 23 | 25 | -2 |
+| n_params | 901,951 | 737,491 | +22.3% |
+
+- **Metrics path:** `models/model-geglu-on-attn-to-out-20260516-233517/metrics.jsonl`
+- **Decision:** CLOSED. +22% params cost ~2 epochs; only cruise OOD split improved.
+- **Key learning:** +20% params on attention projections is the budget ceiling at this 30-min cap. GEGLU wins belong to the FFN (TransolverBlock.mlp), not the attention projections. Confirmed by three data points: readout (#4168 tie), to_out (#4206), in_project_fx (#4228).
+
+## 2026-05-17 01:20 — PR #4209 — ReGLU vs GEGLU in FFN gate (CLOSED — gate-activation axis DONE)
+
+- **Branch:** `charliepai2i48h1-frieren/reglu-vs-geglu`
+- **Hypothesis:** F.relu gate (harder cutoff) may improve feature selection on heavy-tailed CFD pressure fields.
+- **Results:**
+
+| Metric | Value | Baseline (43.82) | Δ |
+|--------|-------|------------------|---|
+| val_avg/mae_surf_p | 44.65 | 43.82 | +1.9% |
+| test_avg/mae_surf_p | 38.46 | 38.05 | +1.1% |
+| sec/epoch | 71.91 | 72.3 | ≈ same |
+| epochs reached | 26 | 25 | +1 |
+
+- **Metrics path:** `models/model-charliepai2i48h1-frieren-reglu-vs-geglu-20260516-234634/metrics.jsonl`
+- **Decision:** CLOSED. Gate-activation axis fully closed: GEGLU > ReGLU (mild) > SwiGLU (clear). GELU's small negative lobe and smooth gradient outperforms ReLU's hard cutoff on OOD geometry splits.
+
+## 2026-05-17 01:20 — PR #4228 — GEGLU gate on attention in_project_fx (CLOSED — regression)
+
+- **Branch:** `charliepai2i48h1-tanjiro/geglu-on-in-project-fx`
+- **Hypothesis:** Apply GEGLU gating to the value-side attention input projection (in_project_fx) which feeds the slice aggregation.
+- **Results:**
+
+| Metric | Value | Baseline (43.82) | Δ |
+|--------|-------|------------------|---|
+| val_avg/mae_surf_p | 44.16 | 43.82 | +0.77% |
+| test_avg/mae_surf_p | 38.92 | 38.05 | +2.28% |
+| sec/epoch | 80.4 | 72.3 | +11% |
+| epochs reached | 23 | 25 | -2 |
+| n_params | 901,951 | 737,491 | +22.3% |
+
+- **Metrics path:** `models/model-charliepai2i48h1-tanjiro-geglu-on-in-project-fx-20260516-234712/metrics.jsonl`
+- **Decision:** CLOSED. Borderline regression; OOD geometry/Re splits regressed while in-dist improved. Gate learned distribution-specific filter, not robust feature selector. +11% sec/epoch cost 2 epochs of headroom.
