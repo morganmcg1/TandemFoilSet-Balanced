@@ -488,6 +488,73 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 # ---------------------------------------------------------------------------
 
 
+class Lookahead(torch.optim.Optimizer):
+    """Lookahead wrapper (Zhang et al. 2019, arXiv:1907.08610).
+
+    After every k inner optimizer steps:
+        slow <- slow + alpha * (fast - slow)
+        fast <- slow                                # sync fast to slow
+
+    The inner optimizer's momentum buffers are left untouched at sync (the
+    paper's preferred "none" strategy, which beat reset/pullback in their
+    experiments). Use `swap_to_slow()` / `swap_to_fast()` to temporarily put
+    slow weights into the model for evaluation (canonical Lookahead reporting).
+    """
+
+    def __init__(self, base_optimizer, k=5, alpha=0.5):
+        if k < 1:
+            raise ValueError(f"Invalid k: {k}")
+        if not 0.0 < alpha <= 1.0:
+            raise ValueError(f"Invalid alpha: {alpha}")
+        self.base_optimizer = base_optimizer
+        self.k = k
+        self.alpha = alpha
+        self._la_step = 0
+
+        # super().__init__() sets up _optimizer_step_*_hooks and other internals.
+        # Pass the base optimizer's params just to satisfy the non-empty check;
+        # immediately alias param_groups back to base so scheduler lr updates
+        # propagate to the inner optimizer through shared dict references.
+        params = [p for g in base_optimizer.param_groups for p in g["params"]]
+        super().__init__(params, base_optimizer.defaults)
+        self.param_groups = base_optimizer.param_groups
+
+        for group in self.param_groups:
+            for p in group["params"]:
+                self.state[p]["slow"] = p.data.clone().detach()
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = self.base_optimizer.step(closure)
+        self._la_step += 1
+        if self._la_step % self.k == 0:
+            for group in self.param_groups:
+                for p in group["params"]:
+                    slow = self.state[p]["slow"]
+                    slow.add_(p.data - slow, alpha=self.alpha)
+                    p.data.copy_(slow)
+        return loss
+
+    def zero_grad(self, set_to_none=True):
+        self.base_optimizer.zero_grad(set_to_none=set_to_none)
+
+    @torch.no_grad()
+    def swap_to_slow(self):
+        """Cache fast weights and load slow weights into the model params."""
+        for group in self.param_groups:
+            for p in group["params"]:
+                self.state[p]["fast_cache"] = p.data.clone()
+                p.data.copy_(self.state[p]["slow"])
+
+    @torch.no_grad()
+    def swap_to_fast(self):
+        """Restore cached fast weights from `swap_to_slow()`."""
+        for group in self.param_groups:
+            for p in group["params"]:
+                p.data.copy_(self.state[p]["fast_cache"])
+                del self.state[p]["fast_cache"]
+
+
 class Lion(torch.optim.Optimizer):
     """Lion optimizer: sign-of-momentum update with decoupled weight decay.
 
@@ -566,6 +633,9 @@ class Config:
     lion_lr: float = 1e-4  # Lion lr; canonical: AdamW_lr / 3..10
     lion_wd: float = 1e-3  # Lion wd; canonical: AdamW_wd * 3..10
     use_qk_norm: bool = False  # ViT-22B-style LayerNorm(head_dim) on Q and K before SDPA
+    use_lookahead: bool = False  # Lookahead wrapper around base optimizer (Zhang et al. 2019)
+    lookahead_k: int = 3  # Lookahead inner-step interval (k=3 per advisor send-back)
+    lookahead_alpha: float = 0.5  # Lookahead slow-weight interpolation factor
 
 
 cfg = sp.parse(Config)
@@ -620,6 +690,10 @@ if cfg.use_lion:
     print(f"Optimizer: Lion (lr={cfg.lion_lr}, wd={cfg.lion_wd}, betas=(0.9, 0.99))")
 else:
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+
+if cfg.use_lookahead:
+    optimizer = Lookahead(optimizer, k=cfg.lookahead_k, alpha=cfg.lookahead_alpha)
+    print(f"Wrapper: Lookahead (k={cfg.lookahead_k}, alpha={cfg.lookahead_alpha})")
 
 def train_amp_ctx():
     """bf16 autocast for the forward pass when --use_bf16 (no GradScaler needed)."""
@@ -744,13 +818,33 @@ for epoch in range(MAX_EPOCHS):
     epoch_surf /= max(n_batches, 1)
 
     # --- Validate ---
+    # Canonical Lookahead practice: evaluate on slow weights (the paper's
+    # reported metric). The swap also makes torch.save() below capture slow
+    # weights as the checkpoint, which is what the test eval will reload.
     model.eval()
-    split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type, cfg.use_bf16)
-        for name, loader in val_loaders.items()
-    }
-    val_avg = aggregate_splits(split_metrics)
-    avg_surf_p = val_avg["avg/mae_surf_p"]
+    if cfg.use_lookahead:
+        optimizer.swap_to_slow()
+    try:
+        split_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type, cfg.use_bf16)
+            for name, loader in val_loaders.items()
+        }
+        val_avg = aggregate_splits(split_metrics)
+        avg_surf_p = val_avg["avg/mae_surf_p"]
+        tag = ""
+        if avg_surf_p < best_avg_surf_p:
+            best_avg_surf_p = avg_surf_p
+            best_metrics = {
+                "epoch": epoch + 1,
+                "val_avg/mae_surf_p": avg_surf_p,
+                "per_split": split_metrics,
+            }
+            torch.save(model.state_dict(), model_path)
+            tag = " *"
+    finally:
+        if cfg.use_lookahead:
+            optimizer.swap_to_fast()
+
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
     dt = time.time() - t0
 
@@ -774,17 +868,6 @@ for epoch in range(MAX_EPOCHS):
             log_metrics[f"qk_diag/layer_{layer_idx}/{diag_key}"] = diag_val
 
     wandb.log(log_metrics)
-
-    tag = ""
-    if avg_surf_p < best_avg_surf_p:
-        best_avg_surf_p = avg_surf_p
-        best_metrics = {
-            "epoch": epoch + 1,
-            "val_avg/mae_surf_p": avg_surf_p,
-            "per_split": split_metrics,
-        }
-        torch.save(model.state_dict(), model_path)
-        tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     print(
