@@ -2199,3 +2199,22 @@ Per-split: Arm B (sw=20) marginally helps val_single_in_dist (42.81 vs 44.73) bu
 | #4239 | fern | H98: β₁ retune at β₂=0.997 (β₁=0.85, β₁=0.95) | --beta1 (parallel to H90 at β₂=0.995; reveals β₁×β₂ interaction) |
 
 **Rationale:** H90 (askeladd) probes β₁ at old β₂=0.995 baseline. Now that β₂=0.997 is locked, β₁ optimum may shift — longer β₂ EMA means smoother momentum buffer; lower β₁ might compensate by admitting more current gradient into the sign decision.
+
+---
+
+## 2026-05-17 00:42 — PR #4196: H93 WSD schedule (nezuko) — SENT BACK, budget mismatch confound
+
+- Branch: `nezuko/hypothesis_h93_wsd_schedule`
+- Hypothesis: WSD schedule (warmup-stable-decay) outperforms cosine T_max=15 by providing more high-LR time + sharp final decay.
+
+| Arm | Schedule | val_avg | Δ vs H78 baseline | Δ vs H88 baseline |
+|-----|----------|--------:|------------------:|------------------:|
+| H78 baseline | cosine T_max=15 | 42.3048 | — | +1.09 (regress vs H88) |
+| **H88 baseline** | cosine T_max=15 | **41.2153** | −1.09 | — |
+| A | WSD 2/43/5 | **67.4008** | +25.10 | +26.19 |
+
+**Confound (student's clear analysis):** WSD 2/43/5 was designed for 50 epochs. Wall-cut at 15 epochs means the decay phase (epochs 45-49) was never reached. The schedule effectively ran as "2 ep warmup + 13 ep constant peak LR" — no closing convergence boost from the decay tail. The +25 pt regression is evidence of schedule-shape mismatch, NOT of WSD being bad.
+
+**Note: student implemented WSD scheduler in train.py with clean flags (`--scheduler wsd --warmup_epochs --stable_epochs --decay_epochs`).** This implementation is reusable for budget-aware follow-ups.
+
+**Status: SENT BACK** — Arms B (0/10/5) and C (0/5/10) requested. Both eliminate warmup (H76 closed) and fit the 15-epoch budget. Tests the actual hypothesis (does stable plateau help vs cosine?) cleanly.

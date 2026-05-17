@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-17 00:38
+- **Date**: 2026-05-17 00:45
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
 - **Round**: 5 late-phase — **NEW BASELINE: H88 Arm B β₂=0.997 (val=41.22 / test=39.53, PR #4166 MERGED).** β₂ locked at 0.997. Active fronts: efficiency (H95 bf16, H96 torch.compile), LR retune (H97 edward), β₁ sweep (H90), surf_weight (H91), seeds (H92), WSD (H93), batch_size (H94).
 - **Most recent human research directive**: None received
@@ -77,7 +77,7 @@ The H67-H73 Lion compound batch revealed:
 | **#4239** | fern | **H98: β₁ retune at β₂=0.997 (β₁=0.85, β₁=0.95)** | HIGH (complement to H90 at old β₂=0.995; reveals β₁×β₂ interaction) | ~40.5-42.5 |
 | **#4189** | askeladd | **H90: Lion β₁ sweep (β₁=0.85, β₁=0.95) at β₂=0.995** | HIGH (β₁ baseline at β₂=0.995; compare with H98 at 0.997) | ~41-44 |
 | **#4195** | frieren | **H92: Baseline variance — 2 seeds at H88 config** | HIGH (calibrate noise floor at new baseline) | ~42-44 |
-| **#4196** | nezuko | **H93: WSD schedule under Lion (vs cosine)** | MED (alternative schedule) | ~40-45 |
+| **#4196** | nezuko | **H93: WSD schedule under Lion — Arms B/C (0/10/5, 0/5/10) at β₂=0.997** | MED (Arm A negative due to schedule×budget mismatch; budget-aware reshape sent back) | ~40-45 |
 | **#4197** | tanjiro | **H94: Batch size sweep BS=8 (no-scale and LR-scale)** | HIGH (orthogonal to capacity) | ~40-44 |
 | **#4215** | alphonse | **H95: bfloat16 mixed-precision training** | HIGH (efficiency unlock) | ~40-43 + 47% more epochs |
 | **#4217** | thorfinn | **H96: torch.compile baseline acceleration** | HIGH (efficiency unlock orthogonal to bf16) | ~40-43 + ~25% more epochs |
