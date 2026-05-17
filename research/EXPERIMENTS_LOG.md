@@ -5,6 +5,61 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-17 06:00 — PR #4322 (charliepai2i48h5-askeladd): weight_decay sweep {0.001, 0.005} — MERGED (val=55.799 NEW BEST -0.58%)
+
+- branch: `askeladd/wd-sweep-new-best`
+- hypothesis: weight_decay below default 0.0001 reduces over-regularization / over-fitting on this timeout-bound stack
+
+| arm | weight_decay | val_avg | Δ vs prior best (56.124) | test_avg | best_ep | clip_frac@22 |
+|-----|-------------|---------|--------------------------|----------|---------|--------------|
+| baseline #4221 | 0.0001 | 56.124 | — | 49.696 | 22/22 | 1.000 |
+| **arm-1 WINNER** | **0.001** | **55.799** | **-0.58% ✓** | **48.846** (-1.71%) | 22/22 | 0.965 |
+| arm-2 | 0.005 | 56.080 | -0.08% ✓ | **48.496** (-2.42%) | 22/22 | 0.976 |
+
+- metric artifacts: `models/model-charliepai2i48h5-askeladd-bf16-layerscale-bs2-n10-huber010-slice32-wd001-20260517-033428/metrics.jsonl`, `models/model-charliepai2i48h5-askeladd-bf16-layerscale-bs2-n10-huber010-slice32-wd005-20260517-043848/metrics.jsonl`
+
+**Analysis and conclusions:**
+
+**Both arms beat baseline! arm-1 (wd=0.001) is the val winner (merged), arm-2 (wd=0.005) is the test winner (not merged, val criterion).**
+
+Mechanism: at timeout-bound regime with 22 epochs, model was slightly OVER-regularized at wd=0.0001 (default). Loosening wd gives model more fitting capacity → better val. arm-1 clip_frac drops from 1.000 → 0.965 at ep22 — some late-training steps are no longer clipped, consistent with the model having slightly more dynamic range.
+
+Classic regularization-generalization tradeoff: arm-2 (wd=0.005) has higher train loss (0.1098 vs 0.1064) but IMPROVES test on every single split (-3.27% single, -1.55% rc, -4.55% cruise, -2.83% re_rand). The regularization that costs a little val fit produces much better OOD generalization.
+
+**Per-split val signature**: wd=0.001 improves single (-1.18%), rc (-0.84%), re_rand (-0.27%) but worsens cruise (+0.30%). wd=0.005 improves cruise (-4.12%) and re_rand (-0.11%) but regresses rc (+2.37%). The rc/cruise tradeoff is the dominant signal — RC wants lower wd (more fitting capacity), cruise wants higher wd (more regularization).
+
+**Assigned askeladd to**: wd bracket {0.002, 0.003} (#4406) — fill the val optimum between 0.001 and 0.005.
+
+---
+
+## 2026-05-17 06:00 — PR #4298 (charliepai2i48h5-thorfinn): slice_num refinement {40, 48+T_max=24} — CLOSED (neither beats baseline; slice lever settled)
+
+- branch: `thorfinn/slice-refinement-40-48tmax24`
+- hypothesis: slice=40 fills the bracket between 32 (val winner) and 48 (test winner); T_max=24 may help slice=48
+
+| arm | (slice, T_max) | val_avg | Δ vs new best (55.799) | test_avg | best_ep |
+|-----|----------------|---------|------------------------|----------|---------|
+| baseline #4322 | (32, 20) | 55.799 | — | 48.846 | 22/22 |
+| arm-1 | (40, 20) | 57.257 | +2.60% ✗ | 49.855 | 20/21 |
+| arm-2 | (48, 24) | 56.570 | +1.38% ✗ | 48.597 | 20/20 |
+| prior slice=48 T_max=20 (#4221 arm-2) | (48, 20) | 56.555 | — | 48.578 | 20/20 |
+
+- metric artifacts: `models/model-bf16-layerscale-bs2-n10-huber010-slice40-20260517-023928/metrics.jsonl`, `models/model-bf16-layerscale-bs2-n10-huber010-slice48-tmax24-20260517-042718/metrics.jsonl`
+
+**Analysis and conclusions:**
+
+**slice=40 is the worst bracket point** — val=57.257 worse than slice=32 (55.8) AND slice=48 (56.6). No convex curve in {32,40,48}. Two distinct optima: slice=32 wins val (in-domain), slice=48 wins test (cross-domain). The midpoint inherits the worst of both because they represent genuinely different optimization regimes.
+
+**T_max=24 at slice=48 has ZERO effect**: val+0.015, test+0.019 — both within noise. At slice=48 the run completes ~20 epochs; cosine with T_max=20 already cools to floor by ep20. Stretching T_max just delays cooldown slightly. **Stop testing T_max in isolation at slice=48.**
+
+**arm-2 (slice=48) test=48.597**: strong test signal (cruise=30.806, re_rand=46.839) — replicates prior #4221 arm-2 finding. The val/test divergence is structural. val=56.570 means no merge.
+
+**slice_num lever: PERMANENTLY SETTLED**: {32 wins val, 48 wins test, 40 wins nothing}. Do not sweep further.
+
+**Assigned thorfinn to**: T_max bracket {16, 18} on new best stack (#4407) — untested schedule variant on the improved stack.
+
+---
+
 ## 2026-05-17 05:40 — PR #4331 (charliepai2i48h5-fern): fourier_base {1.5, 3.0} on new best stack — CLOSED (both regress; knob settled at 2.0 across stacks)
 
 - branch: `fern/fourier-base-sweep` (re-scoped from original {64,256} to {1.5,3.0} after fern caught my error)

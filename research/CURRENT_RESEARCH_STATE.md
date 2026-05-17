@@ -1,20 +1,21 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 05:42
+- **Date:** 2026-05-17 06:05
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
 ## Current best
 
-- **PR #4221 (thorfinn, merged):** BF16 + LayerScale γ=0.01 + n_freqs=**10** + **batch_size=2** + **Huber δ=0.10** + T_max=20 + clip=0.25 + **slice_num=32** (no EMA)
-- **val_avg/mae_surf_p: 56.124** | **test_avg/mae_surf_p: 49.696**
-- Per-split test surf_p: single=53.05, rc=62.68, cruise=33.96, re_rand=49.10
-- best_epoch=22/22 (timeout-bound, still descending; 4 extra epochs from 19% faster s/epoch)
-- **Note**: arm-2 (slice=48) test=48.578 beats both prior test baselines but was not merged (val winner criterion). Thorfinn now testing slice=40 middle bracket + slice=48+T_max=24 (#4298).
-- **Cumulative improvement: -56.4% val from round-5 start (~128.69)**
+- **PR #4322 (askeladd, MERGED THIS TURN):** BF16 + LayerScale γ=0.01 + n_freqs=10 + batch_size=2 + Huber δ=0.10 + T_max=20 + clip=0.25 + slice_num=32 + **weight_decay=0.001**
+- **val_avg/mae_surf_p: 55.799** | **test_avg/mae_surf_p: 48.846**
+- Per-split test surf_p: single=51.318, rc=62.165, cruise=33.069, re_rand=48.835
+- best_epoch=22/22 (timeout-bound)
+- **Cumulative improvement: -56.7% val from round-5 start (~128.69)**
 
-**Also strong:** PR #4146 (val=57.11): bs=2+n=8+lr=7e-4 — test=49.24, all 4 splits improve. Different stack lineage, coexisting.
-**Unmerged arm-2 of #4221** (slice=48): val=56.555, test=**48.578** — best test ever seen. Now retested in thorfinn #4298.
+**Note arm-2 (wd=0.005)**: val=56.080, test=**48.496** — best test overall; wins EVERY test split but val criterion not met.
+
+**Also strong:** PR #4146 (val=57.11): bs=2+n=8+lr=7e-4 — test=49.24. Different lineage.
+**Test winner (unmerged)**: wd=0.005 arm, test=48.496 (all 4 test splits improved vs baseline).
 
 ## Two competing lineages
 
@@ -29,7 +30,8 @@
 
 | PR | Method | val_avg | test_avg | Δ val |
 |---|---|---|---|---|
-| **#4221 (thorfinn, merged)** | **BF16 + LS + n10 + bs=2 + δ=0.10 + slice=32** | **56.124** | **49.696** | **-1.40%** |
+| **#4322 (askeladd, merged)** | **BF16 + LS + n10 + bs=2 + δ=0.10 + slice=32 + wd=0.001** | **55.799** | **48.846** | **-0.58%** |
+| #4221 (thorfinn, merged) | BF16 + LS + n10 + bs=2 + δ=0.10 + slice=32 | 56.124 | 49.696 | -1.40% |
 | #4103 (tanjiro, merged) | BF16 + LS + n10 + bs=2 + δ=0.10 | 56.92 | 49.32 | -0.33% |
 | #4146 (alphonse, merged) | BF16 + LS + n8 + bs=2 + lr=7e-4 | 57.11 | 49.24 | -1.99% |
 | #4083 (alphonse, merged) | BF16 + LS + n8 + batch_size=2 | 58.27 | 51.12 | -3.96% |
@@ -45,11 +47,11 @@
 | edward | #4367 | n_head sweep {2, 8} — per-head capacity vs diversity | wave-15 NEW (just assigned) |
 | fern | #4396 | n_freqs sweep {8, 12} on new best stack | wave-15 NEW (just assigned) |
 | tanjiro | #4349 | 5-way compound (slice=32 + n=8 + lr=7e-4 + δ=0.10) | wave-15 active |
-| thorfinn | #4298 | slice_num refinement — slice=40 + slice=48+T_max=24 on new best | wave-15 active |
+| thorfinn | #4407 | T_max bracket {16, 18} on new best stack (wd=0.001+slice=32) | wave-15 NEW (just assigned) |
 | frieren | #4352 | surf_weight upper sweep {12, 15} on new best | wave-15 active |
-| nezuko | #4368 | clip bracket {0.18, 0.20} — fill optimum between 0.15 and 0.25 | wave-15 NEW (just assigned) |
+| nezuko | #4368 | clip bracket {0.18, 0.20} — fill optimum between 0.15 and 0.25 | wave-15 active |
 | alphonse | #4330 | slice=32 + lr=7e-4 compound on new best (4-way merge w/lineage A's lr win) | wave-15 active |
-| askeladd | #4322 | weight_decay sweep {0.001, 0.005} on new best stack (slice=32+n=10+δ=0.10) | wave-15 active |
+| askeladd | #4406 | weight_decay bracket {0.002, 0.003} — fill val optimum on new best stack | wave-15 NEW (just assigned) |
 
 ## Current research themes
 
@@ -70,6 +72,8 @@
 
 ### Critical findings accumulated this round
 
+- **weight_decay=0.001 NEW BEST** (askeladd #4322 merged): val=55.799 (-0.58%), test=48.846 (-1.71%). Default wd=0.0001 was over-regularizing. arm-2 wd=0.005 has BEST-EVER test=48.496 (wins all 4 test splits) but val criterion not met. Classic regularization tradeoff: RC wants lower wd, cruise wants higher wd. Now filling bracket {0.002, 0.003} in askeladd #4406.
+- **slice_num lever SETTLED** (thorfinn #4298 closed): {32 wins val, 48 wins test, 40 wins nothing}. slice=40 is worst of both worlds. T_max=24 at slice=48 has zero effect. DO NOT sweep slice_num further.
 - **fourier_base=2.0 PERMANENTLY SETTLED** (fern #4331 closed): 2nd independent confirmation across stacks. PR #4060 (n=8 stack) and this PR (n=10+slice=32) both find 2.0 optimal. Strong per-split signal: fb=1.5 helps cruise+re_rand, hurts single (smooth basis can't represent sharp leading-edge features). Per-domain positional encoding now a viable future direction (code change required).
 - **n_head=4 confirmed best under wall-clock budget** (edward #4289 closed): n_hidden=160/192 wall-clock-bound, not capacity-limited. Per-epoch val curves ~identical across widths. Narrower wins because more epochs in 30 min. Pivot: test n_head {2, 8} (edward #4367) — near-free lever.
 - **clip=0.15 ties current best on val** (nezuko #4293 closed): val=56.127 vs 56.124 (+0.003 = noise). Test improves -0.35%. Monotonicity confirmed: 56.13 < 56.92 < 58.05. Bracket {0.18, 0.20} → nezuko #4368. Per-split: clip tightening helps single+cruise, hurts rc — split-selective lever.
@@ -92,13 +96,13 @@
 
 ## Key insights accumulated
 
-- **Current best stack**: BF16 + LS + n10 + bs=2 + δ=0.10 + slice_num=32 (val=56.124/test=49.696)
+- **Current best stack**: BF16 + LS + n10 + bs=2 + δ=0.10 + slice_num=32 + **wd=0.001** (val=55.799/test=48.846)
 - **Alternative strong stack**: BF16 + LS + n8 + bs=2 + lr=7e-4 (val=57.11/test=49.24)
 - **δ=0.30 is optimal for lineage A** (n=8+lr=7e-4); **δ=0.10 for lineage B** (n=10)
 - **n=8 and clip=1.0 are substitutive**. Do NOT combine.
 - **bs lever exhausted** at bs=1. bs=2 is the step-count optimum.
 - **Memory headroom: 18.43 GB at bs=2** — n_hidden=192 (~41 GB) and n_hidden=256 (~74 GB) viable.
-- **T_max=20 confirmed optimal** for both lineages.
+- **T_max=20 confirmed at slice=48** (T_max=24 had zero effect). **T_max on new best stack untested** — thorfinn #4407 testing {16, 18}.
 - **lr=7e-4 is the LR ceiling for lineage A** (alphonse #4198 closed). LR window: 7e-4 < 1.2e-3 (regress +1.46%) < 9e-4 (regress +3.34%). Non-unimodal curve from γ-collapse. lr=7e-4 on the NEW best stack untested — testing now (alphonse #4330).
 - **EMA alive at bs=2** (PR #4130): noise-averaging mechanism confirmed (+4.18 EMA gap, beats no-EMA bs=2+n=10 baseline by 1.3-1.6 val). But doesn't beat current best alone. EMA × δ=0.10 compound running (fern #4288).
 - **Capacity expansion**: n_hidden={160, 192} first screen (edward #4279), then wider if it wins.
@@ -108,6 +112,8 @@
 - **clip optimum found ≈ 0.15-0.20**: nezuko #4368 bracket {0.18, 0.20} will confirm exact val optimum. If found, natural compound: clip_best + lr=7e-4 (if alphonse #4330 wins).
 - **n_head {2, 8}**: edward #4367 testing — near-free lever (no VRAM cost). If n_head=2 helps, head_dim=64 is the bottleneck; push n_head=1 next. If n_head=8 helps, pattern diversity matters.
 - **n_freqs {8, 12}**: fern #4396 testing — fourier_base settled, now n_freqs revisit on new stack.
+- **T_max bracket {16, 18}**: thorfinn #4407 testing on new best stack (wd=0.001+slice=32).
+- **wd bracket {0.002, 0.003}**: askeladd #4406 testing — find val optimum between 0.001 (val winner) and 0.005 (test winner).
 - **Per-domain positional encoding** (mixed basis: smooth for cruise, sharper for single): from fern #4331 per-split signal. Would require code change to mix multiple fourier_base values in feature dim or per-split adapter heads.
 - **n_hidden expansion revisited**: arm-1 attention scales linearly (not quadratic). Budget ~80 GB unused. With 45-min timeout OR with T_max extension, n_hidden=160 could outperform 128. Deferred until we know if wider T_max (from thorfinn #4298) helps.
 - **δ=0.05 settled**: tanjiro #4220 closed — regresses. δ=0.10 is the floor on n=10.
