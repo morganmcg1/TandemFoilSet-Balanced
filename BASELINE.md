@@ -1,6 +1,38 @@
 # Baseline — TandemFoilSet (willow-pai2i-48h-r5)
 
-## Current best — PR #4145 (T_max=24 + grad_clip=1.0 — schedule extension + clip compose, beat layer_scale BL)
+## Current best — PR #4201 (layer_scale=1e-4 + T_max=20 + lr=2e-4 + clip=1.0 — four-way composition beats BL on camber_rc)
+
+**val_avg/mae_surf_p = 53.0764** (W&B run: `d3qlknrv`, PR #4201 nezuko — Lion lr=2e-4 + n_fourier=0 + FiLM + wd=1e-3 + EMA(0.997) + Huber β=0.05 + **T_max=20** + **grad_clip=1.0** + **layer_scale_init=1e-4**; NO spec_norm)
+**test_avg/mae_surf_p = 44.8874** (same run `d3qlknrv`, clean 4-split)
+
+| Split | val mae_surf_p | test mae_surf_p |
+|-------|----------------|------------------|
+| single_in_dist | 55.86 | 46.83 |
+| **geom_camber_rc** | **65.64** | **57.22** |
+| **geom_camber_cruise** | **36.68** | **30.65** |
+| **re_rand** | **54.13** | **44.85** |
+
+**Δ vs prior best (PR #4145 val 53.81 / test 45.49): −0.73 val / −0.60 test**
+
+Win concentrated in `camber_rc` (−4.90 val / −4.90 test — the hardest OOD split). `camber_cruise` regresses slightly (+2.5 val / +2.8 test); `re_rand` neutral. All 4 changes compose additively: layer_scale=1e-4 provides smooth residual warmup; T_max=20 + lr=2e-4 + clip=1.0 interacts with clip's direction-sensitive step control. Median of 3 seeds also beats BL on both metrics (val 53.27 / test 45.35), but σ_val=1.55 is non-trivial (2/3 seeds beat BL; 1 outlier at 55.87). The layer_scale + clip interaction specifically helps the high-variance gradient regions in camber_rc.
+
+**Reproduce (PR #4201 best seed d3qlknrv):**
+```bash
+cd target/
+python train.py --agent willowpai2i48h5-nezuko --epochs 50 \
+  --wandb_group round11-layerscale-clip-lr2e4-nezuko \
+  --loss_type smooth_l1 --loss_beta 0.05 \
+  --n_fourier 0 --cosine_t_max 20 \
+  --optimizer_name lion --lr 2e-4 --weight_decay 1e-3 \
+  --ema_decay 0.997 --use_film \
+  --layer_scale_init 1e-4 \
+  --grad_clip 1.0 \
+  --wandb_name nezuko-r11-ls1e4-tmax20-lr2e4-clip1
+```
+
+---
+
+## Prior best — PR #4145 (T_max=24 + grad_clip=1.0 — schedule extension + clip compose, beat layer_scale BL)
 
 **val_avg/mae_surf_p = 53.8098** (W&B run: `hk1i5kd5`, PR #4145 alphonse — Lion lr=1.5e-4 + n_fourier=0 + FiLM + wd=1e-3 + EMA(0.997) + Huber β=0.05 + **T_max=24** + **grad_clip=1.0**; NO spec_norm; NO layer_scale)
 **test_avg/mae_surf_p = 45.4943** (same run `hk1i5kd5`, clean 4-split)
