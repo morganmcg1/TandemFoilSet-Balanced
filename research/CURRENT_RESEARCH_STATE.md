@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 05:05
+- **Date:** 2026-05-17 05:42
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
@@ -43,7 +43,7 @@
 | Student | PR | Hypothesis | Status |
 |---|---|---|---|
 | edward | #4367 | n_head sweep {2, 8} — per-head capacity vs diversity | wave-15 NEW (just assigned) |
-| fern | #4331 | fourier_base sweep {1.5, 3.0} on new best stack (corrected from {64,256}) | wave-15 active |
+| fern | #4396 | n_freqs sweep {8, 12} on new best stack | wave-15 NEW (just assigned) |
 | tanjiro | #4349 | 5-way compound (slice=32 + n=8 + lr=7e-4 + δ=0.10) | wave-15 active |
 | thorfinn | #4298 | slice_num refinement — slice=40 + slice=48+T_max=24 on new best | wave-15 active |
 | frieren | #4352 | surf_weight upper sweep {12, 15} on new best | wave-15 active |
@@ -70,6 +70,7 @@
 
 ### Critical findings accumulated this round
 
+- **fourier_base=2.0 PERMANENTLY SETTLED** (fern #4331 closed): 2nd independent confirmation across stacks. PR #4060 (n=8 stack) and this PR (n=10+slice=32) both find 2.0 optimal. Strong per-split signal: fb=1.5 helps cruise+re_rand, hurts single (smooth basis can't represent sharp leading-edge features). Per-domain positional encoding now a viable future direction (code change required).
 - **n_head=4 confirmed best under wall-clock budget** (edward #4289 closed): n_hidden=160/192 wall-clock-bound, not capacity-limited. Per-epoch val curves ~identical across widths. Narrower wins because more epochs in 30 min. Pivot: test n_head {2, 8} (edward #4367) — near-free lever.
 - **clip=0.15 ties current best on val** (nezuko #4293 closed): val=56.127 vs 56.124 (+0.003 = noise). Test improves -0.35%. Monotonicity confirmed: 56.13 < 56.92 < 58.05. Bracket {0.18, 0.20} → nezuko #4368. Per-split: clip tightening helps single+cruise, hurts rc — split-selective lever.
 - **δ=0.30 confirmed optimal for lineage A** (n=8+lr=7e-4). Settling this knob — closed edward #4199.
@@ -106,6 +107,8 @@
 
 - **clip optimum found ≈ 0.15-0.20**: nezuko #4368 bracket {0.18, 0.20} will confirm exact val optimum. If found, natural compound: clip_best + lr=7e-4 (if alphonse #4330 wins).
 - **n_head {2, 8}**: edward #4367 testing — near-free lever (no VRAM cost). If n_head=2 helps, head_dim=64 is the bottleneck; push n_head=1 next. If n_head=8 helps, pattern diversity matters.
+- **n_freqs {8, 12}**: fern #4396 testing — fourier_base settled, now n_freqs revisit on new stack.
+- **Per-domain positional encoding** (mixed basis: smooth for cruise, sharper for single): from fern #4331 per-split signal. Would require code change to mix multiple fourier_base values in feature dim or per-split adapter heads.
 - **n_hidden expansion revisited**: arm-1 attention scales linearly (not quadratic). Budget ~80 GB unused. With 45-min timeout OR with T_max extension, n_hidden=160 could outperform 128. Deferred until we know if wider T_max (from thorfinn #4298) helps.
 - **δ=0.05 settled**: tanjiro #4220 closed — regresses. δ=0.10 is the floor on n=10.
 - **LR warmup**: 5-epoch warmup on new best — untested lever.

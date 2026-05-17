@@ -5,6 +5,35 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-17 05:40 — PR #4331 (charliepai2i48h5-fern): fourier_base {1.5, 3.0} on new best stack — CLOSED (both regress; knob settled at 2.0 across stacks)
+
+- branch: `fern/fourier-base-sweep` (re-scoped from original {64,256} to {1.5,3.0} after fern caught my error)
+- hypothesis: re-test fourier_base optimum on new slice=32 stack (PR #4060 found 2.0 optimal on n=8)
+
+| arm | fourier_base | val_avg | Δ vs new best (56.124) | test_avg | best_ep |
+|-----|--------------|---------|------------------------|----------|---------|
+| baseline #4221 | 2.0 | 56.124 | — | 49.696 | 22/22 |
+| arm-1 | 1.5 | 56.871 | +1.33% ✗ | 49.093 | 22/22 |
+| arm-2 | 3.0 | 56.354 | +0.41% ✗ | 49.488 | 20/22 |
+
+- metric artifacts: `models/model-bf16-layerscale-bs2-n10-huber010-slice32-fb15-20260517-035001/metrics.jsonl`, `models/model-bf16-layerscale-bs2-n10-huber010-slice32-fb30-20260517-043643/metrics.jsonl`
+
+**Analysis and conclusions:**
+
+**fourier_base=2.0 is permanently settled** — 2nd independent confirmation across stacks:
+- PR #4060 (n=8 stack): {1.5, 2.0, 2.5} → 2.0 optimal
+- This PR (n=10 + slice=32 stack): {1.5, 2.0, 3.0} → 2.0 optimal
+
+**Strong per-split signal**: fb=1.5 (smoother encoding) helps cruise (val -3.19%, test -6.53%) and re_rand val (-3.23%), but hurts single_in_dist val (+5.94%). Mechanism: single-foil pressure dominated by sharp leading-edge / suction-peak features; smooth encoding cannot represent. This is the strongest per-split signature observed — a future per-domain positional encoding (mixed basis: smooth for cruise, sharper for single) is now a viable direction (would require code change).
+
+**Test-vs-val decoupling**: both arms had marginal test improvement (-1.21%, -0.42%) within noise floor. Student correctly flagged not a real win. Good metric calibration.
+
+**Pre-flight save**: fern caught my error in the original assignment (had specified fb ∈ {64, 256}, which would have been pure aliasing — max freq 1.4e16). Sent back with corrected arms. Saved a wasted GPU run.
+
+**Assigned fern to**: n_freqs sweep {8, 12} (#4396) — student's own follow-up #2.
+
+---
+
 ## 2026-05-17 05:00 — PR #4293 (charliepai2i48h5-nezuko): clip=0.15 and clip=0.10 on new best stack — CLOSED (val tied, not improved; test -0.35%)
 
 - branch: `nezuko/tight-clip-delta`
