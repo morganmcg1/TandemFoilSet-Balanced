@@ -463,15 +463,25 @@ optimizer = schedulefree.AdamWScheduleFree(
 print(f"Optimizer: schedulefree.AdamWScheduleFree warmup_steps={cfg.sf_warmup_steps}")
 
 # dynamic=True is required: per-batch max_n varies (pad_collate), so static-shape
-# compile would recompile every batch. Compile model (not ema_model) — training loop
-# steps through model; ema_model.update_parameters reads model.parameters() and is
-# transparent to the compile wrapper. SF state lives on the optimizer object, not
-# the model, so SF + compile compose cleanly.
+# compile would recompile every batch. Compile both the training model (used in
+# the train step) and ema_model.module (used in validation/test). AveragedModel
+# stores a deepcopied uncompiled module at construction time, so the EMA compile
+# must come after that. update_parameters iterates parameters() on each side; the
+# OptimizedModule wrapper registers _orig_mod as a child so the underlying tensors
+# are still yielded in matching order, and the in-place EMA averaging works
+# unchanged. SF state lives on the optimizer object, not the model, so SF + compile
+# compose cleanly.
 try:
     model = torch.compile(model, dynamic=True, mode="default")
     print("torch.compile: applied (dynamic=True, mode=default)")
 except Exception as e:
     print(f"torch.compile: FAILED, falling back to eager — {e}")
+
+try:
+    ema_model.module = torch.compile(ema_model.module, dynamic=True, mode="default")
+    print("torch.compile: EMA module compiled (dynamic=True, mode=default)")
+except Exception as e:
+    print(f"torch.compile: EMA module compile FAILED, staying eager — {e}")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -552,7 +562,11 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(ema_model.module.state_dict(), model_path)
+        # Save from the underlying uncompiled module so checkpoint keys remain
+        # plain (no `_orig_mod.` prefix), keeping the load path below unchanged
+        # regardless of whether the EMA module compile succeeded.
+        ema_save_target = getattr(ema_model.module, "_orig_mod", ema_model.module)
+        torch.save(ema_save_target.state_dict(), model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
