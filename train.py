@@ -561,6 +561,7 @@ class Config:
     lion_weight_decay: float = 3e-4  # Lion wd (typically 3-10x larger than AdamW; 3x of cfg.weight_decay=1e-4)
     lion_betas: str = "0.9,0.99"  # Lion (beta1, beta2) as comma-separated floats
     seed: int = 0  # RNG seed for model init + data sampler; enables paired-arm reproducibility
+    mlp_ratio: int = 2  # Transolver MLP expansion factor (MLP hidden = mlp_ratio * n_hidden)
 
 
 cfg = sp.parse(Config)
@@ -600,7 +601,7 @@ model_config = dict(
     n_layers=5,
     n_head=4,
     slice_num=64,
-    mlp_ratio=2,
+    mlp_ratio=cfg.mlp_ratio,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
     film_cond=cfg.film_cond,
