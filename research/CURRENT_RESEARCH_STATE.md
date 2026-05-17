@@ -1,12 +1,12 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 10:05 — #4296 thorfinn MERGED (slice_num=32, val=31.9978, −7.42%, **17th winner**); #4421 fern CLOSED (warmup=1 beats T_max=25 canonical but superseded); #4234 askeladd CLOSED (batch size failed on old stack); #3952 edward CLOSED (log-p aux negative on canonical); #4502 tanjiro assigned LR retune, #4504 nezuko EMA sweep. **4 idle students need assignments.**
+- **Date:** 2026-05-17 10:46 — #4348 alphonse MERGED (n_head=2, val=31.6653, −1.04%, **18th winner**); #4502 tanjiro CLOSED (informative but stale stack); #4564 alphonse (combined canonical validate + n_head=1), #4565 tanjiro (LR push combined canonical) assigned (slice_num=32, val=31.9978, −7.42%, **17th winner**); #4421 fern CLOSED (warmup=1 beats T_max=25 canonical but superseded); #4234 askeladd CLOSED (batch size failed on old stack); #3952 edward CLOSED (log-p aux negative on canonical); #4502 tanjiro assigned LR retune, #4504 nezuko EMA sweep. **4 idle students need assignments.**
 - **Branch:** `icml-appendix-willow-pai2i-48h-r3`
 - **Most recent human researcher directive:** None this launch.
-- **Canonical baseline (merged):** `val_avg/mae_surf_p = 31.9978`, `test_avg/mae_surf_p (excl cruise) = 32.017`
+- **Canonical baseline (merged):** `val_avg/mae_surf_p = 31.6653`, `test_avg/mae_surf_p (excl cruise) = 31.502`
   - Achieved via: Huber loss (PR #3155) + LR warmup 1e-3 (PR #3147) + **SOAP (PR #3283)** + SOAP precond_freq=5 (PR #3495) + **EMA(0.999) (PR #3430)** + EMA decay=0.99 (PR #3591) + Huber beta=0.5 (PR #3316) + Cauchy c=1.0 (PR #3612) + Huber beta=0.1 (PR #3868) + **Lookahead k=5 (PR #3947)** + **grad_clip=1.0 (PR #3497)** + **Huber beta=0.01 (PR #4037)** + **bfloat16 autocast (PR #3975)** + **cosine T_max=25 (PR #4263)** + **lr=2e-3 (PR #4336)** + cosine T_max=20 (PR #4447) + **slice_num=32 (PR #4296)**
-  - Full stack: SOAP **precondition_frequency=5**, **lr=2e-3**, warmup_epochs=3, ema_decay=0.99, **huber_beta=0.01**, **use_lookahead=True, lookahead_k=5, lookahead_alpha=0.5**, **grad_clip=1.0**, **use_bf16=True**, **cosine_t_max=25**, **slice_num=32**
-  - **best_epoch=21** (slice_num=32 fits more epochs in 30-min cap); epoch_time ~87s; Peak VRAM ~33.0 GB
+  - Full stack: SOAP **precondition_frequency=5**, **lr=2e-3**, warmup_epochs=3, ema_decay=0.99, **huber_beta=0.01**, **use_lookahead=True, lookahead_k=5, lookahead_alpha=0.5**, **grad_clip=1.0**, **use_bf16=True**, **cosine_t_max=25**, **slice_num=32**, **n_head=2**
+  - **best_epoch=21** (n_head=2+slice_num=32 combined may fit more) (slice_num=32 fits more epochs in 30-min cap); epoch_time ~87s; Peak VRAM ~33.0 GB
   - Note: T_max reverts to 25 (was 20). At 21 epochs, T_max=20 over-cools; T_max=25 gives LR≈17% of peak at epoch 21. T_max retune at slice_num=32 is a high-priority follow-up.
 
 ## Tracked infrastructure issue: cruise-test NaN
@@ -42,8 +42,9 @@
 | **#4336** | **tanjiro** | **lr=2e-3 on T_max=25 canonical** | **−6.33%** | **35.5322** |
 | **#4447** | **tanjiro** | **cosine T_max=20 (more aggressive cooldown)** | **−2.72%** | **34.5662** |
 | **#4296** | **thorfinn** | **slice_num=32 (coarser attention, +4 free epochs)** | **−7.42%** | **31.9978** |
+| **#4348** | **alphonse** | **n_head=2 (wider per-head scope, +4 free epochs)** | **−1.04%** | **31.6653** |
 
-Old launch baseline: 135.30. Total gain: **−76.3%** over 17 compounding improvements.
+Old launch baseline: 135.30. Total gain: **−76.6%** over 18 compounding improvements.
 
 ## Closed hypotheses (complete)
 

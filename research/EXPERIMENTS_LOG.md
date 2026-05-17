@@ -1737,3 +1737,42 @@ vs current canonical at time of merge (T_max=20, val=34.5662): **−7.42% val, �
 **Analysis:** Negative result — logp_weight=0.1 regresses val by +2.23% on canonical v15 stack. This reverses the +0.62 intra-PR gain seen on the old Cauchy c=1.0 stack. Root cause: Huber β=0.01 already provides near-L1 relative weighting on small residuals, making the log-pressure aux largely redundant. The residual effect is a regularizer that hurts in-distribution generalization (val_single_in_dist +2.48). Test_excl_cruise barely moves (−0.02). **Closes log-pressure aux loss as currently formulated on the β=0.01 canonical.** A physical-space log(|p_phys|) formulation is a different experiment.
 
 **Decision: CLOSED (negative result).**
+
+## 2026-05-17 10:46 — PR #4348 (alphonse): n_head=2 sweep {2, 8} — **MERGED (18th winner, val=31.6653, −1.04%)**
+
+- Branch: `willowpai2i48h3-alphonse/n-head-sweep`
+- W&B runs: `ui6kpvav` (n_head=2), `vw4gxgra` (n_head=8)
+- Stack: T_max=25, slice_num=64, lr=2e-3, n_head=2 (previous canonical was n_head=4)
+
+**Result (vs canonical val=31.9978, test=32.017):**
+
+| Arm | n_head | val_avg/mae_surf_p | Δ val | test_excl_cruise | Δ test | best_epoch |
+|---|---|---|---|---|---|---|
+| **Arm 1 (W)** | **2** | **31.6653** | **−1.04%** | **31.502** | **−1.61%** | **21** |
+| Arm 2 | 8 | 43.8561 | +36.9% | — | — | 13 |
+
+Per-split test (n_head=2): test_single_in_dist=31.909, test_geom_camber_rc=39.345, test_re_rand=23.253. Determinism confirmed: 3 independent runs (ui6kpvav, bdbl188b, mefeddrd) all give val=31.6653 exactly with seed=42.
+
+**Analysis:** n_head=2 reduces per-step attention compute → fits 21 epochs in 30-min cap (vs 17 at n_head=4+slice64). Two mechanisms: (a) wider per-head scope (64-dim/head vs 32-dim/head) better suited to TandemFoilSet's broad physics regions; (b) extra 4 free epochs of cosine cooldown. n_head=8 catastrophically worse (val=43.86, best_epoch=13) — clear U-shape minimum at n_head=2 for this model size. **Note:** winning run used slice_num=64; canonical branch now has BOTH n_head=2 AND slice_num=32 (unmeasured together — alphonse assigned to validate in PR #4564).
+
+**New canonical:** val=31.6653, test=31.502. **MERGED as 18th winner.**
+
+---
+
+## 2026-05-17 10:46 — PR #4502 (tanjiro): LR retune at T_max=20 {2.5e-3, 3e-3} — **CLOSED (informative, stale stack)**
+
+- Stack: T_max=20, slice_num=64, lr ∈ {2.5e-3, 3e-3}
+- Key finding: LR ceiling at T_max=20/slice64 is ABOVE 2e-3 (lr=3e-3 wins by -1.04% within-PR). Inverse of T_max=25 where ceiling was AT 2e-3. Pattern: more aggressive cooldown → higher safe peak LR.
+- Does not beat new canonical (val=34.21 vs 31.6653). **Closed (stale stack, informative signal).**
+
+---
+
+## 2026-05-17 10:50 — Assignment: #4564 alphonse canonical-validate-nhead1
+
+- Hypothesis: Validate combined n_head=2 + slice_num=32 (never measured together); probe n_head=1.
+- 2 arms: n_head=2+slice32 (confirm), n_head=1+slice32 (probe further reduction).
+
+## 2026-05-17 10:50 — Assignment: #4565 tanjiro lr-push-combined-canonical
+
+- Hypothesis: n_head=2+slice32 reduces per-step cost → more epochs → LR ceiling may be above 2e-3 on combined canonical.
+- 2 arms: lr ∈ {2.5e-3, 3e-3} at n_head=2+slice32+T_max=25.
