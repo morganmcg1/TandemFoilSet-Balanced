@@ -136,3 +136,49 @@ cd "target/" && python train.py \
 **Mechanism**: Lookahead wraps AdamW with a slow-weight trajectory (k=5 fast steps then sync with α=0.5). The Polyak slow-weight averaging smooths the fast-optimizer trajectory, providing in-training weight averaging that differs from post-hoc EMA. cruise and re_rand splits benefited most — consistent with Lookahead's variance-reduction property improving generalization across domain shifts.
 
 **Note**: this run uses β2=0.999 (default), NOT β2=0.95. The Lookahead+β2=0.95 compound is an open experiment.
+
+---
+
+## 2026-05-17 02:35 — PR #4249: Optimizer — Lookahead(k=5, α=0.5) + β2=0.95 compound on slice=8
+
+**NEW BEST BASELINE** — compound of the two biggest optimizer wins; val_geom_camber_rc hits new floor.
+
+- **val_avg/mae_surf_p:** **52.9444** (run `5qg8ex1g`)
+- **test_3split/mae_surf_p:** **52.7523** (run `5qg8ex1g`)
+- **W&B run:** `5qg8ex1g` (group: `lookahead-beta2-compound`)
+
+Per-split val (run `5qg8ex1g`, vs prior Lookahead-only baseline 54.2986):
+| Split | mae_surf_p | Δ vs Lookahead-only |
+|---|---|---|
+| val_single_in_dist | 63.8415 | −0.15% |
+| val_geom_camber_rc | **64.6348** | **−5.99% ← best ever on branch** |
+| val_geom_camber_cruise | 32.6315 | +2.12% |
+| val_re_rand | 50.6698 | −3.58% |
+| **val_avg** | **52.9444** | **−2.49%** |
+
+Per-split test (run `5qg8ex1g`):
+| Split | mae_surf_p |
+|---|---|
+| test_single_in_dist | 56.4277 |
+| test_geom_camber_rc | 58.5654 |
+| test_geom_camber_cruise | NaN (fleet-wide data/scoring.py bug) |
+| test_re_rand | 43.2638 |
+| **test_3split** | **52.7523** |
+
+- **Reproduce:**
+```bash
+cd "target/" && python train.py \
+  --grad_clip 5.0 \
+  --huber_delta 0.5 \
+  --ema_decay 0.99 \
+  --asinh_p_scale 1.0 \
+  --use_swiglu --mlp_ratio 1.333 \
+  --n_head 2 \
+  --asinh_vel_scale 0.5 \
+  --slice_num 8 \
+  --use_lookahead --lookahead_k 5 --lookahead_alpha 0.5 \
+  --adamw_beta2 0.95 \
+  --agent <student>
+```
+
+**Mechanism**: Lookahead (trajectory-averaging, k=5 α=0.5) and β2=0.95 (per-parameter step-size adaptation) operate at different abstraction levels and compound additively. val_geom_camber_rc drops to 64.63 — the lowest on this branch — because β2=0.95 specifically improves the fast-EMA adaptation critical for high-camber extrapolation, while Lookahead preserves the cruise/re_rand variance-reduction wins. Sub-additive but still significant: LLRD+Lookahead compound next priority.
