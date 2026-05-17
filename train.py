@@ -556,6 +556,8 @@ class Config:
     grad_clip_norm: float | None = None  # if set, clip gradient L2 norm before optimizer.step()
     use_schedule_free: bool = False  # AdamWScheduleFree — drop the cosine scheduler
     sf_warmup_steps: int = 500  # warmup steps for Schedule-Free (README recommends warmup)
+    sf_beta1: float = 0.9    # first-moment EMA decay for AdamWScheduleFree
+    sf_beta2: float = 0.999  # second-moment EMA decay for AdamWScheduleFree
     optimizer: str = "adamw"  # one of: "adamw", "lion"
     lion_lr: float = 1.5e-4  # Lion lr (typically 3-10x smaller than AdamW; 3x of cfg.lr=5e-4)
     lion_weight_decay: float = 3e-4  # Lion wd (typically 3-10x larger than AdamW; 3x of cfg.weight_decay=1e-4)
@@ -645,12 +647,13 @@ elif cfg.use_schedule_free:
         lr=cfg.lr,
         weight_decay=cfg.weight_decay,
         warmup_steps=cfg.sf_warmup_steps,
+        betas=(cfg.sf_beta1, cfg.sf_beta2),
     )
     scheduler = None
     t_max_eff = None
     print(
         f"Optimizer: AdamWScheduleFree(lr={cfg.lr}, weight_decay={cfg.weight_decay}, "
-        f"warmup_steps={cfg.sf_warmup_steps}); no scheduler"
+        f"warmup_steps={cfg.sf_warmup_steps}, betas=({cfg.sf_beta1}, {cfg.sf_beta2})); no scheduler"
     )
 elif cfg.optimizer == "adamw":
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
@@ -790,6 +793,8 @@ for epoch in range(MAX_EPOCHS):
     }
     if cfg.use_schedule_free:
         epoch_record["sf_warmup_steps"] = cfg.sf_warmup_steps
+        epoch_record["sf_beta1"] = cfg.sf_beta1
+        epoch_record["sf_beta2"] = cfg.sf_beta2
     if ema is not None:
         epoch_record["ema_step"] = ema.step
         epoch_record["ema_effective_decay"] = ema.effective_decay()
