@@ -99,6 +99,32 @@ class SwiGLUMLP(nn.Module):
         return self.linear_out(self.silu(self.linear_gate(x)) * self.linear_value(x))
 
 
+class FiLMGenerator(nn.Module):
+    """Feature-wise Linear Modulation generator (Perez et al. 2018, arXiv:1709.07871).
+
+    Maps a scalar condition (here: front-foil camber M, normalized to [0, 1]) to
+    per-channel (gamma, beta) for an affine modulation `h' = gamma * h + beta`.
+    Final-layer weight + bias initialized to produce gamma=1, beta=0 at start so
+    enabling FiLM does not perturb the pre-trained baseline at step 0.
+    """
+
+    def __init__(self, n_hidden: int, hidden_film: int = 32):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(1, hidden_film),
+            nn.SiLU(),
+            nn.Linear(hidden_film, 2 * n_hidden),
+        )
+        nn.init.zeros_(self.mlp[-1].weight)
+        nn.init.zeros_(self.mlp[-1].bias)
+        self.mlp[-1].bias.data[:n_hidden] = 1.0  # gamma init 1
+
+    def forward(self, m: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        out = self.mlp(m)
+        gamma, beta = out.chunk(2, dim=-1)
+        return gamma, beta
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -193,12 +219,15 @@ class Transolver(nn.Module):
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
-                 use_swiglu: bool = False):
+                 use_swiglu: bool = False,
+                 use_film: bool = False,
+                 film_hidden: int = 32):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
+        self.use_film = use_film
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -220,6 +249,10 @@ class Transolver(nn.Module):
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
+        # One shared FiLM generator across all non-final blocks (param-efficient).
+        # Built after _init_weights so the zero-init survives.
+        if self.use_film:
+            self.film_generator = FiLMGenerator(n_hidden=n_hidden, hidden_film=film_hidden)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -232,9 +265,21 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        m = data.get("m") if self.use_film else None
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
+        n_blocks = len(self.blocks)
+        gamma = beta = None
+        if self.use_film and m is not None:
+            gamma, beta = self.film_generator(m)
+            gamma = gamma.unsqueeze(1)
+            beta = beta.unsqueeze(1)
+        for i, block in enumerate(self.blocks):
             fx = block(fx)
+            # FiLM on hidden state of every non-final block. The last block's
+            # output is already projected to out_dim and is the model prediction
+            # (in normalized target space) — we do not modulate that.
+            if gamma is not None and i < n_blocks - 1:
+                fx = gamma * fx + beta
         return {"preds": fx}
 
 
@@ -336,9 +381,20 @@ class Lookahead(torch.optim.Optimizer):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
+def extract_camber_m(x: torch.Tensor) -> torch.Tensor:
+    """Front-foil camber M (in [0, 1]) from the raw (un-normalized) input.
+
+    Feature 15 of x is `int(NACA[0]) / 9.0` from data/prepare_splits.py — i.e.
+    the camber digit M divided by 9. The value is identical at every node in a
+    sample, so we read it at index 0.
+    """
+    return x[:, 0, 15:16]
+
+
 def evaluate_split(model, loader, stats, surf_weight, device,
                    asinh_p_scale: float = 0.0,
-                   asinh_vel_scale: float = 0.0) -> dict[str, float]:
+                   asinh_vel_scale: float = 0.0,
+                   use_film: bool = False) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -366,7 +422,10 @@ def evaluate_split(model, loader, stats, surf_weight, device,
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             y_target = apply_asinh_p(y_norm, asinh_p_scale)
             y_target = apply_asinh_vel(y_target, asinh_vel_scale)
-            pred = model({"x": x_norm})["preds"]
+            data_in = {"x": x_norm}
+            if use_film:
+                data_in["m"] = extract_camber_m(x)
+            pred = model(data_in)["preds"]
 
             sq_err = (pred - y_target) ** 2
             vol_mask = mask & ~is_surface
@@ -530,6 +589,8 @@ class Config:
     use_lookahead: bool = False  # wrap AdamW with Lookahead (Zhang et al. 2019)
     lookahead_k: int = 5  # Lookahead inner steps before slow-weights sync
     lookahead_alpha: float = 0.5  # Lookahead slow-weights interpolation factor
+    use_film: bool = False  # FiLM conditioning on front-foil camber M (Perez 2018)
+    film_hidden: int = 32  # FiLM generator hidden width
 
 
 cfg = sp.parse(Config)
@@ -568,6 +629,8 @@ model_config = dict(
     slice_num=cfg.slice_num,
     mlp_ratio=cfg.mlp_ratio,
     use_swiglu=cfg.use_swiglu,
+    use_film=cfg.use_film,
+    film_hidden=cfg.film_hidden,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -575,7 +638,8 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)  "
-      f"[use_swiglu={cfg.use_swiglu}, mlp_ratio={cfg.mlp_ratio}, n_head={cfg.n_head}, slice_num={cfg.slice_num}]")
+      f"[use_swiglu={cfg.use_swiglu}, mlp_ratio={cfg.mlp_ratio}, n_head={cfg.n_head}, "
+      f"slice_num={cfg.slice_num}, use_film={cfg.use_film}]")
 
 ema_model = copy.deepcopy(model)
 for p in ema_model.parameters():
@@ -655,7 +719,10 @@ for epoch in range(MAX_EPOCHS):
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         y_target = apply_asinh_p(y_norm, cfg.asinh_p_scale)
         y_target = apply_asinh_vel(y_target, cfg.asinh_vel_scale)
-        pred = model({"x": x_norm})["preds"]
+        data_in = {"x": x_norm}
+        if cfg.use_film:
+            data_in["m"] = extract_camber_m(x)
+        pred = model(data_in)["preds"]
         if cfg.debug and global_step == 0 and cfg.asinh_p_scale > 0:
             with torch.no_grad():
                 yp = y_norm[..., 2][mask]
@@ -713,7 +780,8 @@ for epoch in range(MAX_EPOCHS):
     split_metrics = {
         name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device,
                              asinh_p_scale=cfg.asinh_p_scale,
-                             asinh_vel_scale=cfg.asinh_vel_scale)
+                             asinh_vel_scale=cfg.asinh_vel_scale,
+                             use_film=cfg.use_film)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -801,7 +869,8 @@ if best_metrics:
         test_metrics = {
             name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
                                  asinh_p_scale=cfg.asinh_p_scale,
-                                 asinh_vel_scale=cfg.asinh_vel_scale)
+                                 asinh_vel_scale=cfg.asinh_vel_scale,
+                                 use_film=cfg.use_film)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
