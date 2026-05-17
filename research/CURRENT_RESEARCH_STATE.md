@@ -20,7 +20,7 @@
 
 No GitHub Issues open for this track as of 2026-05-17 06:30 UTC. Proceeding from program contract.
 
-## Current in-flight experiments (5 active + 3 idle pending reassignment)
+## Current in-flight experiments (8 active, zero idle)
 
 | PR | Student | Axis being tested | Status |
 |---|---|---|---|
@@ -29,8 +29,11 @@ No GitHub Issues open for this track as of 2026-05-17 06:30 UTC. Proceeding from
 | **#4416** | edward | LayerScale γ_init=1.0 (canonical, retest) + QK-norm + Lion | WIP — just sent back (γ=1e-4 failed at val=56.94) |
 | **#4417** | fern | SWA over ep11-14 + QK-norm + Lion — eval-time weight average | WIP — running (step 2233) |
 | **#4418** | askeladd | Lion β1=0.95 + QK-norm — longer momentum window probe | WIP — running (1 prior fail, retry at step 2461) |
+| **#4474** | alphonse | **Skip-connection scaling 1/√2 + QK-norm + Lion** — residual variance preservation (Touvron 2021) | WIP — just assigned (Round-11 #1) |
+| **#4476** | frieren | **n_layers=6 at nh=128 + Lion + QK-norm** — depth vs width retest | WIP — just assigned (Round-11 #2) |
+| **#4478** | nezuko | **Lion eta_min=1e-5 in cosine schedule + QK-norm** — LR floor for late-training exploration | WIP — just assigned (Round-11 #3) |
 
-**Idle pending reassignment:** frieren, nezuko, alphonse (3 GPUs, must assign Round-11 hypotheses now).
+**Zero idle students. Zero idle GPUs.**
 
 ## Round-10 dead-ends (cumulative, 11 closures since #4270 merged)
 
@@ -74,38 +77,33 @@ No GitHub Issues open for this track as of 2026-05-17 06:30 UTC. Proceeding from
 6. **AGC is redundant with Lion.** Lion's sign-update provides gradient-direction stability; AGC-on-top catastrophically regresses. AGC axis closed.
 7. **n_head=2 (d_head=88) doesn't help without QK-norm.** Uniform all-split regression confirms wider heads need normalization to unlock; could be retested with QK-norm but per-split showed no asymmetric signal.
 
-## Plateau-break next tier (Round-11 backlog if plateau continues)
+## Plateau-break next tier (Round-12 backlog if Round-11 wave regresses)
 
-If LayerScale, SWA, Lion β1 all regress, escalate to:
-1. **Physics-informed loss** — divergence-free penalty (∇·u=0) on velocity output. Big-swing, ICML-worthy mechanism for CFD surrogates.
-2. **n_layers=6 at nh=128 or 144** — depth vs width tradeoff in same param budget.
-3. **Gradient-based input features** — append ∂p/∂x, ∂p/∂y to input encoding (compute via local finite-diff).
-4. **Multi-scale slice_num** — different physics-attention layers at slice_num ∈ {32, 64, 128}.
-5. **Skip connection scaling 1/√2** — classical transformer trick, completely untested on this stack.
+If alphonse skip-1/√2, frieren L6, nezuko eta_min all regress (and prior 5 plateau-breaks), escalate to:
+1. **Physics-informed divergence-free loss** — penalty term λ × E[||∂Ux/∂x + ∂Uy/∂y||²] computed via finite-diff along foil contour. Big swing, ICML-worthy. Implementation needs contour-ordered surface points (verify dataset has them).
+2. **Gradient-based input features** — append ∂p/∂x, ∂p/∂y to input encoding via local finite-diff.
+3. **Multi-scale slice_num** — heterogeneous slice_num across layers (e.g., layers 0-1 → 128, layers 2-3 → 64, layer 4 → 32). Captures hierarchical physics scales.
+4. **bs=8 with VRAM headroom** — alphonse bs2 regressed; opposite direction may help (Lion needs variance reduction).
+5. **Wider heads n_head=8 with QK-norm** — d_head=22 was bad pre-QK-norm; QK-norm may stabilize narrow heads.
+6. **Constant lr after warmup** — if nezuko eta_min works, this is the natural extension (full constant LR, no cosine).
+7. **Tail-emphasizing loss** — focal-style weighting or |∂p/∂x|-region upweight (opposite of huber's tail-suppress).
 
-## Round-10 backlog (post-current-round candidates)
+## Round-11 in-flight summary (8 plateau-break axes)
 
-### Tier 1 — CLI sweeps (zero code change, on QK-norm+Lion+nh=176+ep14 baseline)
-- **surf_weight sweep** (5, 15): in flight (#4383 thorfinn)
-- **mlp_ratio=3**: in flight (#4409 frieren)
-- **loss_type=huber**: in flight (#4410 nezuko)
-- **coord_noise_std {0.005, 0.02}**: in flight (#4411 tanjiro)
-- **batch_size=2**: in flight (#4412 alphonse)
-- **mlp_ratio=2 + more epochs (ep16)**: cap-sensitive; may be too long (~35 min at 131 s/ep) but worth checking if frieren opens
+All 8 in-flight experiments target *different* mechanisms — orthogonal axes per CLAUDE.md "one hypothesis per PR":
 
-### Tier 2 — Small code edits (QK-norm+Lion baseline)
-- **Lion eta_min > 0 in cosine schedule**: eta_min=1e-5 (10% of peak_lr), addresses sign-update oscillation at lr→0. ~10 lines in scheduler init.
-- **Lion betas sweep** (unhardcode `train.py:586`): try (0.95, 0.99) per recent vision-task literature
-- **V-norm (QKV-norm complete)**: in flight (#4382 edward) — extend QK-norm to V projections
-- **SWA at end-of-training**: cheap poly-average over last 3 epochs; ~10 lines, zero extra VRAM
+| Axis | PR | Mechanism |
+|---|---|---|
+| Augmentation strength | #4411 (tanjiro) | coord_noise sweep — close-tie arm A, arm B pending |
+| Loss reweighting | #4383 (thorfinn) | surf_weight — close-tie sw=5, sw=15 pending |
+| Residual gating (learnable) | #4416 (edward) | LayerScale γ=1.0 retest |
+| Weight averaging (eval-time) | #4417 (fern) | SWA over ep11-14 |
+| Optimizer momentum window | #4418 (askeladd) | Lion β1=0.95 |
+| Residual scaling (fixed) | #4474 (alphonse) | Skip-connection 1/√2 |
+| Depth-width tradeoff | #4476 (frieren) | n_layers=6 at nh=128 |
+| LR schedule floor | #4478 (nezuko) | eta_min=1e-5 in cosine |
 
-### Tier 3 — Architecture changes
-- **n_layers=6 at nh=128 or 144** (depth vs width tradeoff, deeper+narrower → same VRAM)
-- **DataAugMix geometry** for geom_camber splits (the structural hard split)
-
-### Tier 4 — Bold swings (if plateau continues)
-- **Physics-informed loss** — divergence-free penalty (∇·u=0) on velocity
-- **Cross-attention with geometric invariance** for pressure-field decoding
+If ANY of these breaks plateau, the others may compound — Lion β1 + eta_min + SWA could all combine.
 
 ## Cross-cutting findings (apply to all in-flight PRs)
 
