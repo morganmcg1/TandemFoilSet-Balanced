@@ -565,6 +565,48 @@ class Lion(torch.optim.Optimizer):
 
 
 # ---------------------------------------------------------------------------
+# Lookahead (Zhang et al. NeurIPS 2019, "k steps forward, 1 step back")
+# ---------------------------------------------------------------------------
+
+
+class Lookahead:
+    """Wraps a base optimizer: maintains slow weights θ̄ updated every k inner
+    steps via θ̄ ← θ̄ + α·(θ − θ̄), then copies θ̄ back into the fast weights.
+    LR scheduler should track the BASE optimizer so the cosine schedule still
+    advances on every inner step.
+    """
+
+    def __init__(self, base_optimizer, k: int = 5, alpha: float = 0.5):
+        if k < 1:
+            raise ValueError(f"Invalid lookahead_k: {k}")
+        if not 0.0 < alpha <= 1.0:
+            raise ValueError(f"Invalid lookahead_alpha: {alpha}")
+        self.base_optimizer = base_optimizer
+        self.k = k
+        self.alpha = alpha
+        self.step_count = 0
+        self.param_groups = base_optimizer.param_groups
+        self.slow_weights = [
+            [p.clone().detach() for p in group["params"]]
+            for group in base_optimizer.param_groups
+        ]
+
+    @torch.no_grad()
+    def step(self, *args, **kwargs):
+        loss = self.base_optimizer.step(*args, **kwargs)
+        self.step_count += 1
+        if self.step_count % self.k == 0:
+            for group, slow_group in zip(self.base_optimizer.param_groups, self.slow_weights):
+                for p, sp in zip(group["params"], slow_group):
+                    sp.add_(p.data - sp, alpha=self.alpha)
+                    p.data.copy_(sp)
+        return loss
+
+    def zero_grad(self, *args, **kwargs):
+        self.base_optimizer.zero_grad(*args, **kwargs)
+
+
+# ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
 
@@ -601,6 +643,9 @@ class Config:
     T_max: int = 15  # CosineAnnealingLR period; default preserves prior behavior
     fourier_pe: bool = False   # Tancik Fourier PE on (x, z) coords (H106)
     fourier_pe_freqs: int = 8  # Number of log-spaced frequencies; adds 4*K features
+    lookahead: bool = False    # Wrap optimizer with Lookahead (H122)
+    lookahead_k: int = 5       # Lookahead inner-step interval (k steps forward)
+    lookahead_alpha: float = 0.5  # Lookahead slow-weight EMA coefficient
 
 
 cfg = sp.parse(Config)
@@ -659,19 +704,24 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 if cfg.optimizer == "lion":
-    optimizer = Lion(model.parameters(), lr=cfg.lr, betas=(cfg.beta1, cfg.beta2),
-                     weight_decay=cfg.weight_decay)
+    base_optimizer = Lion(model.parameters(), lr=cfg.lr, betas=(cfg.beta1, cfg.beta2),
+                          weight_decay=cfg.weight_decay)
     print(f"Optimizer: Lion (lr={cfg.lr}, betas=({cfg.beta1}, {cfg.beta2}), wd={cfg.weight_decay})")
 elif cfg.optimizer == "adamw":
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr,
-                                  betas=(cfg.beta1, cfg.beta2),
-                                  weight_decay=cfg.weight_decay)
+    base_optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr,
+                                       betas=(cfg.beta1, cfg.beta2),
+                                       weight_decay=cfg.weight_decay)
     print(f"Optimizer: AdamW (lr={cfg.lr}, betas=({cfg.beta1}, {cfg.beta2}), wd={cfg.weight_decay})")
 else:
     raise ValueError(f"Unknown optimizer: {cfg.optimizer!r} (expected 'adamw' or 'lion')")
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer, T_max=cfg.T_max, eta_min=cfg.eta_min
+    base_optimizer, T_max=cfg.T_max, eta_min=cfg.eta_min
 )
+if cfg.lookahead:
+    optimizer = Lookahead(base_optimizer, k=cfg.lookahead_k, alpha=cfg.lookahead_alpha)
+    print(f"Lookahead wrapping {cfg.optimizer} (k={cfg.lookahead_k}, alpha={cfg.lookahead_alpha}); scheduler tracks base optimizer")
+else:
+    optimizer = base_optimizer
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -793,6 +843,10 @@ for epoch in range(MAX_EPOCHS):
         "T_max": cfg.T_max,
         "fourier_pe": cfg.fourier_pe,
         "fourier_pe_freqs": fourier_pe_freqs,
+        "lookahead": cfg.lookahead,
+        "lookahead_k": cfg.lookahead_k if cfg.lookahead else 0,
+        "lookahead_alpha": cfg.lookahead_alpha if cfg.lookahead else 0.0,
+        "lr_end_of_epoch": float(base_optimizer.param_groups[0]["lr"]),
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "gate_stats": gate_stats,
