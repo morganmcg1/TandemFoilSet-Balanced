@@ -78,6 +78,46 @@ def encode_inputs(x_norm: torch.Tensor, num_freq: int) -> torch.Tensor:
 
 
 # ---------------------------------------------------------------------------
+# Exponential Moving Average of model weights (Polyak/Ruppert averaging)
+# ---------------------------------------------------------------------------
+
+
+class EMA:
+    """Exponential Moving Average of model parameters.
+
+    Maintains a shadow copy of model weights updated as:
+        shadow = decay * shadow + (1 - decay) * live
+
+    Use ``apply_shadow()`` before val/test eval, ``restore()`` after to put the
+    live training weights back. Shadow params are stored on the same device as
+    the live params; cost is ~5 MB for a 1.2M-param model.
+    """
+
+    def __init__(self, model: nn.Module, decay: float = 0.999):
+        self.decay = decay
+        self.shadow = {n: p.detach().clone() for n, p in model.named_parameters() if p.requires_grad}
+        self.backup: dict[str, torch.Tensor] = {}
+
+    @torch.no_grad()
+    def update(self, model: nn.Module) -> None:
+        for n, p in model.named_parameters():
+            if p.requires_grad:
+                self.shadow[n].mul_(self.decay).add_(p.detach(), alpha=1.0 - self.decay)
+
+    def apply_shadow(self, model: nn.Module) -> None:
+        for n, p in model.named_parameters():
+            if p.requires_grad:
+                self.backup[n] = p.data.clone()
+                p.data.copy_(self.shadow[n])
+
+    def restore(self, model: nn.Module) -> None:
+        for n, p in model.named_parameters():
+            if p.requires_grad and n in self.backup:
+                p.data.copy_(self.backup[n])
+        self.backup = {}
+
+
+# ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
 
@@ -478,6 +518,8 @@ class Config:
     mlp_ratio: int = 2  # FFN expansion ratio; SwiGLU inner = round_to_mult(hidden*mlp_ratio*2/3, 8)
     use_bf16: bool = False  # bf16 autocast (activations only; params/optimizer stay fp32)
     n_hidden: int = 160  # Transolver hidden dim (embedding/attention/FFN base width)
+    use_ema: bool = False  # Exponential Moving Average of model weights for eval (Polyak averaging)
+    ema_decay: float = 0.999  # EMA decay; 0.999 → ~84% memory after 1 epoch, ~4% by ep18
 
 
 cfg = sp.parse(Config)
@@ -527,6 +569,10 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN=SwiGLU inner={ffn_inn
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 
+ema = EMA(model, decay=cfg.ema_decay) if cfg.use_ema else None
+if ema is not None:
+    print(f"EMA enabled (decay={cfg.ema_decay})")
+
 def train_amp_ctx():
     """bf16 autocast for the forward pass when --use_bf16 (no GradScaler needed)."""
     if cfg.use_bf16 and device.type == "cuda":
@@ -574,6 +620,9 @@ wandb.define_metric("lr", step_metric="global_step")
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
 model_path = model_dir / "checkpoint.pt"
+# Companion checkpoint of *live* (non-EMA) weights at the same epoch the EMA
+# best is selected; used only for the EMA vs non-EMA sanity check at the end.
+live_at_best_path = model_dir / "live_at_best.pt"
 with open(model_dir / "config.yaml", "w") as f:
     yaml.dump(model_config, f)
 
@@ -622,6 +671,8 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=GRAD_CLIP_MAX_NORM)
         optimizer.step()
+        if ema is not None:
+            ema.update(model)
         global_step += 1
         wandb.log({
             "train/loss": loss.item(),
@@ -638,14 +689,38 @@ for epoch in range(MAX_EPOCHS):
     epoch_surf /= max(n_batches, 1)
 
     # --- Validate ---
+    # With EMA, swap to shadow weights so val drives selection on the averaged
+    # weights. The best ckpt save also happens here so we persist EMA weights.
     model.eval()
-    split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type, cfg.use_bf16)
-        for name, loader in val_loaders.items()
-    }
-    val_avg = aggregate_splits(split_metrics)
-    avg_surf_p = val_avg["avg/mae_surf_p"]
-    val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
+    if ema is not None:
+        ema.apply_shadow(model)
+    try:
+        split_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type, cfg.use_bf16)
+            for name, loader in val_loaders.items()
+        }
+        val_avg = aggregate_splits(split_metrics)
+        avg_surf_p = val_avg["avg/mae_surf_p"]
+        val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
+
+        tag = ""
+        is_best = avg_surf_p < best_avg_surf_p
+        if is_best:
+            best_avg_surf_p = avg_surf_p
+            best_metrics = {
+                "epoch": epoch + 1,
+                "val_avg/mae_surf_p": avg_surf_p,
+                "per_split": split_metrics,
+            }
+            torch.save(model.state_dict(), model_path)
+            tag = " *"
+    finally:
+        if ema is not None:
+            ema.restore(model)
+    # If this was the EMA-best epoch, also stash the *live* (non-EMA) weights
+    # so the end-of-run sanity check can compare EMA vs live at the same epoch.
+    if ema is not None and is_best:
+        torch.save(model.state_dict(), live_at_best_path)
     dt = time.time() - t0
 
     log_metrics = {
@@ -662,17 +737,6 @@ for epoch in range(MAX_EPOCHS):
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
     wandb.log(log_metrics)
-
-    tag = ""
-    if avg_surf_p < best_avg_surf_p:
-        best_avg_surf_p = avg_surf_p
-        best_metrics = {
-            "epoch": epoch + 1,
-            "val_avg/mae_surf_p": avg_surf_p,
-            "per_split": split_metrics,
-        }
-        torch.save(model.state_dict(), model_path)
-        tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     print(
@@ -724,6 +788,41 @@ if best_metrics:
             test_log[f"test_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
+
+        # --- EMA sanity check: re-evaluate val + test on the live (non-EMA)
+        # weights stashed at the EMA-best epoch so we compare apples-to-apples.
+        if ema is not None and live_at_best_path.exists():
+            print("\nSanity check: evaluating val + test on live (non-EMA) weights from EMA-best epoch...")
+            model.load_state_dict(torch.load(live_at_best_path, map_location=device, weights_only=True))
+            model.eval()
+            live_val_metrics = {
+                name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type, cfg.use_bf16)
+                for name, loader in val_loaders.items()
+            }
+            live_val_avg = aggregate_splits(live_val_metrics)
+            live_test_metrics = {
+                name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type, cfg.use_bf16)
+                for name, loader in test_loaders.items()
+            }
+            live_test_avg = aggregate_splits(live_test_metrics)
+            print(f"  LIVE  val_avg_surf_p={live_val_avg['avg/mae_surf_p']:.4f}  test_avg_surf_p={live_test_avg['avg/mae_surf_p']:.4f}")
+
+            live_log: dict[str, float] = {}
+            for split_name, m in live_val_metrics.items():
+                for k, v in m.items():
+                    live_log[f"live_val/{split_name}/{k}"] = v
+            for k, v in live_val_avg.items():
+                live_log[f"live_val_{k}"] = v
+            for split_name, m in live_test_metrics.items():
+                for k, v in m.items():
+                    live_log[f"live_test/{split_name}/{k}"] = v
+            for k, v in live_test_avg.items():
+                live_log[f"live_test_{k}"] = v
+            wandb.log(live_log)
+            wandb.summary.update(live_log)
+
+            # Reload EMA-best weights so the artifact below is consistent
+            model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
 
     save_model_artifact(
         run=run,
