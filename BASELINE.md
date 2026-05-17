@@ -1,6 +1,56 @@
 # Baseline — icml-appendix-willow-pai2i-48h-r3
 
-## Current best (as of 2026-05-17 10:46) — PR #4348: n_head=2 (attention head sweep, 18th winner)
+## Current best (as of 2026-05-17 11:42) — PR #4538: warmup_epochs=1 on slice_num=32 canonical (19th winner)
+
+Nineteen winners merged: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + SOAP optimizer (PR #3283, −31.7%) + SOAP precond_freq=5 (PR #3495, −1.78%) + EMA model weights decay=0.999 (PR #3430, −18.8%) + EMA decay=0.99 (PR #3591, −3.85%) + Huber beta=0.5 (PR #3316, −6.05%) + Cauchy loss c=1.0 (PR #3612, −3.67%) + Huber beta=0.1 (PR #3868, −3.77%) + Lookahead k=5 (PR #3947, −4.14%) + Gradient clipping max_norm=1.0 (PR #3497, −2.72%) + Huber beta=0.01 (PR #4037, −2.51%) + bfloat16 autocast (PR #3975, −9.74%) + cosine T_max=25 (PR #4263, −8.47%) + lr=2e-3 (PR #4336, −6.33%) + cosine T_max=20 (PR #4447, −2.72%) + slice_num=32 (PR #4296, −7.42%) + n_head=2 (PR #4348, −1.04%) + **warmup_epochs=1** (PR #4538, askeladd, **−2.53% val vs slice_num=32 within-PR baseline, −1.51% vs canonical 18th winner**).
+
+**Primary ranking metric (measured on warmup=1 + slice_num=32 + n_head=4 stack):**
+- `val_avg/mae_surf_p` = **31.1882** (run `e82orn7k`, askeladd variant-warmup1-slice32, best epoch 21)
+
+**Test (paper-facing, measured on warmup=1 + slice_num=32 + n_head=4 stack):**
+- `test_avg/mae_surf_p_excl_cruise` (3-split mean) = **32.0013** (−0.05% within-PR vs warmup=3 baseline arm 32.017)
+  - `test_single_in_dist/mae_surf_p` = 32.9628
+  - `test_geom_camber_rc/mae_surf_p` = 39.2793
+  - `test_re_rand/mae_surf_p` = 23.7618
+  - `test_geom_camber_cruise/mae_surf_p` = NaN (pre-existing bug)
+
+**⚠ Stack note:** This run used n_head=4 (default at time of assignment), NOT n_head=2 from PR #4348 (which merged after assignment). The measured reproduce command does NOT include `--n_head 2`. Within-PR comparison is clean and controlled (both arms on n_head=4 + slice32 + T_max=25). warmup=1 + n_head=2 + slice32 stack is UNMEASURED — expected to be ≤31.1882.
+
+**⚠ val/test note:** Within-PR test delta is −0.05% (essentially flat). Cross-stack test comparison to 18th winner's test=31.502 (on n_head=2+slice64) would show apparent regression (+1.59%), but this reflects the stack difference, not a true test regression from warmup change.
+
+**Config (post-merge, canonical reproduce):**
+- Transolver: n_hidden=128, n_layers=5, **n_head=4** (default; n_head=2 unconfirmed with this stack), slice_num=32, mlp_ratio=2, dropout=0
+- **SOAP optimizer** (precondition_frequency=5) **lr=2e-3**, **warmup_epochs=1** (was 3), LinearLR → **CosineAnnealingLR(`--cosine_t_max 25`)**, weight_decay=1e-4, batch_size=4, surf_weight=10.0
+- 50 epochs, **Huber loss (huber_beta=0.01, cauchy_c=0.0)**; `vol_loss + 10*surf_loss`
+- **EMA of model weights** (ema_decay=0.99, updated each training step)
+- **Lookahead (k=5, alpha=0.5)** wrapping SOAP
+- **Gradient clipping (max_norm=1.0)** applied before optimizer.step()
+- **bfloat16 autocast** (`--use_bf16`)
+- Best epoch: **21**, epoch_time ~87.8s, wall-clock ~30 min
+- Peak VRAM: **~33.0 GB**
+- `param count = 0.66M`
+
+**Reproduce (measured stack):**
+```bash
+cd target/ && python train.py \
+  --optimizer soap \
+  --precondition_frequency 5 \
+  --lr 2e-3 --warmup_epochs 1 \
+  --huber_beta 0.01 \
+  --surf_weight 10.0 --seed 42 \
+  --ema_decay 0.99 \
+  --use_lookahead --lookahead_k 5 --lookahead_alpha 0.5 \
+  --grad_clip 1.0 \
+  --use_bf16 \
+  --cosine_t_max 25 \
+  --slice_num 32
+```
+
+**Mechanism note:** warmup=1 gives 2 extra peak-LR epochs (epochs 2–3 train at full lr=2e-3 instead of LinearLR warmup). SOAP+Lookahead handles the aggressive early step through SOAP preconditioner normalizing the direction, while grad_clip=1.0 prevents magnitude blowup. Signal was previously validated on T_max=25/slice64 (PR #4421, −3.18%); confirmed to survive slice_num=32 architecture change with identical best_epoch=21.
+
+---
+
+## Previous best (as of 2026-05-17 10:46) — PR #4348: n_head=2 (attention head sweep, 18th winner)
 
 Eighteen winners merged: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + SOAP optimizer (PR #3283, −31.7%) + SOAP precond_freq=5 (PR #3495, −1.78%) + EMA model weights decay=0.999 (PR #3430, −18.8%) + EMA decay=0.99 (PR #3591, −3.85%) + Huber beta=0.5 (PR #3316, −6.05%) + Cauchy loss c=1.0 (PR #3612, −3.67%) + Huber beta=0.1 (PR #3868, −3.77%) + Lookahead k=5 (PR #3947, −4.14%) + Gradient clipping max_norm=1.0 (PR #3497, −2.72%) + Huber beta=0.01 (PR #4037, −2.51%) + bfloat16 autocast (PR #3975, −9.74%) + cosine T_max=25 (PR #4263, −8.47%) + lr=2e-3 (PR #4336, −6.33%) + cosine T_max=20 (PR #4447, −2.72%) + slice_num=32 (PR #4296, −7.42%) + **n_head=2** (PR #4348, alphonse, **−1.04% vs previous canonical**).
 
