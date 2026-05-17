@@ -1340,3 +1340,24 @@ sw=10 ties canonical exactly; sw=5 val +0.35% worse but test −1.92% better. St
 - **#4244** alphonse: Wider Transolver n_hidden=192 + bf16 (VRAM headroom unlocked by PR #3975)
 - **#4245** nezuko: Weight decay sweep {1e-4, 1e-3, 1e-2} on bf16 canonical (never tuned on this stack)
 - **#4247** thorfinn: Deeper Transolver n_layers=6 + bf16 (wall-clock headroom partially restored by bf16)
+
+## 2026-05-17 00:50 — PR #4200 (tanjiro): Lookahead k sweep — **CLOSED**
+
+- Branch: `willowpai2i48h3-tanjiro/lookahead-k-sweep`
+- W&B runs: `mz6djf60` (k=5), `ef0ow5ds` (k=3), `qem5ncp5` (k=10)
+
+**Result (pre-bf16 stack):**
+
+| k | val | test_excl_cruise | Δval vs k=5 |
+|---|---|---|---|
+| **5** | **45.9199** | **45.1094** | **0.0000 (exact match)** |
+| 3 | 46.3533 | 45.1813 | +0.94% |
+| 10 | 48.1639 | 47.9377 | +4.88% |
+
+k=5 reproduces canonical exactly. k=3 nearly tied (+0.94% val) — sub-resonance with precond_freq=5. k=10 catastrophic (+4.88%/+6.27%) — slow-weight latency dominates. Asymmetric penalty (k>freq much worse than k<freq) confirms slow-weight sync frequency > averaging amount. The k/precond_freq=5 resonance principle from PR #3947 holds empirically. {k, α} Lookahead hyperparameter space fully characterized; k=5/α=0.5 locked in. **CLOSED.**
+
+## 2026-05-17 00:50 — Assignment: #4263 tanjiro cosine-t-max-sweep
+
+- Branch: `willowpai2i48h3-tanjiro/cosine-t-max-sweep`
+- Hypothesis: T_max=50 (current) means at epoch 17 the LR is still at 0.61× peak — bf16's 17-epoch budget mismatches the cosine schedule, effectively training at near-constant peak LR.
+- 3 arms: T_max ∈ {50 (baseline), 17 (matched to bf16 budget), 25 (intermediate)}.

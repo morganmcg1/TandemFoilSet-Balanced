@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 (updated 00:40 — #4161/#4070/#3736 CLOSED (AGC over-tight, α=0.5 locked, sw=10 beats sw=5); #4244/#4245/#4247 assigned (wider/deeper Transolver, weight decay))
+- **Date:** 2026-05-17 (updated 00:50 — #4200 tanjiro CLOSED (k=5 confirmed optimal); #4263 tanjiro assigned (cosine T_max sweep))
 - **Branch:** `icml-appendix-willow-pai2i-48h-r3`
 - **Most recent human researcher directive:** None this launch.
 - **Canonical baseline (merged):** `val_avg/mae_surf_p = 41.4446`, `test_avg/mae_surf_p (excl cruise) = 43.2173`
@@ -63,19 +63,20 @@ Old launch baseline: 135.30. Total gain: **−69.4%** over 13 compounding improv
 | #4161 | nezuko | AGC (λ=0.01) vs global clip=1.0 | +0.68 val — λ=0.01 over-aggressive (2.5× smaller step); arms 2/3 bit-identical |
 | #4070 | alphonse | Lookahead α sweep {0.3, 0.5, 0.7} | α=0.5 optimal on new stack; α=0.3 catastrophic; {k,α} space closed |
 | #3736 | thorfinn | surf_weight {10, 5, 3} rerun | sw=10 ties canonical on val; sw=5 wins test by 1.92% but loses val — not merge-grade |
+| #4200 | tanjiro | Lookahead k sweep {3, 5, 10} | k=5 exactly reproduces canonical; k=3 nearly tied (+0.94%); k=10 catastrophic (+4.88%) — k/precond_freq=5 resonance confirmed |
 
 ## Active WIP experiments (target: val < 41.4446, full canonical stack with --use_bf16)
 
 | PR | Student | Hypothesis | Family | Status |
 |---|---|---|---|---|
 | **#3415** | **frieren** | **Log-Re sinusoidal (freqs=4) on full canonical** | **Inputs** | **WIP — training; bf16 canonical notified.** |
-| **#4200** | **tanjiro** | **Lookahead k sweep: {3, 5, 10} with α=0.5 fixed** | **Optimization** | **WIP — training; bf16 canonical notified.** |
 | **#3952** | **edward** | **Log-pressure aux loss (logp_weight=0.1)** | **Loss tuning** | **WIP — training; bf16 canonical notified.** |
 | **#4216** | **fern** | **LR sweep: {5e-4, 1e-3, 2e-3} on 12-winner canonical** | **Optimization** | **WIP — training; bf16 canonical notified.** |
-| **#4234** | **askeladd** | **Batch size sweep {4, 6, 8} on bf16 canonical** | **Throughput** | **WIP — just assigned.** |
-| **#4244** | **alphonse** | **Wider Transolver n_hidden=192 on bf16 canonical** | **Architecture** | **WIP — just assigned.** |
-| **#4245** | **nezuko** | **Weight decay sweep {1e-4, 1e-3, 1e-2} on bf16 canonical** | **Regularization** | **WIP — just assigned.** |
-| **#4247** | **thorfinn** | **Deeper Transolver n_layers=6 on bf16 canonical** | **Architecture** | **WIP — just assigned.** |
+| **#4234** | **askeladd** | **Batch size sweep {4, 6, 8} on bf16 canonical** | **Throughput** | **WIP — training.** |
+| **#4244** | **alphonse** | **Wider Transolver n_hidden=192 on bf16 canonical** | **Architecture** | **WIP — training.** |
+| **#4245** | **nezuko** | **Weight decay sweep {1e-4, 1e-3, 1e-2} on bf16 canonical** | **Regularization** | **WIP — training.** |
+| **#4247** | **thorfinn** | **Deeper Transolver n_layers=6 on bf16 canonical** | **Architecture** | **WIP — training.** |
+| **#4263** | **tanjiro** | **Cosine T_max sweep {50, 17, 25} matched to bf16 17-epoch budget** | **Optimization** | **WIP — just assigned.** |
 
 Zero idle students.
 
