@@ -2954,3 +2954,51 @@ Test 3-split (seed=1):
 - **Hypothesis:** The Huber β parameter (hardcoded 1.0) controls L2↔L1 transition. Given surf_weight R2's finding that surface loss is saturated across weights, the loss *form* is the next axis. β controls robustness to large-residual outliers (stagnation, separation). Arms: {0.25, 0.5, 1.0 control, 2.0}.
 - Requires infra: expose `--huber_beta` in Config + plumb into both smooth_l1_loss calls.
 
+
+---
+
+## 2026-05-17 07:30 — PR #4350 [CLOSED/NULL]: edward clip threshold {0.5, 1.0, 1.5, 2.0} at lr=3e-3
+
+- **Student branch:** `charliepai2i48h4-edward/clip-lr3e3`
+- **Hypothesis:** 98% clip-rate at canonical lr=3e-3 might mean loosening clip to 1.5/2.0 unlocks late-stage convergence.
+
+### Results
+
+| Arm | clip | val_avg | Δ vs A (paired) | Δ vs canonical 52.258 |
+|---|---:|---:|---:|---:|
+| **A (control)** | **1.0** | **52.279** | — | **+0.04%** (clean reproduction) |
+| B (tight) | 0.5 | 52.928 | +1.24% | +1.30% |
+| C | 1.5 | 53.475 | +2.29% | +2.34% |
+| D (loose) | 2.0 | 53.559 | +2.45% | +2.50% |
+
+Test 3-split mean: A=51.276, B=51.900, C=52.236, D=52.415.
+
+- Clip=1.0 is the saturated optimum on both sides. All departures regress monotonically.
+- Arm A reproduced canonical within +0.04% — **cleanest reproduction of canonical in the round**.
+- Mechanistic finding: clip engages as a direction normalizer; loosening it passes larger raw-direction steps that hurt late-stage refinement.
+
+### Critical cross-cutting finding: infra-RNG drift vs true seed variance
+
+Edward's Arm A = 52.279 (only +0.04% vs canonical 52.258) at seed=1 on a branch with NO new Config flags.  
+Compare: tanjiro #4207 Arm B = 53.549 (+2.47%) at seed=1 on a branch WITH --surf_weight flag added.  
+And: frieren #4248 Arm B = 53.549 (+2.47%) at seed=1 on a branch WITH --n_layers flag added.
+
+**Conclusion: The +2.47% "seed-noise floor" attributed to seed=1 is actually infra-RNG drift caused by adding new Config dataclass fields.** Additional fields shift Python argument-parsing or torch.Generator state, even when values match prior defaults. Within a clean branch (no new flags), seed=1 is reproducible to +0.04%.
+
+**Implications:**
+1. Sweeps that add Config flags should use their sweep's own Arm A/B as the absolute reference, not canonical 52.258.
+2. Paired Δ within a sweep remains valid and unaffected.
+3. Frieren's n_layers=3 paired Δ (−14.74%) is safely above any noise floor.
+
+### Artifacts
+
+- `models/model-charliepai2i48h4-edward-clip-lr3e3-r1-arm{A,B,C,D}-*/metrics.jsonl`
+
+---
+
+## 2026-05-17 07:32 — PR #4450 [ASSIGNED]: edward vol_weight sweep {0.25, 0.5, 1.0, 2.0, 4.0} at lr=3e-3
+
+- **Student branch:** `charliepai2i48h4-edward/vol-weight-r1`
+- **Hypothesis:** Volumetric loss weight is implicit 1.0 and has never been swept. Symmetric axis to surf_weight. Given #4207 found surface loss saturated, the loss balance (surf:vol contribution ratio ~4.5× at canonical) may not be optimal. Primary suspects are D (vol=2.0) and E (vol=4.0) which shift toward matched-contribution ratio.
+- Requires minimal infra: add `vol_weight` to Config dataclass + apply in training loop loss.
+

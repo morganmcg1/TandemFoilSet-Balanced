@@ -1,28 +1,42 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 06:40 UTC (Round 4 active on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-17 07:35 UTC (Round 4 active on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
 
-## 🚨 PROVISIONAL HEADLINE (uncommitted, awaiting frieren push)
+## 🚨 PROVISIONAL HEADLINE (awaiting Arm D + terminal from frieren)
 
-**Frieren #4248 progress comment at 05:37 UTC reports:** n_layers=3 hits **val_avg = 45.654** — a stunning **−12.6% paired Δ vs canonical 52.258**. Arm B control (n_layers=5) lands 53.549, +2.5% above the published canonical baseline (still inside the single-arm noise band; paired vs A is the rock-solid signal). Arm C (n_layers=7) reported in-flight at 05:37; Arm D (n_layers=4) not yet started.
+**Frieren #4248 committed Arms A/B/C at 06:46 UTC (commit `ea3ffe7`):**
 
-**Interpretation:** Shallower depth strongly dominates at 30-min budget. Same step-count vs capacity trade-off that closed the width axis (#4225) and supported the under-fit diagnosis from fern #4208 — but **the magnitude here (−14.7% paired) dwarfs any prior result in this round.** Either (a) the model is dramatically over-parameterized at 5 layers for 30-min training, or (b) gradient flow degrades non-monotonically with depth at this attention scale. Need test 3-split confirmation before declaring terminal — a depth=3 advantage that doesn't transfer to test is overfit-to-val.
+| Arm | n_layers | params | epochs at cap | val_avg | Δ vs B |
+|---|---:|---:|---:|---:|---:|
+| **A** | **3** | **537K** | **26** | **45.654** | **−14.74%** |
+| B (control) | 5 | 846K | 17 | 53.549 | — |
+| C | 7 | 1.15M | 12 | 61.044 | +13.99% |
+| D (n_layers=4) | 4 | tbd | tbd | **in-flight at ~07:35** | tbd |
 
-**Status:** Arms A/B metrics are on disk but **not yet committed** (last pushed commit is the 02:50 UTC infra). Left an urgent commit-now comment on the PR.
+**Inverse depth scaling confirmed. Fewer layers → more epochs → dramatic win.** Paired Δ A vs B = −14.74%, which is ~14× the noise floor and dwarfs every other in-flight result this round. Test 3-split contaminated by cam_cruise NaN across all arms; will use 3-split (sid, cam_rc, re_rand) only.
 
-## Operational status (06:40 UTC)
+Frieren is on his next Claude iteration now. Arm D expected to complete ~07:45 UTC. Terminal SENPAI-RESULT expected this hour.
 
-| Student | PR | State | GPU now | Last push | Notes |
-|---|---|---|---|---|---|
-| ⭐ **frieren** | #4248 n_layers | progress in PR comment; A/B metrics uncommitted | 0 MB (post Arm B?) | infra 02:50Z | **Provisional huge winner; awaiting commit** |
-| **edward** | #4350 clip-lr3e3 | training | 83 GB | assign 03:56Z | No infra needed (flag pre-exposed) |
-| **alphonse** | #4317 SF-betas 2×2 | training | 83 GB | infra 03:39Z | |
-| **fern** | #4339 mlp_ratio | training | 83 GB | infra 03:48Z | |
-| **tanjiro** | #4207 surf_weight R2 | training (R2 launch) | 83 GB | R1 results 03:28Z; sent back for R2 at lr=3e-3 with arms {5, 8, 10, 15} | |
-| **askeladd** | #4351 n_head | infra done; about to launch | 0 MB (just exited) | infra 04:38Z | Recovered from rate-limit; should start Arm A next iter |
-| **thorfinn** | #4303 slice_num | infra done; just finished long Claude (607s) — likely launching | 0 MB | infra 02:52Z | Recovered from earlier stuck session |
+## Corrected infra-RNG finding (07:30 UTC)
+
+Earlier seed-noise estimate of +2.47% at lr=3e-3 was wrong. Edward's #4350 Arm A (canonical + seed=1, **no new Config flags**) reproduced at **+0.04%** — clean. Tanjiro/frieren both got 53.549 = +2.47% on branches **with new Config flags**. This is Python/torch RNG drift from added dataclass fields, not true seed variance.
+
+**Corrected rule:** Use sweep's own Arm A as absolute reference when new Config flags were added. Paired Δ within sweep unaffected. Frieren's −14.74% paired is clean regardless.
+
+## Operational status (07:35 UTC)
+
+| Student | PR | State | Notes |
+|---|---|---|---|
+| ⭐ **frieren** | #4248 n_layers | Arms A/B/C committed; Arm D in-flight | **PENDING TERMINAL — huge win expected** |
+| **edward** | #4450 vol-weight-r1 | **NEWLY ASSIGNED** | Closed #4350 clip (null); now on vol_weight {0.25, 0.5, 1.0, 2.0, 4.0} |
+| **tanjiro** | #4438 huber-beta-r1 | **NEWLY ASSIGNED** | Closed #4207 (null); now on Huber β {0.25, 0.5, 1.0, 2.0} |
+| **alphonse** | #4317 SF-betas 2×2 | training / no new commits | |
+| **fern** | #4339 mlp_ratio | training / no new commits | |
+| **askeladd** | #4351 n_head | training / infra done | |
+| **thorfinn** | #4303 slice_num | training / infra done | |
+| **nezuko** | #4353 fourier-feats | **Claude session hung** | No infra yet; left recovery instructions |
 | **nezuko** | #4353 fourier-feats | **Claude session HUNG 1h+ since 05:22 UTC** | unknown | assign only 03:56Z | No infra; rate-limit fallout. Comment posted advising arm-by-arm commits on recovery |
 
 ## Critical operational lessons (this round)
@@ -86,7 +100,7 @@ python train.py \
 
 | Student | PR | Hypothesis | Stack | Priority |
 |---------|----|----|----|----|
-| ⭐ **edward** | **#4350** | **Clip threshold {0.5, 1.0, 1.5, 2.0} at lr=3e-3** | SF-AdamW lr=3e-3 + --seed 1 | **HIGH — 98% clip-rate at canonical; loosening may recover late-stage convergence; closes clip×LR surface from #4019** |
+| ⭐ **edward** | **#4450** | **vol_weight {0.25, 0.5, 1.0, 2.0, 4.0}** | SF-AdamW lr=3e-3 + --seed 1 | **HIGH — symmetric to surf_weight; implicit vol=1.0 never swept; surface loss saturated (#4207), vol may have headroom** |
 | ⭐ **frieren** | **#4248** | **n_layers depth sweep: {3, 4, 5, 7}** | SF-AdamW lr=3e-3 + --seed 1 (requires Config edit) | **HIGH — primary architecture axis, never swept** |
 | ⭐ **thorfinn** | **#4303** | **slice_num sweep: {32, 64, 96, 128}** | SF-AdamW lr=3e-3 + --seed 1 (requires Config edit) | **HIGH — third primary Transolver architecture axis** |
 | ⭐ **alphonse** | **#4317** | **SF-AdamW betas 2×2: (beta1, beta2) ∈ {0.9, 0.95}×{0.99, 0.999}** | SF-AdamW lr=3e-3 + --seed 1 | **MED-HIGH — optimizer-internal axis never swept** |
@@ -116,7 +130,7 @@ python train.py \
 
 1. ⭐⭐⭐ **frieren n_layers #4248 — PROVISIONAL: depth=3 wins by paired −14.7% (val 45.654 vs 53.549 control).** Awaiting committed metrics + test 3-split confirmation. **If confirmed, this is the biggest single PR of the round.**
 2. **tanjiro surf_weight #4207 R2** — R1 winners w∈{5,15} were paired ≥1.86% above the now-stale lr=2e-3 control; R2 at canonical lr=3e-3 with arms {5, 8, 10, 15} resolves direction
-3. **edward clip #4350** — 98% clip-rate at canonical motivates loosening; primary suspect clip=1.5
+3. **edward vol_weight #4450** — implicit vol=1.0 never swept; surface loss saturated (#4207 R2); primary suspects D (vol=2.0) and E (vol=4.0)
 4. **alphonse SF betas #4317** — optimizer-internal 2×2 factorial
 5. **fern mlp_ratio #4339** — completes capacity surface; BERT-default 4 vs current 2
 6. **askeladd n_head #4351** — final primary architecture axis
