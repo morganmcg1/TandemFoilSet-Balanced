@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- 2026-05-16 22:00Z — round 15 of `icml-appendix-charlie-pai2i-48h-r2`
+- 2026-05-17 02:50Z — round 15 of `icml-appendix-charlie-pai2i-48h-r2`
 - No active research directives from the human research team
-- **New baseline: val=39.8345** (PR #4079 edward T_max=40 at lr=1.7e-4 merged, −9.97% from 44.24)
+- **New baseline: val=38.6750** (PR #4243 askeladd slice_num=48 merged, −2.91% from 39.83)
 
 ## Baseline progression
 
@@ -22,8 +22,9 @@
 | #3970 (alphonse, torch.compile) | 44.2439 | −14.0% | torch.compile(mode=default, dynamic=True); 102s→54s/epoch; 18→33 epochs |
 | #3953 (frieren, LR×T_max) | 40.6869 | −8.04% | lr: 1.7e-4→2.5e-4; T_max: 30→40 — SUPERSEDED by #4079 |
 | **#4079 (edward, T_max=40)** | **39.8345** | **−9.97%** | **T_max: 30→40; lr=1.7e-4 unchanged — T_max alone drives full gain** |
+| **#4243 (askeladd, slice_num=48)** | **38.6750** | **−2.91%** | **slice_num: 64→48; coarser slicing → lower-variance gradient signal per step** |
 
-**Current HEAD (12 mechanisms):** Lion lr=**1.7e-4** + surf_weight=25 + asinh pressure-loss + EMA(0.995) + grad_clip(max_norm=1.0) + bf16 autocast + cosine **T_max=40** + pressure_weight=2.0 + torch.compile(mode=default, dynamic=True). val=39.83 at epoch 34 (timeout-bound, val still descending).
+**Current HEAD (13 mechanisms):** Lion lr=**1.7e-4** + surf_weight=25 + asinh pressure-loss + EMA(0.995) + grad_clip(max_norm=1.0) + bf16 autocast + cosine **T_max=40** + pressure_weight=2.0 + torch.compile(mode=default, dynamic=True) + **slice_num=48**. val=38.675 at epoch 35 (timeout-bound, val still descending).
 
 **Reproduce baseline:**
 ```bash
@@ -33,40 +34,40 @@ cd target && python train.py --agent <student> \
     --cosine_t_max_epochs 40 \
     --pressure_weight 2.0 \
     --ema_decay 0.995 \
-    --compile_mode default
+    --compile_mode default \
+    --slice_num 48
 ```
-(In-tree defaults: lr=1.7e-4 is CORRECT — do NOT pass --lr 2.5e-4; T_max=80→must pass 40; surf_weight=30→must pass 25; pressure_weight=1.0→must pass 2.0; ema_decay=0.999→must pass 0.995; compile_mode=none→must pass default.)
+(In-tree defaults: lr=1.7e-4 is CORRECT; T_max=80→must pass 40; surf_weight=30→must pass 25; pressure_weight=1.0→must pass 2.0; ema_decay=0.999→must pass 0.995; compile_mode=none→must pass default; **slice_num=64→must pass 48**.)
 
-**Cumulative improvement from initial baseline:** 135.02 → 39.83 = **−70.5%**
+**Cumulative improvement from initial baseline:** 135.02 → 38.675 = **−71.3%**
 
-**Compute profile:** ~54s/epoch, 33-34 epochs in 30 min, 23.84 GB VRAM peak.
+**Compute profile:** ~51.7s/epoch, 35 epochs in 30 min, 22.60 GB VRAM peak.
 
 ## Active experiments
 
 | PR | Student | Theme | Status | Baseline context |
 |----|---------|-------|--------|-----------------|
-| #4235 | alphonse | MLP-ratio sweep: 3 and 4 (vs current 2) on 12-mech stack | WIP | #4188 closed; plateau protocol → architectural angle; MLPs are the largest param group |
-| #4287 | frieren | Batch size sweep: 8 (Arm A), 12 (Arm B) vs current 4 on 12-mech stack | WIP — NEW | #4236 closed; warmup refuted; 23.84/80 GB VRAM headroom → test batch dynamics (9 vs 4-5 vs 3 steps/epoch) |
-| #4295 | fern | Per-group LR: lr_attn_mult vs lr_other_mult to rebalance MLP/attn updates | WIP — NEW | #4237 closed; depth throughput-bound; MLP/attn 5× grad-norm imbalance (PR #4154) still unaddressed → rebalance via per-group LR |
-| #4253 | edward | SGDR warm restarts: T_0=17 (Arm A), T_0=12 (Arm B) on 12-mech stack | WIP — NEW | #4181 closed (LR axis locked at 1.7e-4); all arms show val descending at timeout → test mid-training LR restart |
-| #4243 | askeladd | slice_num sweep: 48 (Arm A), 96 (Arm B) vs current 64 on 12-mech stack | WIP — NEW | #4029 closed (EMA decay 0.993/0.990 within noise); slice_num cleanest untested architectural axis |
-| #4278 | nezuko | Attention dropout: p=0.05 (Arm A), p=0.10 (Arm B) in PhysicsAttention | WIP — NEW | #4030 closed; vel-surf-weight null at lr=1.7e-4; val_geom_camber_rc=53.15 dominant gap → test attention regularization |
-| #4273 | tanjiro | n_head sweep: 2 (Arm A), 8 (Arm B) vs current 4 on 12-mech stack | WIP — NEW | #4061 closed; decoupled-heads null (shared head not bottleneck); pure n_head is uncharted (#3106 compounded 3 changes) |
-| #4230 | thorfinn | Weight decay sweep: wd=1e-4, 5e-4 bracketing 3e-4 | WIP | #3734 SwiGLU closed (17h stale, blocked); wd untouched since #3293 (Lion change) |
+| #4308 | alphonse | FFN dropout: p=0.05 (Arm A), p=0.10 (Arm B) in MLP blocks on slice=48 stack | WIP — NEW | #4235 closed; mlp-ratio throughput-bound; MLP over-driven per #4154 → regularize instead of expand |
+| #4287 | frieren | Batch size sweep: 8 (Arm A), 12 (Arm B) vs current 4 on 13-mech stack | WIP | #4236 closed; 22.60/80 GB VRAM headroom on new slice=48 baseline |
+| #4295 | fern | Per-group LR: lr_attn_mult vs lr_other_mult to rebalance MLP/attn updates | WIP | #4237 closed; depth throughput-bound; MLP/attn 5× grad-norm imbalance (PR #4154) still unaddressed |
+| #4253 | edward | SGDR warm restarts: T_0=17 (Arm A), T_0=12 (Arm B) on 13-mech stack | WIP | #4181 closed (LR axis locked at 1.7e-4); val descending at timeout in every arm |
+| #4306 | askeladd | slice_num coarser: 40 (Arm A), 32 (Arm B) — below new baseline slice=48 | WIP — NEW | #4243 MERGED (slice=48 strong win); continue coarser direction; trend clear |
+| #4278 | nezuko | Attention dropout: p=0.05 (Arm A), p=0.10 (Arm B) in PhysicsAttention | WIP | New beat target: val < 38.675 after slice=48 merge |
+| #4273 | tanjiro | n_head sweep: 2 (Arm A), 8 (Arm B) vs current 4 on 13-mech stack | WIP | New beat target: val < 38.675 after slice=48 merge |
+| #4312 | thorfinn | SWA: stochastic weight averaging vs EMA on slice=48 stack | WIP — NEW | #4230 closed; weight-decay at optimum (wd=3e-4); SWA tests alternative model averaging |
 
-## Key open questions (round 15 — new baseline 39.83 — PLATEAU PROTOCOL ACTIVE)
+## Key open questions (round 15 — new baseline 38.675, slice_num=48 — PLATEAU PROTOCOL PARTIALLY LIFTED)
 
 **Plateau signal:** 5+ recent no_improvement experiments in a row (#4188, #4154, #4159, #4167, #4078, plus partial #4030). Per CLAUDE.md plateau protocol, escalating from pure hyperparameter sweeps to architectural changes.
 
-1. **Does a mid-training LR reset (SGDR) escape the timeout-bound attractor?** (#4253 edward) — val descends in every arm at ep34; T_0=17 gives a second high-LR phase; T_0=12 gives nearly a full second cycle.
-2. **Does velocity surface down-weighting (0.7/0.8) at lr=1.7e-4 beat baseline?** (#4030 nezuko) — Arm B at lr=2.5e-4 showed test=33.72 (promising); rerun at correct LR needed.
-3. **Does weight decay re-tuning unlock more headroom?** (#4230 thorfinn) — wd untouched at 3e-4 since Lion switch in #3293.
-4. **Does MLP-ratio expansion (3, 4) beat baseline?** (#4235 alphonse) — capacity along widest parameter group; throughput penalty ~10-20% per arm.
-5. **Does larger batch_size (8, 12) unlock better convergence at fixed LR?** (#4287 frieren) — 30% VRAM utilization (23.84/80 GB headroom); batch=4 gives only ~9 steps/epoch; larger batch could improve gradient quality and potentially throughput.
-6. **Does per-group LR rebalancing (lr_attn_mult vs lr_other_mult) address the MLP/attn optimization imbalance?** (#4295 fern) — Arm A reins in MLP (lr_other×0.5), Arm B boosts attn (lr_attn×2.0); motivated by PR #4154 5× MLP grad-norm diagnostic and confirmed amplification in #4237.
-7. **Does attention dropout (p=0.05, 0.10) reduce OOD over-fitting on geom_camber_rc?** (#4278 nezuko) — dominant val error is rc-camber split (53.15); model has zero attention regularization; small-data regime (36 training geometries).
-8. **Does slice_num=48 or 96 improve on the current 64?** (#4243 askeladd) — cleanest untested architectural axis; prior #3106 was a three-way compound; pure slice sweep is new.
-9. **Does n_head=2 or 8 outperform current n_head=4?** (#4273 tanjiro) — head_dim directly controls attention subspace rank per block; pure n_head sweep is new ground (prior #3106 compounded 3 changes).
+1. **Does a mid-training LR reset (SGDR) escape the timeout-bound attractor?** (#4253 edward) — val descends in every arm at ep34; T_0=17 gives a second high-LR phase; T_0=12 gives nearly a full second cycle. Now on new slice=48 baseline.
+2. **Does SWA find flatter minima than EMA on the timeout-limited trajectory?** (#4312 thorfinn) — every arm shows val descending at cutoff; SWA averages later-epoch snapshots to find wider loss basin vs EMA's exponential tracking.
+3. **Do even coarser slices (32, 40) continue the slice_num winning trend?** (#4306 askeladd) — slice=48 strong win vs slice=64/96; val still descending at ep35; monotone coarser trend may continue.
+4. **Does FFN/MLP dropout regularize the over-driven MLP parameter group?** (#4308 alphonse) — MLP/other grad-norm ~5× attn (PR #4154); mlp-ratio expansion failed → MLP is over-absorbing, not under-parameterised; FFN dropout should correct this.
+5. **Does larger batch_size (8, 12) unlock better convergence at fixed LR?** (#4287 frieren) — 22.60/80 GB VRAM headroom on new baseline; batch=4 gives only ~9 steps/epoch.
+6. **Does per-group LR rebalancing address the MLP/attn update magnitude imbalance?** (#4295 fern) — Arm A reins in MLP (lr_other×0.5), Arm B boosts attn (lr_attn×2.0); Lion sign-update may mask the imbalance — critical test.
+7. **Does attention dropout (p=0.05, 0.10) reduce OOD over-fitting on geom_camber_rc?** (#4278 nezuko) — dominant val error is rc-camber split (51.62 on new baseline); now competing against tighter bar of 38.675.
+8. **Does n_head=2 or 8 outperform current n_head=4?** (#4273 tanjiro) — head_dim controls attention subspace rank; now on new slice=48 baseline where fewer tokens give different attention geometry.
 
 ## 12-mechanism stack: full pipeline
 
@@ -79,7 +80,8 @@ cd target && python train.py --agent <student> \
 7. **cosine T_max=40**: schedule level; calibrated to 33-epoch compile horizon; ~7% LR floor at epoch 34
 8. **pressure_weight=2.0**: loss level; up-weights pressure channel MAE 2×
 9. **EMA decay=0.995**: EMA parameter; tighter half-life
-10. **torch.compile(default, dynamic=True)**: kernel fusion; 47% faster/epoch, 33-34 epochs in 30 min
+10. **torch.compile(default, dynamic=True)**: kernel fusion; 47% faster/epoch, 33-34 epochs in 30 min (now 35 at slice=48)
+11. **slice_num=48**: PhysicsAttention routing slices reduced from 64 to 48; coarser slicing → lower-variance gradient signal per step; 4.6% faster per epoch
 
 [Note: frieren's lr=2.5e-4 from #3953 was superseded by edward's #4079 reverting to lr=1.7e-4. Net effect of both merges: T_max 30→40 only. lr=1.7e-4 restored as optimal.]
 
@@ -121,7 +123,9 @@ cd target && python train.py --agent <student> \
 | #4236 (frieren warmup-cosine) | no_improvement: Arm A (warmup=2) val=41.28 (+3.6%), stop condition triggered; Arm B not run; schedule-compression effect dominates; grad-clipping already provides stabilization; warmup direction closed (2nd failure, cf #3733) → #4287 batch-size-sweep |
 | #4061 (tanjiro decoupled-heads) | no_improvement: Arm A (2-layer p head) val=40.05 (+0.53% null) but test=35.22 (+3.92%); Arm B (3-layer) val=41.93 (+5.3%); 12-mech already neutralized shared-head bottleneck (asinh+pw=2.0) → #4273 n-head-sweep |
 | #4030 (nezuko vel-surf-weight arms C/D) | no_improvement: Arm C (0.7) val=39.49 (within noise) but test=34.46 (+1.69%); Arm D (0.8) val=40.76 (+2.3%); vel-surf-weight axis closed at lr=1.7e-4 → #4278 attention-dropout |
-| #4237 (fern n-layers-sweep) | no_improvement: A (n=6) val=42.33 (+2.50, 28ep, 66s/ep), B (n=7) val=46.99 (+7.16, 24ep, 76s/ep); throughput-bound AND no iso-epoch advantage over baseline; per-epoch convergence equal or worse at matched epoch index; MLP/attn gradient imbalance amplified by depth → #4295 per-group-lr |
+| #4237 (fern n-layers-sweep) | no_improvement: A (n=6) val=42.33 (+2.50, 28ep, 66s/ep), B (n=7) val=46.99 (+7.16, 24ep, 76s/ep); throughput-bound AND no iso-epoch advantage; MLP/attn imbalance amplified by depth → #4295 per-group-lr |
+| #4235 (alphonse mlp-ratio-sweep) | no_improvement: A (r=3) val=40.26 (+1.08%, 31ep), B (r=4) val=43.10 (+8.20%, 29ep); throughput-bound, monotone: more MLP width → slower → fewer epochs → worse val; MLP-ratio axis closed at r=2 → #4308 ffn-dropout |
+| #4230 (thorfinn weight-decay-sweep) | no_improvement: A (wd=1e-4) val=41.99 (+5.4%, stop), B (wd=5e-4) val=43.48 (+9.2%, stop); both hit stop cond (>41.0); monotone ordering confirms wd=3e-4 at optimum → #4312 swa |
 
 ## Potential next research directions
 
@@ -129,16 +133,19 @@ cd target && python train.py --agent <student> \
 - **torch.compile mode sweep** — CLOSED as #4188 (alphonse); both modes regress; default optimal
 - **LR fine-sweep at T_max=40** — CLOSED as #4181 (edward); lr=1.5e-4 null (+1.4%), lr=2.0e-4 failure (+5.1%); lr=1.7e-4 locked
 - **EMA decay re-sweep** — CLOSED as #4029 (askeladd); 0.993 within noise + test regression; decay=0.995 locked
-- **MLP-ratio sweep** — IN PROGRESS as #4235 (alphonse); mlp_ratio=3, 4 (vs current 2)
-- **Depth sweep** — CLOSED as #4237 (fern); A (n=6) val=42.33 (+2.50), B (n=7) val=46.99 (+7.16); throughput-bound AND no iso-epoch advantage; per-epoch convergence equal or slower vs n=5 baseline; depth axis closed
-- **Per-group LR scaling** — IN PROGRESS as #4295 (fern); lr_attn_mult=1.0/lr_other_mult=0.5 (Arm A) vs lr_attn_mult=2.0/lr_other_mult=1.0 (Arm B); addresses MLP/attn 5× grad-norm imbalance (PR #4154) via per-group LR in Lion
-- **Warmup-cosine** — CLOSED as #4236 (frieren); Arm A (warmup=2) val=41.28 (+3.6%), stop triggered; schedule-compression effect dominates; direction closed (2nd failure)
-- **Batch size sweep** — IN PROGRESS as #4287 (frieren); batch_size=8 and 12 vs current 4; VRAM headroom at 30% suggests potential throughput gain
-- **SGDR warm restarts** — IN PROGRESS as #4253 (edward); T_0=17 and T_0=12 — mid-training LR reset to escape timeout-bound attractor
-- **Slice_num sweep** — IN PROGRESS as #4243 (askeladd); slice_num=48, 96 (vs current 64) — cleanest untested architectural axis
-- **Velocity surface down-weighting** — CLOSED as #4030 (nezuko); null at lr=1.7e-4 (Arm C val within noise but test +1.69%); axis closed
-- **Channel-decoupled heads** — CLOSED as #4061 (tanjiro); null (12-mech already neutralized shared-head bottleneck); axis closed
-- **Attention dropout** — IN PROGRESS as #4278 (nezuko); p=0.05, 0.10 in PhysicsAttention; targets OOD gap at val_geom_camber_rc
-- **n_head sweep** — IN PROGRESS as #4273 (tanjiro); n_head=2 (head_dim=64) and n_head=8 (head_dim=16) vs current 4
-- **Weight decay sweep** — IN PROGRESS as #4230 (thorfinn); wd ∈ {1e-4, 5e-4} bracketing 3e-4
+- **MLP-ratio sweep** — CLOSED as #4235 (alphonse); both arms throughput-bound; monotone regression at all ratios; mlp_ratio=2 optimal → #4308 ffn-dropout
+- **FFN dropout** — IN PROGRESS as #4308 (alphonse); p=0.05/0.10 in Mlp blocks; regularizing over-driven MLP on slice=48 baseline
+- **Depth sweep** — CLOSED as #4237 (fern); throughput-bound AND no iso-epoch advantage; depth axis closed
+- **Per-group LR scaling** — IN PROGRESS as #4295 (fern); lr_attn×2.0 or lr_other×0.5; tests MLP/attn update-magnitude rebalancing
+- **Warmup-cosine** — CLOSED as #4236 (frieren); Arm A (warmup=2) val=41.28 (+3.6%), stop triggered; direction closed (2nd failure)
+- **Batch size sweep** — IN PROGRESS as #4287 (frieren); batch_size=8 and 12 vs current 4; 22.60/80 GB VRAM headroom on new baseline
+- **SGDR warm restarts** — IN PROGRESS as #4253 (edward); T_0=17 and T_0=12 — mid-training LR reset
+- **Slice_num sweep** — MERGED as #4243 (askeladd); slice=48 STRONG WIN (val=38.675, test=33.495); new baseline established
+- **Slice_num coarser** — IN PROGRESS as #4306 (askeladd); slice_num=40 (Arm A), 32 (Arm B) — continuing winning coarser direction
+- **Velocity surface down-weighting** — CLOSED as #4030 (nezuko); null at lr=1.7e-4; axis closed
+- **Channel-decoupled heads** — CLOSED as #4061 (tanjiro); null; axis closed
+- **Attention dropout** — IN PROGRESS as #4278 (nezuko); p=0.05, 0.10 in PhysicsAttention; now targeting val < 38.675
+- **n_head sweep** — IN PROGRESS as #4273 (tanjiro); n_head=2 (head_dim=64) and n_head=8 (head_dim=16); now targeting val < 38.675
+- **Weight decay sweep** — CLOSED as #4230 (thorfinn); both arms stop condition; wd=3e-4 at optimum → #4312 SWA
+- **SWA (stochastic weight averaging)** — IN PROGRESS as #4312 (thorfinn); SWA from epoch 10/20 replacing EMA; tests flatter-minima averaging on timeout-limited trajectory
 - **SwiGLU gating** — CLOSED as #3734 (thorfinn); blocked on implementation, 3 attempts failed

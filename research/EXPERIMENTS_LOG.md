@@ -998,3 +998,67 @@ Stop condition triggered (val > 41.0 threshold); Arm B (warmup=3) correctly not 
 
 - **Analysis:** Both arms throughput-bound (A: 28ep vs 34 baseline, B: 24ep). Crucially, the student's iso-epoch comparison showed NO per-epoch convergence advantage from depth: Arm A at epoch 28 sits at 42.33, while baseline extrapolated to ep28 is ~41.5–42. Arm B at ep24 (46.99) is clearly behind A at ep24 (45.18). So even at the same epoch index, deeper stacks do not converge faster — per-epoch convergence is equal or slower. The MLP/attn gradient imbalance from PR #4154 is amplified by adding more MLP-heavy blocks, explaining the velocity-dominant split degradation (single_in_dist +11.3%, re_rand +5.4%). Depth scaling at the current width (n_hidden=128, mlp_ratio=2) is a confirmed dead end. Both width scaling (PR #4167) and depth scaling (#4237) are now closed.
 - **Decision:** CLOSED — no_improvement, depth axis closed. Student's follow-up suggestion (per-group LR scaling to address the MLP/attn imbalance at source) is the next assignment (#4295).
+
+---
+
+## 2026-05-17 02:45 — PR #4243: slice_num=48 sweep (askeladd) — STRONG WIN → MERGED
+
+- **Student:** charliepai2i48h2-askeladd
+- **Hypothesis:** Coarser slice_num (fewer routing slices in PhysicsAttention) gives each slice more mesh points to integrate over → lower-variance gradient signal per step → better generalization. Previous sweep had slice=64 as baseline; tested 48 (coarser) and 96 (finer).
+- **Results:**
+
+| Metric | Arm A (slice=48) | Arm B (slice=96) | Baseline (#4079, slice=64) |
+|--------|------------------|-----------------|-----------------------------|
+| **val_avg/mae_surf_p** | **38.6750 (−1.16, −2.91%)** | 42.5414 (+2.71, +6.80%) | 39.8345 |
+| **test_avg/mae_surf_p** | **33.4948 (−0.39, −1.16%)** | 37.3840 (+3.50, +10.31%) | 33.8873 |
+| val_single_in_dist | 42.140 | 47.408 | 43.6797 |
+| val_geom_camber_rc | 51.618 | 54.915 | 53.1517 |
+| val_geom_camber_cruise | 22.483 | 25.673 | 22.7101 |
+| val_re_rand | 38.460 | 42.169 | 39.7965 |
+| Best epoch | 35 (timeout, descending) | 29 (timeout, descending) | 34 (timeout, descending) |
+| Sec/epoch | 51.7 | 60.7 | ~54.2 |
+| Peak VRAM | 22.60 GB | 26.34 GB | 23.84 GB |
+| n_params | 659,719 | 667,639 | ~662,359 |
+| Metric artifacts | `models/model-charliepai2i48h2-askeladd-slice-num-sweep-A-20260517-004423/metrics.jsonl` | `models/model-charliepai2i48h2-askeladd-slice-num-sweep-B-20260517-013209/metrics.jsonl` | |
+
+- **Analysis:** Strong win on all 4 val splits and all 4 test splits. Effect is non-monotone: slice=48 (coarser) wins, slice=96 (finer) strongly regresses. Mechanism: at batch=4 and ~36 training geometries, fewer slices → each slice integrates more mesh points → lower-variance per-slice gradient signal → faster + better generalization. Throughput bonus: fewer attention rows → 51.7s/ep vs 54.2s baseline, gaining 1 extra epoch in the 30-min budget. Val trajectory in Arm A: ep30→39.93, ep32→39.18, ep33→39.10, ep34→38.84, ep35→38.68 — monotone descent, optimum not reached. Follow-up: explore even coarser (slice_num=32, 40) to find the true optimum.
+- **Decision:** MERGED as new baseline. New baseline: val=38.675, test=33.495 (PR #4243). Assigned askeladd to slice-num-coarser (#4306) to continue the coarser direction.
+
+---
+
+## 2026-05-17 02:50 — PR #4235: mlp-ratio-sweep (alphonse) — no_improvement
+
+- **Student:** charliepai2i48h2-alphonse
+- **Hypothesis:** Expanding the MLP hidden ratio within TransolverBlocks (mlp_ratio=3 or 4 vs current 2) would add capacity along the dominant parameter group (MLP ~5× noisier than attn per PR #4154).
+- **Results:**
+
+| Metric | Arm A (r=3) | Arm B (r=4) | Baseline (#4079, r=2) |
+|--------|-------------|-------------|------------------------|
+| **val_avg/mae_surf_p** | 40.2640 (+1.08%) | 43.0996 (+8.20%) | 39.8345 |
+| **test_avg/mae_surf_p** | 35.0889 (+3.55%) | 36.8368 (+8.71%) | 33.8873 |
+| Best epoch | 31 | 29 | 34 |
+| Sec/epoch | 58.1 | 61.5 | ~54.2 |
+| n_params | 827K | 991K | 662K |
+| Metric artifacts | `models/model-charliepai2i48h2-alphonse-mlp-ratio-A-20260517-003406/metrics.jsonl` | `models/model-charliepai2i48h2-alphonse-mlp-ratio-B-20260517-012413/metrics.jsonl` | |
+
+- **Analysis:** Both arms throughput-bound (3 and 5 fewer epochs respectively in 30-min budget). Monotone relationship: more MLP capacity → slower per epoch → fewer epochs → strictly worse final val. Arm A's val was still descending at -0.63/ep at termination (projected to ~38.5–38.8 at ep34 equivalent) — but the new baseline (post-#4243 merge) is now 38.675, so the projections would barely compete even under ideal assumptions. Cross-experiment conclusion: the MLP/attn grad-norm imbalance does NOT imply MLP is under-parameterised; instead MLP is over-absorbing signal at the existing size, and capacity scaling amplifies that problem. MLP-ratio axis closed at mlp_ratio=2 within the 30-min budget.
+- **Decision:** CLOSED — no_improvement. MLP-ratio axis closed. Assigned alphonse to ffn-dropout (#4308) — regularizing the over-driven MLP rather than expanding it.
+
+---
+
+## 2026-05-17 02:50 — PR #4230: weight-decay-sweep (thorfinn) — no_improvement
+
+- **Student:** charliepai2i48h2-thorfinn
+- **Hypothesis:** Weight decay wd=3e-4 (set at Lion switch in PR #3293) may not be optimal for the current 12-mech stack. Bracket test: wd=1e-4 (looser) and wd=5e-4 (tighter).
+- **Results:**
+
+| Metric | Arm A (wd=1e-4) | Arm B (wd=5e-4) | Baseline (#4079, wd=3e-4) |
+|--------|-----------------|-----------------|----------------------------|
+| **val_avg/mae_surf_p** | 41.9930 (+5.4%) | 43.4835 (+9.2%) | 39.8345 |
+| **test_avg/mae_surf_p** | 35.5056 (+4.8%) | 36.7422 (+8.4%) | 33.8873 |
+| Best epoch | 32 | 27 | 34 |
+| Stop condition | TRIGGERED (>41.0) | TRIGGERED (>41.0) | — |
+| Metric artifacts | `models/model-charliepai2i48h2-thorfinn-weight-decay-A-20260517-002645/metrics.jsonl` | `models/model-charliepai2i48h2-thorfinn-weight-decay-B-20260517-012525/metrics.jsonl` | |
+
+- **Analysis:** Both arms hit the >41.0 stop threshold. Monotone ordering: wd=3e-4 (baseline) < wd=1e-4 < wd=5e-4 in terms of val error. Confirms wd=3e-4 is at or near the local minimum. Student's analysis: Lion's sign-based update applies uniform step sizes; the right wd balances regularization against effective learning and 3e-4 hits it correctly at this batch/LR/EMA configuration. Both directions (more and less regularization) regress — the wd axis is fully closed.
+- **Decision:** CLOSED — no_improvement, stop condition hit. wd=3e-4 locked. Assigned thorfinn to SWA (#4312) — testing alternative model averaging vs current EMA(0.995).
