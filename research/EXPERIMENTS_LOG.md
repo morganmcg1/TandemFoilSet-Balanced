@@ -1699,3 +1699,89 @@ Note: both #4186 and #4155 were trained on the **old pre-SF baseline** since the
 - **Metrics paths:** `models/model-charliepai2i48h1-edward-n-layers-4-on-compile-sf-geglu-bf16-20260517-004216/metrics.jsonl`, `...-seed2-20260517-015125/metrics.jsonl`
 - **Decision:** CLOSED. 3-retest history showed clean wins on prior stacks that narrowed to tie/noise as baseline improved. On the current strong baseline: val=36.89 vs 36.13 = +2.1% borderline regression, 2-seed. Each stack improvement consumed the compute headroom that n_layers=4 freed.
 - **Key finding:** n_layers=4 saves substantial compute (27-31% VRAM, 18-27% sec/epoch vs current baseline) but doesn't compound with the improved baseline. Future use: may serve as a sub-component if mlp_ratio=3/4 proves too expensive per-epoch — n_layers=4 + mlp_ratio=3 could provide equivalent quality at similar wall-clock to current baseline.
+
+## 2026-05-17 04:00 — PR #4302 — n_layers=6 depth probe (CLOSED — undertrained, regression)
+
+- **Branch:** `charliepai2i48h1-tanjiro/n-layers-6-depth-probe`
+- **Hypothesis:** One more Transolver block adds representational depth on the mlp_ratio=2 stack.
+- **Results:**
+
+| Metric | Value | Baseline (36.13) | Δ |
+|--------|-------|-----------------|---|
+| val_avg/mae_surf_p | 37.45 | 36.13 | +3.7% |
+| test_avg/mae_surf_p | 32.27 | 31.97 | +0.94% |
+| sec/epoch | 56.0s | 47.76s | +17.3% |
+| best_epoch | 32 | 37 | -5 |
+| peak VRAM | 26.62 GB | 22.61 GB | +17.7% |
+| n_params | 1,169,227 | 983,871 | +18.9% |
+
+- **Metrics path:** `models/model-n-layers-6-depth-probe-20260517-024450/metrics.jsonl`
+- **Decision:** CLOSED. Val still descending at termination (ep31→32: 37.76→37.45). Root cause: 5 fewer epochs in 30-min cap (32 vs 37). val_single_in_dist regressed +11% — the easiest split shows strongest undertraining signal. Depth axis now FULLY CLOSED: n_layers=3 capacity floor, n_layers=4 tie-within-noise, n_layers=5 optimal, n_layers=6 undertrained at current cap.
+
+## 2026-05-17 04:00 — PR #4300 — mlp_ratio=4 FFN ceiling probe (CLOSED — OOD overfitting)
+
+- **Branch:** `charliepai2i48h1-nezuko/mlp-ratio-4-ffn-ceiling`
+- **Hypothesis:** GEGLU inner_dim 256→512 tests the upper end of FFN capacity.
+- **Results:**
+
+| Metric | Value | Baseline (36.13) | Δ |
+|--------|-------|-----------------|---|
+| val_avg/mae_surf_p | 36.74 | 36.13 | +1.7% |
+| test_avg/mae_surf_p | 32.52 | 31.97 | +1.7% |
+| sec/epoch | ~58s | 47.76s | +21.5% |
+| best_epoch | 31 | 37 | -6 |
+| peak VRAM | **31.07 GB** | 22.61 GB | +37% |
+| n_params | 1,477,951 | 983,871 | +50.2% |
+
+- **Metrics path:** `models/model-mlp-ratio-4-ffn-ceiling-20260517-024316/metrics.jsonl`
+- **Decision:** CLOSED. Classic OOD overfitting signature: cruise split improved (−2.4%), rc/re_rand regressed (+2.3%/+4.0%). VRAM 31.07 GB (higher than predicted 27-29 GB — activation memory grows faster than params). FFN capacity axis FULLY CLOSED at mlp_ratio=2 (3 regresses, 4 regresses more).
+
+## 2026-05-17 04:00 — PR #4299 — mlp_ratio=3 FFN capacity (CLOSED — saturation + undertraining)
+
+- **Branch:** `charliepai2i48h1-fern/mlp-ratio-3-ffn-capacity`
+- **Hypothesis:** GEGLU inner_dim 256→384 tests next rung on FFN capacity axis.
+- **Results:**
+
+| Metric | Value | Baseline (36.13) | Δ |
+|--------|-------|-----------------|---|
+| val_avg/mae_surf_p | 36.51 | 36.13 | +1.05% |
+| test_avg/mae_surf_p | 31.94 | 31.97 | −0.09% (tie) |
+| val_geom_camber_cruise | 20.32 | 21.37 | **−4.9%** (gain) |
+| val_single_in_dist | 38.23 | 36.67 | +4.3% (regress) |
+| sec/epoch | 52.7s | 47.76s | +10.3% |
+| best_epoch | 34 | 37 | -3 |
+
+- **Metrics path:** `models/model-mlp-ratio-3-ffn-capacity-20260517-024206/metrics.jsonl`
+- **Decision:** CLOSED. Slight val regression, effective tie on test. The split-level pattern is interesting: camber-cruise gains robustly (−4.9%), while in-dist/re_rand regress. This is the data-diversity limit of 1499 training airfoils — the wider FFN overfits to the dominant training distribution. FFN capacity axis FULLY CLOSED at mlp_ratio=2. NOTE: Reassigned fern to n_layers=4+mlp_ratio=3 combo — the 3 fewer epochs (34 vs 37) may explain some regressions; combining with n_layers=4 restores the epoch budget.
+
+## 2026-05-17 04:00 — PR #4290 — n_head=2 (dim_head=64) wider heads (CLOSED — n_head axis closed)
+
+- **Branch:** `charliepai2i48h1-askeladd/n-head-2-wider-heads-on-compile-stack`
+- **Hypothesis:** Coarser attention with 2 wider heads (dim_head=64) vs 4 standard heads (dim_head=32).
+- **Results:**
+
+| Metric | Value | Old baseline (37.31) | Δ | New baseline (36.13) | Δ |
+|--------|-------|---------------------|---|---------------------|---|
+| val_avg/mae_surf_p | 37.47 | 37.31 | +0.43% | 36.13 | +3.7% |
+| test_avg/mae_surf_p | 32.75 | 32.81 | −0.18% | 31.97 | +2.4% |
+| n_params | 784,181 | 736,831 | +6.4% | 983,871 | −21% |
+
+- **Metrics path:** `models/model-n-head-2-wider-heads-on-compile-stack-20260517-022438/metrics.jsonl`
+- **Key finding:** n_params correction — PhysicsAttention's to_q/to_k/to_v are Linear(dim_head, dim_head) acting per-head, so dim_head doubling → 4× params per projection. +47,350 actual params (formula verified exactly). This experiment actually tested "+6.4% capacity routed to wider Q/K/V projections" not a reorganization. Neither direction (n_head=8 = dim_head too thin, n_head=2 = extra Q/K/V params) improved on n_head=4×dim_head=32. n_head axis FULLY CLOSED at 4.
+- **Decision:** CLOSED. val/test asymmetry per split confirms noise floor. n_head axis closed at 4.
+
+## 2026-05-17 04:00 — PR #4260 — SF warmup_steps=500 (SENT BACK — won on old stack, needs mlp_ratio=2 retest)
+
+- **Branch:** `charliepai2i48h1-frieren/sf-warmup-steps-sweep`
+- **Hypothesis:** SF AdamW warmup_steps {50, 500} vs 200 baseline.
+- **Results (on pre-mlp_ratio-fix stack):**
+
+| arm | val_avg | Baseline (37.31) | Δ | New baseline (36.13) | Δ |
+|-----|---------|-----------------|---|---------------------|---|
+| warmup=50 | 38.83 | 37.31 | +4.1% | 36.13 | +7.5% |
+| warmup=200 (base) | 37.31 | — | — | — | — |
+| **warmup=500 (winner)** | **36.91** | 37.31 | **−1.1%** | 36.13 | **+2.2%** |
+
+- **Metrics paths:** `models/model-sf-warmup-50-20260517-012331/metrics.jsonl`, `models/model-sf-warmup-500-20260517-022540/metrics.jsonl`
+- **Key finding:** warmup=50 hurts (too aggressive, leaves optimizer poorly initialized). warmup=500 helps — the conservative ramp lets SF's running averages accumulate cleaner gradient signal early. Late-epoch trajectory smoother. Best epoch 43 vs baseline's 42 (+1). 
+- **Decision:** SENT BACK for warmup=500 retest on mlp_ratio=2 stack. val=36.91 beats old baseline (37.31) but not new (36.13). Expect compound win on new stack.
