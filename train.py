@@ -707,6 +707,12 @@ for epoch in range(MAX_EPOCHS):
             epoch_record["grad_norm/p99"] = torch.quantile(gn_finite, 0.99).item()
             epoch_record["grad_norm/max"] = gn_finite.max().item()
             epoch_record["grad_norm/mean"] = gn_finite.mean().item()
+            if gn_finite.numel() > 1:
+                epoch_record["grad_norm/std"] = gn_finite.std(unbiased=True).item()
+                epoch_record["grad_norm/cv"] = (
+                    epoch_record["grad_norm/std"] / epoch_record["grad_norm/mean"]
+                    if epoch_record["grad_norm/mean"] > 0 else 0.0
+                )
         epoch_record["grad_norm/n_nonfinite"] = int((gn.numel() - gn_finite.numel()))
         epoch_record["grad_norm/n_steps"] = int(gn.numel())
         if cfg.grad_clip_norm is not None:
