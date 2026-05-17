@@ -1,5 +1,49 @@
 # SENPAI Research Results
 
+## 2026-05-17 10:30 — #4318 #4319 CLOSED (Findings #41-42); askeladd→#4419 (R13 H83 ls@T_max=22), nezuko→#4420 (R13 H84 surf_weight@T_max=22); #4326 #4329 #4346 pinged
+
+### #4318 askeladd — R12 H72: layer_scale magnitude at new BL substrate (CLOSED — Finding #41)
+
+| Arm | ls | run | val_avg | test_avg | Δ val vs old BL (53.08) | Δ val vs NEW BL (49.75) |
+|-----|-----|-----|---------|----------|---|---|
+| BL | 1e-4 | d3qlknrv | 53.08 | 44.89 | — | +3.33 |
+| A1 | 1e-3 | 34zp8lb8 | 53.15 | 45.62 | +0.07 | +3.40 |
+| A2 | 1e-3 | is4py9s2 | 52.97 | 45.10 | −0.11 | +3.22 |
+| **B** | **5e-5** | **odcn0kp1** | **52.04** | **44.72** | **−1.04** | **+2.29** |
+
+**Finding #41**: ls=5e-5 wins at T_max=20+clip+lr=2e-4 substrate (−1.04 val vs old BL, −0.17 test). Non-monotone ls landscape continues to shift with substrate: optimum moved from ls=1e-3 (old no-clip) → ls=1e-3 (pre-ls-merge #4212) → ls=1e-4 (current) → ls=5e-5 (this PR). Trend is **monotone toward smaller ls at higher LR+clip**. CRITICAL caveat: camber_rc regresses (+1.96 val/test) for both arms — ls=1e-4 is camber_rc-best. Does NOT beat new BL 49.75 (+2.29 val). Directional finding for R13.
+
+New assignment: #4419 askeladd — R13 H83 ls∈{5e-5, 1e-5} at T_max=22.
+
+---
+
+### #4319 nezuko — R12 H73: Weight decay at new BL substrate (CLOSED — Finding #42)
+
+| Arm | wd | run | val_avg | test_avg | Δ val vs old BL (53.08) | Δ val vs NEW BL (49.75) |
+|-----|-----|-----|---------|----------|---|---|
+| BL | 1e-3 | d3qlknrv | 53.08 | 44.89 | — | +3.33 |
+| A (×2) | 5e-4 | yasn14xp, n2oizbhq | 53.83 | 46.14 | +0.75 | +4.08 |
+| **B** | **2e-3** | **hcu511lr** | **53.52** | **45.43** | **+0.44** | **+3.77** |
+
+Per-split wd=2e-3 signal: camber_cruise **−3.73 val / −3.39 test** (strong improvement), re_rand −0.86/−0.66; but in_dist +1.11/+2.45 and camber_rc +5.24/+3.76 (large regression).
+
+**Finding #42**: wd=1e-3 robustly optimal at T_max=20+clip substrate — both arms regress on aggregate. But wd=2e-3 shows a strong **per-split asymmetric trade** (cruise/re_rand wins vs rc/in_dist losses). Mechanism: higher wd penalizes weight scale → stronger cruise-domain generalization at cost of local in_dist/rc features. Directional finding for R13 at T_max=22 substrate. Does NOT beat new BL (+3.77 val).
+
+New assignment: #4420 nezuko — R13 H84 surf_weight∈{15, 20} at T_max=22.
+
+---
+
+### #4346 fern — R12 H78: Multi-seed BL replication (IN-FLIGHT — σ established, pinged for final results)
+
+| Seed | run | val_avg | test_avg | Δ vs BL (49.75/42.89) |
+|------|-----|---------|----------|---|
+| 42 | fern-r12-bl-seed42 | 52.61 | 45.75 | +2.86 / +2.86 |
+| 2026 | fern-r12-bl-seed2026 | 51.18 | 43.70 | +1.43 / +0.81 |
+
+**Critical finding**: seed σ ~1.4 val at new BL. Original `1neonugr` (49.75) is seed-lucky — mean over 3 seeds ≈ 51.2 val / 44.1 test. σ_seed ~1.4 val (stdev across 3 seeds), test σ ~1.7. **Implications**: improvements ≥1 val needed to be signal, ≥2 val to be statistically robust. Future merges under σ_seed threshold should require multi-seed confirmation.
+
+---
+
 ## 2026-05-17 10:00 — #4393 frieren CLOSED (Finding #40 — effective warmup=0); #4408 frieren assigned (R13 H82 Lion β2); #4326 #4329 in-flight partial results
 
 ### #4393 frieren — R13 H81: warmup_epochs at T_max=22 (CLOSED — infrastructure finding, Finding #40)
