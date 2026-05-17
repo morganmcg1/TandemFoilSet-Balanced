@@ -566,6 +566,7 @@ class Config:
     lion_lr: float = 1e-4  # Lion lr; canonical: AdamW_lr / 3..10
     lion_wd: float = 1e-3  # Lion wd; canonical: AdamW_wd * 3..10
     use_qk_norm: bool = False  # ViT-22B-style LayerNorm(head_dim) on Q and K before SDPA
+    eta_min_fraction: float = 0.0  # cosine floor as fraction of peak_lr; 0.0 = anneal to 0
 
 
 cfg = sp.parse(Config)
@@ -632,7 +633,8 @@ def lr_lambda(epoch):
     if epoch < warmup_epochs:
         return 0.1 + 0.9 * (epoch + 1) / warmup_epochs  # 0.1 -> 1.0 over warmup
     progress = (epoch - warmup_epochs) / max(MAX_EPOCHS - warmup_epochs, 1)
-    return 0.5 * (1 + math.cos(math.pi * progress))  # cosine to 0 after warmup
+    cosine = 0.5 * (1 + math.cos(math.pi * progress))  # in [0, 1]
+    return cfg.eta_min_fraction + (1 - cfg.eta_min_fraction) * cosine
 scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
 GRAD_CLIP_MAX_NORM = 1.0
