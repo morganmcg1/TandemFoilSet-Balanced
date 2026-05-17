@@ -96,6 +96,20 @@ Plus 3 Round-11 carryovers still running:
 6. **AGC is redundant with Lion.** Lion's sign-update provides gradient-direction stability; AGC-on-top catastrophically regresses. AGC axis closed.
 7. **n_head=2 (d_head=88) doesn't help without QK-norm.** Uniform all-split regression confirms wider heads need normalization to unlock; could be retested with QK-norm but per-split showed no asymmetric signal.
 
+## Round-13 backlog (researcher-agent ideas, 2026-05-17 08:35)
+
+See `research/RESEARCH_IDEAS_2026-05-17_0820.md` for full reasoning + literature citations. Top 5 ranked:
+
+1. **Variance+Mean Composite Loss** — `L = 0.8·mean(|e|) + 0.2·std(|e|)`. 2-line change. Penalizes localized error spikes (geom_camber_rc dominant pattern). Backed by Hanna et al. arXiv:2412.13993.
+2. **GeoMix Geometry Augmentation** — Interpolate input/target pairs from nearby-camber training cases (λ ~ Beta(2,2)). Bridges to OOD M=6-8 from training M=3-5. Medium effort. Highest expected single-PR gain.
+3. **2D Rotary Position Encoding (RoPE-2D)** — Encode (x,y) as rotary frequencies in Q,K. Geometry-relative attention prior. Apply d_rope = n_hidden//4 = 48.
+4. **Zonal / Wake-Emphasis Loss** — 3× weight on TE/wake nodes (x_norm > 0.6). Domain knowledge: camber shift moves Kutta condition → most strongly affects TE. 5-line change.
+5. **GFocal Dual-Path Attention** — Parallel Nyström global path (m=64 landmarks) + slice local path, learnable gate fusion. Hardest impl. Save for plateau extension if loss/data ideas (#1, #2, #4) all fail.
+
+**Stop condition (per researcher):** If Variance+Mean loss AND GeoMix both fail to improve `geom_camber_rc` by >1%, the OOD gap is architectural — escalate to GFocal.
+
+---
+
 ## Plateau-break next tier (Round-12 backlog if Round-11 wave regresses)
 
 If alphonse skip-1/√2, frieren L6, nezuko eta_min all regress (and prior 5 plateau-breaks), escalate to:
