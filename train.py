@@ -373,6 +373,22 @@ def evaluate_split(model, loader, stats, surf_weight, device, use_bf16: bool = F
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Drop samples whose ground-truth y has any non-finite entry: the
+            # scoring helpers intend to skip these via a per-sample mask, but
+            # 0 * NaN == NaN (and 0 * Inf == NaN) poisons the float64
+            # accumulator. test_geom_camber_cruise[20] has 761 Inf entries in
+            # the pressure ground truth that triggered this in H128 arm-a.
+            B = y.shape[0]
+            y_finite_per_sample = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            if not y_finite_per_sample.any():
+                continue
+            if not y_finite_per_sample.all():
+                keep = y_finite_per_sample.nonzero(as_tuple=True)[0]
+                x = x[keep]
+                y = y[keep]
+                is_surface = is_surface[keep]
+                mask = mask[keep]
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bf16):
@@ -601,6 +617,7 @@ class Config:
     T_max: int = 15  # CosineAnnealingLR period; default preserves prior behavior
     fourier_pe: bool = False   # Tancik Fourier PE on (x, z) coords (H106)
     fourier_pe_freqs: int = 8  # Number of log-spaced frequencies; adds 4*K features
+    compile_mode: str = "none"  # torch.compile mode; 'none' disables, else 'default'/'reduce-overhead'/'max-autotune' (H128)
 
 
 cfg = sp.parse(Config)
@@ -657,6 +674,15 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+# Optional torch.compile wrap. Apply BEFORE optimizer so parameter identities
+# remain stable (torch.compile preserves the underlying tensors). Validation
+# and test reuse this same `model` reference — no re-compile per pass.
+if cfg.compile_mode != "none":
+    compile_t0 = time.time()
+    print(f"Compiling model: torch.compile(mode={cfg.compile_mode!r}, dynamic=True)")
+    model = torch.compile(model, mode=cfg.compile_mode, dynamic=True)
+    print(f"  torch.compile setup done in {time.time() - compile_t0:.2f}s (kernels generated lazily on first batch)")
 
 if cfg.optimizer == "lion":
     optimizer = Lion(model.parameters(), lr=cfg.lr, betas=(cfg.beta1, cfg.beta2),
@@ -770,12 +796,20 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        # Strip torch.compile's `_orig_mod.` prefix when saving so checkpoints
+        # load cleanly into either compiled or uncompiled models.
+        save_model = getattr(model, "_orig_mod", model)
+        torch.save(save_model.state_dict(), model_path)
         tag = " *"
 
     gate_stats = []
     if cfg.ffn_act in ("geglu", "swiglu"):
-        gate_stats = collect_gate_stats(model, val_loaders["val_single_in_dist"], stats, device, use_bf16=cfg.use_bf16)
+        # torch.compile wraps the model in OptimizedModule; submodule forward
+        # hooks won't fire reliably from within the compiled graph. Reach
+        # through `_orig_mod` to run the diagnostic forward uncompiled — the
+        # parameters are shared so the gate stats are identical.
+        hook_model = getattr(model, "_orig_mod", model)
+        gate_stats = collect_gate_stats(hook_model, val_loaders["val_single_in_dist"], stats, device, use_bf16=cfg.use_bf16)
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     append_metrics_jsonl(metrics_jsonl_path, {
@@ -793,6 +827,7 @@ for epoch in range(MAX_EPOCHS):
         "T_max": cfg.T_max,
         "fourier_pe": cfg.fourier_pe,
         "fourier_pe_freqs": fourier_pe_freqs,
+        "compile_mode": cfg.compile_mode,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "gate_stats": gate_stats,
@@ -813,7 +848,10 @@ print(f"\nTraining done in {total_time:.1f} min")
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
 
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+    # Load into the underlying module so checkpoints saved without the
+    # `_orig_mod.` prefix work whether or not the model is compiled.
+    load_target = getattr(model, "_orig_mod", model)
+    load_target.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
 
     test_metrics = None
