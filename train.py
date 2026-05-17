@@ -478,6 +478,7 @@ class Config:
     mlp_ratio: int = 2  # FFN expansion ratio; SwiGLU inner = round_to_mult(hidden*mlp_ratio*2/3, 8)
     use_bf16: bool = False  # bf16 autocast (activations only; params/optimizer stay fp32)
     n_hidden: int = 160  # Transolver hidden dim (embedding/attention/FFN base width)
+    adam_beta2: float = 0.999  # AdamW beta2; default 0.999, sweep to 0.95/0.98 for small-batch/short-train regimes
 
 
 cfg = sp.parse(Config)
@@ -525,7 +526,8 @@ n_params = sum(p.numel() for p in model.parameters())
 ffn_inner = next(m.inner for m in model.modules() if isinstance(m, SwiGLUFFN))
 print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN=SwiGLU inner={ffn_inner})")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay,
+                              betas=(0.9, cfg.adam_beta2))
 
 def train_amp_ctx():
     """bf16 autocast for the forward pass when --use_bf16 (no GradScaler needed)."""
