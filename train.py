@@ -487,6 +487,7 @@ class Config:
     slice_num: int = 64
     use_swiglu: bool = False
     swiglu_hidden_mult: float = 1.0  # 1.0 = full hidden; 0.6667 = param-matched
+    re_jitter_std: float = 0.0   # std of Gaussian noise added to normalized log(Re) channel (idx 13) at train time. 0 = off.
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -500,6 +501,7 @@ MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+print(f"re_jitter_std={cfg.re_jitter_std}")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -596,6 +598,14 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
+
+        # Reynolds-number jitter: small physics-meaningful Gaussian noise on log(Re) channel during training.
+        # Channel 13 is log(Re) broadcast to all points. Jitter is per-sample (single draw per batch item),
+        # preserving the within-sample physics-consistency of all points sharing the same Re.
+        if cfg.re_jitter_std > 0.0 and model.training:
+            batch_size = x_norm.shape[0]
+            noise = torch.randn(batch_size, 1, device=x_norm.device) * cfg.re_jitter_std
+            x_norm[..., 13] = x_norm[..., 13] + noise
 
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             pred = model({"x": x_norm})["preds"]
