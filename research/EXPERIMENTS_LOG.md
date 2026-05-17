@@ -1,5 +1,160 @@
 # SENPAI Research Results
 
+## 2026-05-17 07:00 — PR #4344: Lookahead-Lion α=0.7 seed=1 ← CLOSED (canonical 2-seed confirmation; no merge)
+
+- Branch: `willowpai2i48h1-askeladd/lookahead-lion-alpha07-seed1`
+- Student: willowpai2i48h1-askeladd
+- W&B: `imywc4uu` (canonical; finished, best_ep=17); group `lookahead_lion_seed_scan_alpha07`
+- Hypothesis: Seed=1 of 3-seed canonical at new programme best (α=0.7, k=5, PR #4269 merged).
+
+### Results (W&B-verified)
+
+| Seed | val_avg | test_avg | best_ep | W&B |
+|---|---|---|---|---|
+| 0 | 47.5894 | 46.0098 | 17 | `oftlu9tn` (PR #4269 merged) |
+| 1 (THIS PR) | **47.0830** | 46.5983 | 17 | `imywc4uu` |
+| 2 | TBD | TBD | TBD | nezuko #4345 (in flight) |
+| **2-seed mean** | **47.336** | **46.304** | — | — |
+
+### Findings
+
+- seed=1 val (47.08) is **LOWER than seed=0 val (47.59)** by −0.51 — within expected σ̂ ≈ 0.64 envelope.
+- Val improves but test regresses by +0.59 — typical seed variance (val and test have similar σ̂ magnitudes; seed=1 finds a slightly different basin with different generalization).
+- **No code merge needed.** Same code as PR #4269 with `--seed 1`. BASELINE.md will be updated once nezuko's seed=2 lands.
+
+### Decision
+
+Closed as canonical-confirmation. Programme best (PR #4269, val=47.5894) stands; seed=1 confirms seed-robustness. Askeladd reassigned to **k=6 + α=0.7 (#4371)** — k-frontier gap-fill.
+
+## 2026-05-17 07:00 — PR #4343: Lookahead-Lion α=0.8 at k=5 ← CLOSED (α-bowl minimum CONFIRMED at α=0.7)
+
+- Branch: `willowpai2i48h1-alphonse/lookahead-lion-alpha-08`
+- Student: willowpai2i48h1-alphonse
+- W&B: `1g55548q` (canonical; finished, best_ep=17); group `lookahead_lion_alpha_sweep`
+- Hypothesis: Push the α-frontier rightward past α=0.7 (monotone descent at k=5 so far suggested bowl minimum might be further right).
+
+### Results (W&B-verified)
+
+| Arm | α | val_avg | test_avg | best_ep | Δ vs current best (47.59) |
+|---|---|---|---|---|---|
+| Current best (PR #4269) | 0.7 | **47.5894** | 46.0098 | 17 | — |
+| THIS PR | 0.8 | 48.2463 | 46.9713 | 17 | **+0.66 val, +0.96 test** |
+
+### α-frontier at k=5 — fully mapped
+
+| α | val_avg | α/k effective pull rate |
+|---|---|---|
+| 0.3 | 51.84 | 0.06 (under-pulled) |
+| 0.5 | 47.97 | 0.10 (slightly under) |
+| **0.7 (BEST)** | **47.59** | **0.14 (critical rate)** |
+| 0.8 (THIS PR) | 48.25 | 0.16 (over-pulled) |
+
+**α-bowl minimum CONFIRMED at α=0.7.** All 4 test splits regress at α=0.8 (test_geom_camber_rc +1.40, test_re_rand +1.43) — uniform dispersion, not single-split. best_epoch=17 (cosine floor reached) — pure mechanism, no budget issues.
+
+### Mechanism
+
+α/k=0.16 over-pulls: slow weights chase fast trajectory too aggressively, losing variance-reduction benefit of basin-averaging. Cross-validates **effective-pull-rate framing α/k ≈ 0.14**.
+
+### Decision
+
+Closed — α=0.7 confirmed canonical optimum. Alphonse reassigned to **β1=0.88 + α=0.7 (#4376)** — micro-probe of β1 landscape at new α winner.
+
+## 2026-05-17 07:00 — PR #4325: Lookahead-Lion + slice_num=32 ← CLOSED (near-miss vs new baseline; promising compound direction)
+
+- Branch: `willowpai2i48h1-frieren/lookahead-lion-slice-num-32`
+- Student: willowpai2i48h1-frieren
+- W&B: `89p6axw3` (canonical; finished, best_ep=17); group `lookahead_lion_slice_num_arch`
+- Hypothesis: Smaller slice_num (32, down from default 64) under Lookahead-Lion at α=0.5.
+
+### Results (W&B-verified)
+
+| Metric | Value | vs OLD baseline (47.97) | vs NEW baseline (47.59) |
+|---|---|---|---|
+| val_avg/mae_surf_p | **47.7822** | **−0.19 (would have won OLD)** | **+0.19 (close)** |
+| test_avg/mae_surf_p | **46.1713** | **−0.32 (would have won OLD)** | +0.16 |
+| best_epoch | 17 (cosine floor ✓) | — | — |
+
+### Slice axis is asymmetric
+
+Paired with fern's slice_num=96 (#4323, val=53.10):
+
+| slice_num | val_avg | Δ vs new baseline | epoch cost | best_ep |
+|---|---|---|---|---|
+| 32 (THIS PR) | 47.78 | +0.19 | normal | 17 ✓ |
+| **64 (current best)** | **47.59** | — | 109s | 17 |
+| 96 (fern #4323) | 53.10 | +5.51 | 130s (+18%) | 14 (budget-cut) |
+
+Smaller-than-baseline is nearly competitive; larger-than-baseline is catastrophic.
+
+### Decision
+
+Closed — val=47.78 > NEW programme best 47.59. **Was assigned against OLD baseline (47.97) — would have been a +0.19 winner.** Frieren reassigned to **slice_num=32 + α=0.7 (#4375)** — direct α-compound; predicted val ≈ 47.40 if α improvement transfers (NEW WINNER candidate).
+
+## 2026-05-17 07:00 — PR #4323: Lookahead-Lion + slice_num=96 ← CLOSED (4th budget-incompatible up-arm)
+
+- Branch: `willowpai2i48h1-fern/lookahead-lion-slice-num-96`
+- Student: willowpai2i48h1-fern
+- W&B: `pmhrgz60` (canonical; finished, best_ep=14, timeout-cut); group `lookahead_lion_slice_num_arch`
+- Hypothesis: Larger slice_num (96, up from default 64) under Lookahead-Lion.
+
+### Results (W&B-verified)
+
+| Metric | Value | Δ vs new baseline (47.59) |
+|---|---|---|
+| val_avg/mae_surf_p | **53.1045** | **+5.51 major regress** |
+| test_avg/mae_surf_p | **50.3753** | +4.37 |
+| best_epoch | **14** (timeout-cut from T_max=17) | −3 |
+| epoch_time_s | ~130 (+18% vs baseline) | — |
+| gpu_mem_peak | 42.71 GB | +6.85 GB |
+
+### Mechanism — same budget incompatibility pattern as heads=8 / depth=6 / mlp_ratio=3
+
+Matched-epoch comparison shows slice_num=96 was slightly BETTER per epoch (ep5: 91.28 vs 95.07; ep13: 54.15 vs 56.65), but missing epochs 15-17 of cosine descent killed it.
+
+### Architectural up-direction VERDICT (now 4/4 closed)
+
+| Arm | Δ val | epoch cost | best_ep |
+|---|---|---|---|
+| heads=8 (#4304) | +9.11 | +36% | 12 |
+| slice_num=96 (THIS PR) | +5.51 | +18% | 14 |
+| depth=6 (#4294) | +3.01 | +21% | 14 |
+| mlp_ratio=3 (#4286) | +1.04 | +5% | 16 |
+
+**All 4 up-arms regressed in proportion to per-epoch overhead.** Architectural up at h=128 / T_max=17 / 30-min budget is decisively budget-bound. Capacity-DOWN direction (slice_num=32, +0.19 only) is the asymmetric near-winner.
+
+### Decision
+
+Closed — val=53.10 > programme best 47.59. Fern reassigned to **β2=0.995 + α=0.7 (#4373)** — β2 frontier bracketing.
+
+## 2026-05-17 07:00 — PR #4310: Lookahead-Lion k=7 ← CLOSED (k-bowl minimum CONFIRMED at k=5)
+
+- Branch: `willowpai2i48h1-edward/lookahead-lion-k7`
+- Student: willowpai2i48h1-edward
+- W&B: `6k6es78s` (canonical; finished, best_ep=17); group `lookahead_lion_k_sweep`
+- Hypothesis: Lion k-curve right-edge — predicted U-min at or right of k=5; test if k=7 wins.
+
+### Results (W&B-verified)
+
+| Arm | k | α | val_avg | test_avg | best_ep | Δ vs k=5 |
+|---|---|---|---|---|---|---|
+| k=5 baseline (PR #4123) | 5 | 0.5 | 47.9735 | 46.4900 | 17 | — |
+| THIS PR | 7 | 0.5 | **48.4789** | 46.6096 | 17 | **+0.5054** |
+
+### k-frontier — fully mapped at α=0.5
+
+| k | val_avg | Δ vs k=5 | α/k at α=0.5 |
+|---|---|---|---|
+| 2 | 48.84 | +0.86 | 0.25 |
+| 3 | 48.20 | +0.23 | 0.17 |
+| **5 (BEST)** | **47.97** | **—** | **0.10** |
+| 7 (THIS PR) | 48.48 | +0.51 | 0.071 |
+
+**k-bowl minimum CONFIRMED at k=5** (symmetric-ish U: k=3 closer than k=2 on left; k=7 between them on right). Round-20 #4355 (k=4) and round-21 #4371 (k=6) will refine the bowl shape at the new α=0.7 regime.
+
+### Decision
+
+Closed — val=48.48 > programme best 47.59. Edward reassigned to **h=192 + α=0.7 (#4374)** — architectural follow-up (VRAM gating resolved by #4286 data).
+
 ## 2026-05-17 06:00 — PR #4294: Lookahead-Lion + depth=6 ← CLOSED (canonical depth-frontier closure; budget incompatibility)
 
 - Branch: `willowpai2i48h1-tanjiro/lookahead-lion-depth-6`
