@@ -182,3 +182,48 @@ cd "target/" && python train.py \
 ```
 
 **Mechanism**: Lookahead (trajectory-averaging, k=5 α=0.5) and β2=0.95 (per-parameter step-size adaptation) operate at different abstraction levels and compound additively. val_geom_camber_rc drops to 64.63 — the lowest on this branch — because β2=0.95 specifically improves the fast-EMA adaptation critical for high-camber extrapolation, while Lookahead preserves the cruise/re_rand variance-reduction wins. Sub-additive but still significant: LLRD+Lookahead compound next priority.
+
+---
+
+## 2026-05-17 04:50 — PR #4266: Optimizer — Lookahead k=3 (tighter sync) on slice=8
+
+**NEW BEST BASELINE** — biggest single-axis win since Lookahead itself; k=3 BEATS k=5+β2=0.95 compound even with β2=0.999 (default).
+
+- **val_avg/mae_surf_p:** **51.3066** (run `0aj92l9d`)
+- **test_3split/mae_surf_p:** **51.8862** (run `0aj92l9d`)
+- **W&B runs:** `0aj92l9d` (k=3, winner), `xc3khc3a` (k=10, failed)
+
+Per-split val (run `0aj92l9d`, vs prior Lookahead+β2=0.95 baseline 52.9444):
+| Split | mae_surf_p | Δ vs prior baseline |
+|---|---|---|
+| val_single_in_dist | 57.803 | **−9.59%** |
+| val_geom_camber_rc | 63.854 | **−7.12%** |
+| val_geom_camber_cruise | 32.409 | −0.67% |
+| val_re_rand | 51.159 | +0.97% |
+| **val_avg** | **51.3066** | **−3.09%** |
+
+Per-split test (run `0aj92l9d`):
+| Split | mae_surf_p |
+|---|---|
+| test_single_in_dist | 52.578 |
+| test_geom_camber_rc | 60.074 |
+| test_geom_camber_cruise | NaN (fleet-wide data/scoring.py bug) |
+| test_re_rand | 43.007 |
+| **test_3split** | **51.8862** |
+
+- **Reproduce:**
+```bash
+cd "target/" && python train.py \
+  --grad_clip 5.0 \
+  --huber_delta 0.5 \
+  --ema_decay 0.99 \
+  --asinh_p_scale 1.0 \
+  --use_swiglu --mlp_ratio 1.333 \
+  --n_head 2 \
+  --asinh_vel_scale 0.5 \
+  --slice_num 8 \
+  --use_lookahead --lookahead_k 3 --lookahead_alpha 0.5 \
+  --agent <student>
+```
+
+**Mechanism**: On our 30-min/~6300-step budget, k=3 delivers ~2100 slow-weight updates vs k=5's ~1260 — 67% more variance-reduction events under the same wall-clock constraint. The k=10 arm (only ~630 updates) regressed +5.91%. The monotone ranking k=3 < k=5 << k=10 is confirmed across every val split and every epoch checkpoint — not a noise artifact. k-axis is a stronger lever than the β2-axis at this budget. NOTE: this run uses β2=0.999 (default); the k=3+β2=0.95 compound is the next priority.
