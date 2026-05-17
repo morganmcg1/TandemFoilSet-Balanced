@@ -1,5 +1,43 @@
 # SENPAI Research Results
 
+## 2026-05-17 ~01:10 UTC — 2 closures (#4226 per-channel, #4162 β2+slice=8) + 2 new assignments (#4266 k-bracket, #4267 AoA aug)
+
+### Closed: PR #4226 (fern) — per-channel surf weights (Ux=0.5, Uy=0.5, p=2.0) on slice=16+β2=0.95
+
+Run `p4uv90xs`: val=57.4761 (+1.86% vs alphonse baseline 56.43), test_3split=56.4936 (+2.09%). Targeted split val_geom_camber_rc=70.33 REGRESSED by +4.76% — failure-mode #4 triggered. Mechanism: down-weighting Ux/Uy (×0.5) damages the shared physics-attention latent space that informs pressure prediction via cross-channel coupling (same as vol_weight closure #4172). This is now a confirmed closed axis: any reweighting that strips velocity gradient harms pressure prediction in Transolver's shared-latent architecture. Per-channel surface loss reweighting fully closed.
+
+| Split | Experiment | Baseline #4067 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 67.605 | 65.188 | +3.71% regressed |
+| val_geom_camber_rc | 70.328 | 67.131 | **+4.76% TARGETED, REGRESSED** |
+| val_geom_camber_cruise | 37.119 | 37.922 | −2.12% |
+| val_re_rand | 54.853 | 55.464 | −1.10% |
+
+### Closed: PR #4162 (alphonse) — β2=0.95 + slice=8 compound (without Lookahead)
+
+3 seeds from OOM-triggered retries: `krmkvr7y` val=57.77, `3qudhi04` val=55.30, `0aaezg33` val=58.21. 3-seed mean val=57.09/test=57.55 — worse than alphonse #4067 baseline (56.43/55.34) by ~0.66 val. Best single seed `3qudhi04` val=55.30/test=55.47 does not beat new Lookahead baseline (54.30/52.88).
+
+Key findings:
+1. **High seed variance**: β2=0.95 + slice=8 seed spread ~3 val units. Without Lookahead's variance-reducing averaging, this axis is fragile. Lookahead's main mechanism (slow-weight averaging) specifically reduces this kind of seed variance — supporting its value.
+2. **nezuko #4249 is the correct compound to test**: Lookahead+β2=0.95+slice=8 gives β2 the stabilizing context it needs. Alphonse's 3-seed analysis provides the baseline variance characterization that makes #4249's result interpretable.
+3. **scripts/test_eval_only.py** added to repo — recovers test metrics from saved EMA checkpoints at batch_size=1 when pod hits OOM during test eval. Useful infrastructure for future runs.
+
+### New assignments — Round 19 on Lookahead baseline
+
+| PR | Student | Hypothesis | Mechanism |
+|----|---------|-----------|-----------|
+| **#4266** | **alphonse** | Lookahead k-bracket sweep (k=3 vs k=10) | k=5 was paper default, not swept. Bracket tests if k is locally optimal. Zero code change. |
+| **#4267** | **fern** | Physics-consistent AoA rotation aug ±5° | Fully coupled rotation: positions + velocities + AoA scalar rotated together. Targets camber_rc (68.75). #4163 ±15° closed due to physics inconsistency; ±5° is conservative and consistent. |
+
+**alphonse k-bracket rationale**: all in-flight Lookahead experiments hold k=5 fixed. k=3 (tighter sync = more averaging) vs k=10 (looser sync = more exploration) directly characterizes the Lookahead axis for the paper appendix. A result < 54.0 on either arm would change the stack.
+
+**fern AoA aug rationale**: the only unexplored mechanistic axis targeting camber_rc that doesn't require optimizer changes. Physics-consistent coupling (rotate positions + velocities + AoA scalar together) avoids the #4163 failure mode. First data-augmentation experiment since that closure.
+
+### GPU utilization
+8/8 students assigned, 0 idle as of ~01:10 UTC.
+
+---
+
 ## 2026-05-17 00:40 UTC — Lookahead MERGED (#4142) + AGC/EMA closed + 3 new Lookahead-compound assignments
 
 ### MERGED: PR #4142 (nezuko) — Lookahead k=5 α=0.5 on slice=8 — NEW BASELINE val=54.299/test=52.879
