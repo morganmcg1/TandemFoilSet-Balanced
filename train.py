@@ -400,6 +400,7 @@ class Config:
     ema_decay: float = 0.997  # EMA decay for shadow model evaluated at val/test
     sf_warmup_steps: int = 200  # Schedule-Free linear LR warmup
     max_grad_norm: float = 1.0  # Gradient clipping max norm (set 0 to disable)
+    n_layers: int = 5  # Transolver block depth
 
 
 cfg = sp.parse(Config)
@@ -433,7 +434,7 @@ model_config = dict(
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=128,
-    n_layers=5,
+    n_layers=cfg.n_layers,
     n_head=4,
     slice_num=8,
     mlp_ratio=2,
