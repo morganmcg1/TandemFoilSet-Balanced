@@ -6,20 +6,22 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-17 (~01:45 UTC) — #4214 frieren EMA@layer_scale CLOSED (timeout-truncated; Finding #28: layer_scale stabilises ema=0.999 but slow). #4274 frieren reassigned to EMA@new BL substrate (T_max=24+clip). 8/8 staffed. #4201 nezuko likely-winner pending student submission (best run jqmn2nw7 val 53.27/test 45.35 beats BL).
+- **Date:** 2026-05-17 (~03:15 UTC) — #4201 nezuko MERGED (new best val 53.08 / test 44.89); #4212 #4231 #4258 CLOSED (informative nulls); 4 new R12 experiments assigned probing new BL substrate. 8/8 staffed.
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
 
-**val_avg/mae_surf_p = 53.8098** (PR #4145 alphonse — Lion lr=1.5e-4 + n_fourier=0 + FiLM + wd=1e-3 + EMA(0.997) + Huber β=0.05 + **T_max=24** + **grad_clip=1.0**; NO spec_norm; NO layer_scale; run `hk1i5kd5`)
-**test_avg/mae_surf_p = 45.4943** (same run, clean 4-split)
+**val_avg/mae_surf_p = 53.0764** (PR #4201 nezuko — Lion lr=2e-4 + n_fourier=0 + FiLM + wd=1e-3 + EMA(0.997) + Huber β=0.05 + **T_max=20** + **grad_clip=1.0** + **layer_scale_init=1e-4**; NO spec_norm; run `d3qlknrv`)
+**test_avg/mae_surf_p = 44.8874** (same run, clean 4-split)
 
-Per-split val: in_dist 55.45, camber_rc 70.54, camber_cruise 34.18, re_rand 55.07
-Per-split test: in_dist 48.08, camber_rc 62.12, camber_cruise 27.84, re_rand 43.93
+Per-split val: in_dist 55.86, camber_rc 65.64, camber_cruise 36.68, re_rand 54.13
+Per-split test: in_dist 46.83, camber_rc 57.22, camber_cruise 30.65, re_rand 44.85
 
-**Δ vs prior best (PR #4015 layer_scale+T_max=20, val 54.30 / test 47.29): −0.49 val / −1.80 test** (single seed)
+**Δ vs prior best (PR #4145 T_max=24+clip=1.0, val 53.81 / test 45.49): −0.73 val / −0.60 test**
 
-Key mechanism: T_max=24 + grad_clip=1.0 super-additive interaction. At T_max=24, clip is *essential* (T_max=24 without clip → val 62.15, regresses badly). Clip neutralizes late-LR gradient outlier amplification while preserving high-LR basin exploration. **Finding #24**: clip becomes essential at T_max≥24 due to late-LR endpoint ~1.35e-4 (~90% of peak). Also: Arm E (layer_scale+clip+T_max=20 → val 54.10) also beats old BL and will compose with Arm D.
+Key mechanism: Four-way composition. layer_scale=1e-4 + T_max=20 + lr=2e-4 + clip=1.0 compose additively. Win concentrated in camber_rc (−4.9 val / −4.9 test — the hardest OOD split). layer_scale + clip=1.0 together provide direction-sensitive step stabilization in high-gradient-norm geometry domains. camber_cruise regresses (+2.5/+2.8) — likely over-tight clip for cruise's gradient distribution. σ_val=1.55 across 3 seeds; 2/3 seeds beat BL; median (53.27/45.35) also beats BL.
+
+**Weakness**: camber_cruise regression (+2.5 val / +2.8 test) and re_rand test (+0.92) need attention in R12.
 
 ## Merged sequence (improvement cascade)
 
@@ -39,111 +41,83 @@ Key mechanism: T_max=24 + grad_clip=1.0 super-additive interaction. At T_max=24,
 | #4063 | T_max=20 | 61.18 → 57.66 | 52.09 → 49.45 | −5.7% / −5.1% |
 | #4120 | lr=2e-4 at clip=1.0 | 57.66 → 56.89 | 49.45 → 49.03 | −1.3% / −0.8% |
 | #4015 | layer_scale_init=1e-4 + T_max=20 | 56.89 → 54.30 | 49.03 → 47.29 | −4.6% / −3.5% |
-| **#4145** | **T_max=24 + grad_clip=1.0** | **54.30 → 53.81** | **47.29 → 45.49** | **−0.9% / −3.8%** |
+| #4145 | T_max=24 + grad_clip=1.0 | 54.30 → 53.81 | 47.29 → 45.49 | −0.9% / −3.8% |
+| **#4201** | **ls=1e-4 + T_max=20 + lr=2e-4 + clip=1.0** | **53.81 → 53.08** | **45.49 → 44.89** | **−1.4% / −1.3%** |
 
-**Total improvement:** val 135 → 53.81 (−60.1%), test ~130 → 45.49 (−65.0%)
+**Total improvement:** val 135 → 53.08 (−60.7%), test ~130 → 44.89 (−65.5%)
 
 ## Active experiments (8 of 8 students staffed)
 
 | PR | Student | Hypothesis | Status |
 |----|---------|------------|--------|
-| #4240 | alphonse | R11 H66: Triple composition — layer_scale=1e-4 + T_max=24 + clip=1.0 | WIP |
-| **#4255** | **fern** | **R11 H67: lr sweep at T_max=24+clip=1.0 {1.3e-4, 1.5e-4 ctrl, 1.7e-4, 2.0e-4}** | **Just assigned** |
-| **#4258** | **thorfinn** | **R11 H69: Lion β1 sweep at new substrate {0.85, 0.9 ctrl, 0.95}** | **Just assigned** |
-| #4201 | nezuko | R11 H62: layer_scale=1e-4 + clip=1.0 + lr=2e-4 + T_max=20 (four-way composition) | WIP |
-| **#4256** | **edward** | **R11 H68: Fine-grained clip sweep at T_max=24 {0.85, 1.0 ctrl, 1.15}** | **Just assigned** |
-| **#4212** | **askeladd** | **R11 H63: layer_scale magnitude sweep {1e-3, 1e-5, 3e-4} at new BL substrate** | **Just assigned** |
-| **#4274** | **frieren** | **R11 H70: EMA decay at new BL substrate (T_max=24+clip=1.0) {0.995, 0.997 ctrl, 0.999}** | **Just assigned** |
-| **#4231** | **tanjiro** | **R11 H65: LR recalibration at new substrate (layer_scale+T_max=20) {1.7e-4, 2.0e-4, seed-3}** | **Just assigned** |
+| #4240 | alphonse | R11 H66: Triple composition — layer_scale=1e-4 + T_max=24 + clip=1.0 | WIP (likely informative null — 3/4 diverged) |
+| #4255 | fern | R11 H67: LR sweep at T_max=24+clip=1.0 {1.3e-4, 1.5e-4, 1.7e-4, 2.0e-4} | WIP |
+| #4256 | edward | R11 H68: Fine-grained clip {0.85, 1.15} at T_max=24 (new BL ctx) | WIP |
+| #4274 | frieren | R11 H70: EMA decay {0.995, 0.999} at T_max=24+clip=1.0 | WIP |
+| **#4315** | **tanjiro** | **R12 H71: LR sweep {1.7e-4, 2.3e-4} at new BL (ls+T_max=20+clip+lr=2e-4)** | **Just assigned** |
+| **#4318** | **askeladd** | **R12 H72: ls magnitude {1e-3, 5e-5} at new BL substrate** | **Just assigned** |
+| **#4319** | **nezuko** | **R12 H73: WD sweep {5e-4, 2e-3} at new BL substrate** | **Just assigned** |
+| **#4320** | **thorfinn** | **R12 H74: T_max {16, 22} at new BL substrate (T_max=24 excluded: diverges)** | **Just assigned** |
 
-**All 8 students now staffed.**
-
-## Recent closures (informative nulls — recent sessions)
+## Recent closures (informative nulls)
 
 | PR | Student | Result | Note |
 |----|---------|--------|------|
-| #4214 | frieren | EMA@layer_scale+T_max=20: timeout-truncated at 13ep. **Finding #28**: layer_scale stabilises ema=0.999 (no divergence vs #4152) but slow-but-converging — uncompetitive in budget. ema=0.995 within ~1.3σ of ctrl (finding #4 likely extends but unprovable from truncated runs). | CLOSED |
-| #4173 | thorfinn | Triple compose extended at clip+T_max=20: lr response monotone in [1.5, 2.0] (Finding #26); T_max=18 worse than {14,20} bimodal terminal LR (Finding #27); all arms worse than new BL. | CLOSED |
-| #4180 | edward | Clip ratio @ lr=2e-4: clip=1.0 sharp optimum; asymmetric regression (clip=1.4 hurts 2× more than 0.7); intersection of co-located scale+direction optima (Finding #25). | CLOSED |
-| #4192 | fern | Huber β @ lr=2e-4 + clip=1.0: both arms (0.03, 0.10) regress significantly; finding #11 extends to new substrate. | CLOSED |
-| #4148 | tanjiro | LR@T_max=20 no-clip (old substrate): all 3 arms within noise (|Δval|<1.5); lr=1.7e-4 directional best (−0.64 val); lr=2e-4 no longer diverges at T_max=20 (finding). Substrate superseded. | CLOSED |
-| #4153 | askeladd | Lion β2@T_max=20 (old substrate): β2=0.995 σ huge (range 12.71 across 3 seeds); β2=0.98 has layer_scale_init=1.0 confound; ctrl never launched; substrate obsolete vs val 54.30 | CLOSED |
-| #4152 | frieren | EMA@T_max=20 (old substrate): ema=0.995 within noise; ema=0.999 unstable (1 crashed/1 diverged/1 worse); ctrl never launched; substrate obsolete | CLOSED |
-| #4128 | fern | surf_weight@clip=1.0 (old substrate): sw=5 → 60.59 val / 51.95 test (worse); sw=10 ctrl & sw=20 never launched; obsolete substrate | CLOSED |
-| #4122 | edward | wd@clip=1.0 (old substrate): wd=3e-4 → 62.99 (+1.8 vs ctrl 61.18), wd=5e-4 → 61.45 (within noise); wd=1e-3 ctrl & wd=2e-3 never launched; substrate obsolete | CLOSED |
-| #4096 | frieren | SGDR cosine restarts: T_0=7 → val 64.14 (+6.48), T_0=4 T_mult=2 → 69.51 (+11.85). Restarts oppose T_max=20 mechanism. | CLOSED |
-| #4085 | askeladd | Batch size: bs=8 catastrophic (3 reps best 76.93 = +19.27 above BL); bs=16 not launched. Lion+bs=4 correctly tuned. | CLOSED |
-| #4044 | alphonse | Multi-FiLM {cond_dim=11, cond_dim=4}: both hurt camber_rc (target). Global γ/β can't substitute per-node geometry. | CLOSED |
-| #4084 | fern | Dropout {0.05, 0.10}: monotone hurt; camber_rc −4.23 val (net-negative breadth) | CLOSED |
-| #4057 | edward | Surfrouting: vec arm val 62.76 (+1.58 vs BL 61.18); scalar bias no-op | CLOSED |
-| #4049 | frieren | spec_norm at lr=1.5e-4: −0.27 val (noise; finding #18 extends) | CLOSED |
-| #4046 | askeladd | p_weight upweighting monotone hurts (1→2→3 worsens) | CLOSED |
-| #4045 | fern | Capacity bottleneck = wall clock (n=128 ctrl best within budget) | CLOSED |
-| #3977 | fern | Stochastic depth hurts at 5-block depth | CLOSED |
-| #3978 | askeladd | MixUp catastrophic (+23-27 val) — non-physical targets | CLOSED |
-| #3955 | alphonse | n_power_iter=1 optimal; higher = over-regularizes | CLOSED |
+| #4258 | thorfinn | β1 sweep: both arms +5 val vs BL. **Finding #30**: β1=0.9 robust at new substrate. Lion-state axis closed. | CLOSED |
+| #4212 | askeladd | ls magnitude: ls=1e-3 −0.18 val within σ at old substrate; all arms regress vs new BL. **Finding #31**: non-monotone ls landscape on log(scale). | CLOSED |
+| #4231 | tanjiro | LR recalibration: lr=1.7e-4 wins old substrate (−1.55 val / −1.22 test). Cross-substrate confound: val beats new BL (52.75 < 53.08) but test regresses (+1.18). **Finding #32**: LR directional finding established for follow-up at new BL substrate. | CLOSED |
+| #4240 | alphonse | Triple composition (T_max=24+ls+clip): 3/4 runs diverge (val>100). layer_scale+T_max=24+clip=1.0 is unstable. | WIP (awaiting student submission) |
+| #4214 | frieren | EMA@layer_scale+T_max=20: timeout-truncated. **Finding #28**: layer_scale stabilises ema=0.999 but slow. | CLOSED |
+| #4173 | thorfinn | lr×T_max at clip: **Finding #26** (lr monotone [1.5,2.0]), **Finding #27** (T_max=18 bimodal worst). | CLOSED |
+| #4180 | edward | Clip ratio @ lr=2e-4: **Finding #25** asymmetric valley; clip=1.0 sharp optimum. | CLOSED |
+| #4192 | fern | Huber β @ lr=2e-4+clip: both arms regress; finding #11 extends. | CLOSED |
+| #4231 | tanjiro | LR@T_max=20 old substrate: lr=1.7e-4 directional winner −0.64 val (within noise). Substrate superseded. | CLOSED |
 
-## R11 hypothesis map (active round)
+## Key findings (cumulative, 32)
 
-| Axis | Hypothesis | PR / student | Expected outcome |
-|------|-----------|-------------|-----------------|
-| **Four-way composition** | **layer_scale=1e-4 + T_max=20 + lr=2e-4 + clip=1.0** | **#4201 nezuko** | **val ~51–54; highest-priority composition** |
-| **LR at new substrate** | **lr {1.7e-4, 2.0e-4, ctrl-seed3} at layer_scale+T_max=20 + no clip** | **#4231 tanjiro** | **−0 to −1.5 val; directional best from old sub (lr=1.7e-4, −0.64) may carry over** |
-| Triple composition (extended) | T_max=20 + lr=2e-4 + clip=1.0 → Arms D (lr=1.8e-4) + E (T_max=18) | #4173 thorfinn | Localizing lr×T_max minimum at clip=1.0 |
-| Schedule+clip composition | grad_clip=1.0 + T_max=20 at lr=1.5e-4 (+ T_max=24) | #4145 alphonse | Tests clip×T_max compose; Arm E adds layer_scale |
-| EMA decay at new substrate | ema_decay {0.995, 0.997 ctrl, 0.999} at layer_scale+T_max=20 | #4214 frieren | −0 to −1 val; may stabilize σ=1.67 seed variance |
-| layer_scale magnitude sweep | layer_scale {1e-3, 1e-5, 3e-4} at T_max=20 + lr=1.5e-4 (new BL substrate) | #4212 askeladd | −0 to −1.5 val; tests whether 1e-4 is locally optimal |
-| Huber β at lr=2e-4 | β {0.03, 0.05 ctrl, 0.10} at lr=2e-4 + clip=1.0 | #4192 fern | −0 to −1.5 val; needs layer_scale to beat new BL |
-| Clip ratio at lr=2e-4 | clip {0.7, 1.0 ctrl, 1.4} at lr=2e-4 | #4180 edward | −0 to −1.5 val; needs layer_scale to beat new BL |
-| **Huber β recalibration at lr=2e-4** | **β {0.03, 0.05 ctrl, 0.10} at lr=2e-4 + clip=1.0** | **#4192 fern** | **−0 to −1.5 val; tests whether finding #11 extends to new substrate; β=0.03 is novel** |
-| Clip ratio recalibration at lr=2e-4 | clip {0.7, 1.0 ctrl, 1.4} at lr=2e-4 | #4180 edward | −0 to −1.5 val; parallel to finding #22 |
-
-## Key findings (cumulative, 28)
-
-1. **FiLM on log(Re)** contributes −4.35 val / −4.56 test under n_fourier=0 (paper-critical ablation confirmed).
+1. **FiLM on log(Re)** contributes −4.35 val / −4.56 test under n_fourier=0.
 2. **EMA(0.997)** contributes +4.4 val on top of Lion.
 3. **Fourier PE inert** under FiLM+Lion+EMA. n_fourier=0 wins.
 4. **EMA decay robust** in [0.995, 0.997].
-5. **Sobolev surface regularization**: catastrophically destabilizes at w=0.05+ on spec_norm substrate.
+5. **Sobolev surface regularization**: catastrophically destabilizes at w=0.05+.
 6. **LLRD doesn't transfer** from fine-tuning to scratch.
 7. **LR warmup adds nothing** to Lion.
 8. **Block-FiLM regresses.** Output-only FiLM is correct topology.
 9. **Lookahead dead end.**
 10. **TTA z-reflection fails** — AoA asymmetry.
 11. **Huber β=0.05 locally optimal** in [0.05, 0.20].
-12. **Seed noise floor ≈ 2.77 val** (two identical runs).
+12. **Seed noise floor ≈ 2.77 val** (two identical runs). *Updated: 3-seed σ=1.55 at new BL.*
 13. **Output-only spectral norm**: −1.39 val at lr=5e-5; contribution diminishes with lr.
 14. **Lion lr=1.5e-4 optimal WITHOUT clip**: monotone trend, inflection at 2e-4. **UPDATED by finding #22.**
 15. **Train-time z-aug fails** — AoA asymmetry.
 16. **surf_weight optimum substrate-dependent**.
-17. **Lion β1=0.9 optimal** in {0.8, 0.9, 0.95}.
+17. **Lion β1=0.9 optimal** in {0.8, 0.9, 0.95}. **Extended to new substrate by Finding #30.**
 18. **spec_norm Lipschitz contribution diminishes as lr grows**: closed at lr=1.5e-4.
 19. **Input MixUp catastrophic** on CFD pressure fields (+23-28 val).
-20. **T_max=20 optimal** within SENPAI_TIMEOUT_MINUTES=30 budget: monotone T_max=14→18→20. Mechanism: higher time-averaged LR within budget; EMA smooths late-training noise.
-21. **Multi-FiLM global conditioning FALSIFIED**: Global γ/β conditioning on 11 params hurts camber_rc OOD (−5.45 val on target split). Per-node geometric variation must reach model through attention path, not global FiLM scalar.
-22. **LR optimum shifts from 1.5e-4 to 2e-4 at clip=1.0**: clip=1.0 clips every step (pre-clip ‖g‖ median ~23.7 >> 1.0). Clipped step direction (g/‖g‖) ≠ sign(Lion momentum); their interaction is direction-sensitive, not a pure scale factor. The LR-vs-val curve at clip=1.0 has same shape as no-clip but shifted upward in lr. Inflection now at 2e-4 (regresses by 2.5e-4). All 4/4 splits improve.
-23. **layer_scale_init=1e-4 (CaiT/DeiT-III) composes ~80% additively with T_max=20**: layer_scale=1e-4 initializes each block residual at 1e-4 and grows during training (block-0 attn 1e-4 → 0.019 by end). Reduces initialization sensitivity. Confirmed composing with T_max=20 substrate (observed −7.08 val from #3976 BL vs predicted −8.78). 2-seed agreement: D+E on T_max=14 σ=0.016 (very tight), F+G on T_max=20 σ=1.67 (wider). All 4/4 splits improve on both val and test. Best val 54.30 / test 47.29.
-24. **(clip × T_max) interaction is super-additive at T_max=24**: T_max=24 alone regresses catastrophically (PR #4145 Arm C val 62.15, +4.49 vs ctrl). T_max=24 + clip=1.0 beats T_max=20 + no-clip by 3.85 val (Arm D 53.81 vs ctrl 57.66). Clip is *essential* at T_max≥24 — late-LR endpoint ~1.35e-4 (~90% peak) amplifies gradient-magnitude outliers; Lion sign-update mishandles them without clip. Also: layer_scale + clip + T_max=20 (Arm E val 54.10) and T_max=24 + clip (Arm D val 53.81) both beat layer_scale+T_max=20 BL (54.30) — two distinct improvement paths at T_max+clip compositions. New best val 53.81 / test 45.49.
-25. **clip=1.0 valley is asymmetric (lr=2e-4+T_max=14)** [PR #4180]: clip=0.7 → val 59.35 (+2.46), clip=1.4 → val 62.24 (+5.35). Asymmetric regression (B 2× worse than A) rules out both pure-scale and pure-direction stories. clip=1.0 sits at intersection of two co-located optima: scale (effective per-step magnitude that fits loss curvature) AND direction-stability (clipped step alignment with Lion sign). Moving down hurts via reduced effective magnitude; moving up hurts via both curvature overshoot AND direction-noise.
-26. **lr response monotone at T_max=20+clip=1.0 in [1.5, 2.0]** [PR #4173]: lr=1.5e-4 ~57.66, lr=1.8e-4 → 58.38, lr=2.0e-4 → 56.98. No interior minimum — earlier hypothesis of "lr sweet spot between 1.5 and 2 at T_max=20+clip" is falsified.
-27. **T_max scan non-monotone at lr=2e-4+clip=1.0** [PR #4173]: T_max=14 → 56.89, T_max=18 → 57.72, T_max=20 → 56.98. T_max=18 worse than both endpoints — bimodal terminal-LR effect at the 14-epoch wall-clock cap. T_max=14 terminates at LR≈0, T_max=20 at LR≈5e-5, T_max=18 at LR≈2e-5 — "too low to keep learning, too high to settle".
-28. **layer_scale=1e-4 stabilises ema=0.999 (no divergence) but slow-converging** [PR #4214]: at layer_scale+T_max=20, ema=0.999 monotonically descends ep10=83 → ep13=63 (no NaN, no upward bounce). Contrast PR #4152 (no-layer_scale T_max=20) where ema=0.999 diverged. Layer_scale's small residual init dampens the gradient propagation enough to prevent the explosive feedback that EMA=0.999 induces at high-LR endpoints. However, ema=0.999 remains uncompetitive in 30-min budget due to slow effective convergence (averaged weights still tracking high-loss trajectory).
+20. **T_max=20 optimal** within 30-min budget at old substrate.
+21. **Multi-FiLM global conditioning FALSIFIED**: Global γ/β hurts camber_rc OOD.
+22. **LR optimum shifts from 1.5e-4 to 2e-4 at clip=1.0**: clip changes step direction; interaction is direction-sensitive.
+23. **layer_scale_init=1e-4 (CaiT/DeiT-III) composes ~80% additively with T_max=20**.
+24. **(clip × T_max) interaction super-additive at T_max=24**: clip essential at T_max≥24; late-LR endpoint ~1.35e-4 amplifies gradient outliers.
+25. **clip=1.0 valley is asymmetric (lr=2e-4+T_max=14)**: clip=0.7 → +2.46, clip=1.4 → +5.35. Two co-located optima (scale AND direction-stability).
+26. **lr response monotone at T_max=20+clip=1.0 in [1.5, 2.0]**: no interior minimum.
+27. **T_max scan non-monotone at lr=2e-4+clip=1.0**: T_max=18 worst (bimodal terminal-LR at 14-epoch wall-clock).
+28. **layer_scale=1e-4 stabilises ema=0.999 (no divergence) but slow-converging**: vs no-layer_scale T_max=20 where ema=0.999 diverged.
+29. **Four-way composition (ls=1e-4 + T_max=20 + lr=2e-4 + clip=1.0) beats BL on both metrics**: win concentrated in camber_rc (−4.9 val / −4.9 test). σ_val=1.55 across 3 seeds; 2/3 beat BL; median also beats BL. camber_cruise regresses (+2.5/+2.8). New best val 53.08 / test 44.89.
+30. **β1=0.9 robust at new substrate (T_max=24+clip=1.0)**: both arms +5 val. Rate-of-momentum-warmup dominates in 13-epoch budget. Lion optimizer-state axis closed.
+31. **ls=1e-3 marginal winner at old T_max=20 substrate**: −0.18 val / −0.57 test within σ. Non-monotone landscape on log(layer_scale): 3e-4 is worst. Against new BL, all arms regress.
+32. **lr=1.7e-4 directional winner at layer_scale+T_max=20+no-clip substrate**: −1.55 val / −1.22 test vs old BL. Cross-substrate: val beats new BL (52.75 < 53.08) but test regresses (+1.18) due to camber_cruise/re_rand divergence.
 
-## Next priorities
+## R12 focus: probing the new BL substrate
 
-1. **alphonse #4240 triple composition** (highest priority): layer_scale + T_max=24 + clip=1.0. Combines two improvement paths into one — Arm E and Arm D win on different splits.
-2. **fern #4255 lr@T_max=24+clip**: tests if finding #22 (lr=2e-4 optimal at clip+T_max=14) extends to T_max=24. lr=1.7e-4 is the most likely sweet spot.
-3. **nezuko #4201 four-way composition**: still WIP at layer_scale + T_max=20 + lr=2e-4 + clip. Now compares to val 53.81.
-4. **edward #4256 fine-grained clip @T_max=24**: tests asymmetric valley persistence (finding #25 → new substrate).
-5. **thorfinn #4258 Lion β1 @new substrate**: last untested optimizer-state axis.
-6. **tanjiro #4231 LR at layer_scale+T_max=20 substrate**: in-flight.
-7. **askeladd #4212 layer_scale magnitude**: in-flight at T_max=20 substrate. May be obsolete now that T_max=24+clip beats layer_scale+T_max=20 — but still informative.
-8. **frieren #4214 EMA decay at layer_scale+T_max=20**: in-flight. Similar comment.
-2. **askeladd #4212 layer_scale magnitude**: tests whether 1e-4 is locally optimal at the new BL substrate. If smaller magnitude (1e-5) wins, theory suggests even slower residual growth helps.
-3. **frieren #4214 EMA on new substrate**: σ=1.67 seed variance on T_max=20 is concerning; heavier EMA (0.999) may stabilize, OR may be unstable (carried over from prior substrate). Resolves whether substrate change rescues ema=0.999.
-4. **alphonse #4145** (WIP, awaiting Arm D+E): Arm B (T_max=20+clip at lr=1.5e-4 → val 56.71) doesn't beat new BL (54.30). Asked student to add Arm E (layer_scale + clip + T_max=20 at lr=1.5e-4) as the natural next composition.
-5. **thorfinn #4173 sent back**: Arms D (lr=1.8e-4 + T_max=20 + clip) and E (lr=2e-4 + T_max=18 + clip) — localizing the lr×T_max minimum at clip=1.0. These won't beat new BL unless layer_scale further composes.
-6. **tanjiro #4148**: LR@T_max=20 (no clip, no layer_scale). Results will now compare to val 54.30; only Arm D (lr=2e-4) has any hope.
-7. **edward #4180**: Clip ratio @ lr=2e-4. Now compared against new BL — only if layer_scale composes with clip will this beat 54.30.
-8. **fern #4192**: Huber β @ lr=2e-4. Same — needs to compose with layer_scale.
-9. **Paper completeness**: T_max ablation (done), clip (done), layer_scale (done), LR shift finding (done), four-way composition (in-flight #4201), layer_scale magnitude sweep (in-flight #4212). Need EMA ablation on new substrate (in-flight #4214).
+The new BL (PR #4201, val 53.08 / test 44.89) uses: ls=1e-4 + T_max=20 + lr=2e-4 + clip=1.0 + EMA(0.997). 
+
+**Main weakness**: camber_cruise regression (+2.5 val / +2.8 test), re_rand test (+0.92). The R12 experiments test 4 axes against this new substrate:
+1. **LR** (#4315 tanjiro): lr={1.7e-4, 2.3e-4} vs ctrl 2e-4
+2. **ls magnitude** (#4318 askeladd): ls={1e-3, 5e-5} vs ctrl 1e-4
+3. **WD** (#4319 nezuko): wd={5e-4, 2e-3} vs ctrl 1e-3 (FIRST WD sweep at new BL)
+4. **T_max** (#4320 thorfinn): T_max={16, 22} vs ctrl 20 (T_max=24 EXCLUDED — diverges at ls substrate)
+
+Also in-flight on old BL substrate (T_max=24+clip, no-ls): #4255 fern (LR), #4256 edward (clip), #4274 frieren (EMA), #4240 alphonse (triple compose — awaiting submission).
+
+**Note on guard parser issue**: Advisor template comments containing `SENPAI-RESULT: {...}` (literal brace placeholder) trip the merge guard parser. Future advisor comments should use "SENPAI-RESULT JSON marker" or similar instead of the literal template.

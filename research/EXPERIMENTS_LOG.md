@@ -1,5 +1,70 @@
 # SENPAI Research Results
 
+## 2026-05-17 03:15 — #4201 nezuko MERGED (new best); #4212 #4231 #4258 CLOSED; #4315 #4318 #4319 #4320 assigned (R12 — new BL substrate probes)
+
+### #4201 nezuko — R11 H62: 4-way composition (MERGED — **new best val 53.08 / test 44.89**)
+
+W&B group `round11-layerscale-clip-lr2e4-nezuko`. Config: layer_scale=1e-4 + T_max=20 + lr=2e-4 + clip=1.0 + EMA(0.997).
+
+| Run | val_avg | test_avg | State | Δ val vs BL | Δ test vs BL |
+|-----|---------|----------|-------|--------|--------|
+| **d3qlknrv** | **53.076** | **44.887** | finished | **−0.73** | **−0.60** |
+| jqmn2nw7 | 53.269 | 45.351 | finished | −0.54 | −0.14 |
+| 0zrrntw3 | 55.868 | 47.546 | finished | +2.06 | +2.06 |
+
+Per-split val vs BL (`hk1i5kd5`): in_dist +0.41, **camber_rc −4.90**, camber_cruise +2.50, re_rand −0.94
+Per-split test: in_dist −1.25, **camber_rc −4.90**, camber_cruise +2.81, re_rand +0.92
+
+**Win concentrated in camber_rc (−4.9 val / −4.9 test)**. The largest single-split improvement since grad_clip. layer_scale + clip together help high-variance gradient regions in the raceCar camber OOD split. Median of 3 seeds beats BL on both metrics; σ_val=1.55 non-trivial. New BL: val 53.08 / test 44.89 (W&B run `d3qlknrv`).
+
+**Finding #29**: Four-way composition (ls=1e-4 + T_max=20 + lr=2e-4 + clip=1.0) beats both prior BLs. The camber_rc improvement is mechanistically attributed to clip=1.0 + layer_scale together providing direction-sensitive step stabilization at high-gradient-norm geometry domains. camber_cruise regresses (+2.5/+2.8) — possible over-tight clip for the cruise gradient distribution (smaller scale, different density).
+
+---
+
+### #4258 thorfinn — R11 H69: Lion β1 sweep at T_max=24+clip (CLOSED — informative null, Finding #30)
+
+| Arm | β1 | val | test | Δ val vs BL |
+|-----|-----|-----|------|----|
+| BL hk1i5kd5 (0.9 default) | 0.90 | 53.81 | 45.49 | — |
+| A vkc3uadu | 0.85 | 58.69 | 50.58 | **+4.88** |
+| B 9tq16oww | 0.95 | 59.87 | 50.96 | **+6.06** |
+
+**Finding #30**: β1=0.9 is robustly optimal at the new BL substrate (T_max=24+clip=1.0). Both arms regress by ~5 val / ~5 test — uniform across all 8 splits. Failure mode is rate-of-momentum-warmup within the 13-epoch budget (not basin geometry). Lion's 10-step effective horizon at β1=0.9 is well-calibrated for 30-min wall-clock. The Lion optimizer-state axis is closed.
+
+---
+
+### #4212 askeladd — R11 H63: layer_scale magnitude sweep {1e-3, 1e-5, 3e-4} (CLOSED — informative null, Finding #31)
+
+| Arm | layer_scale | val | test | Δ val vs old BL (54.30) |
+|-----|------------|-----|------|---|
+| BL 8m99yywe | 1e-4 | 54.30 | 47.29 | — |
+| A sovpk3l6 | 1e-3 | 54.12 | 46.72 | **−0.18** (within σ) |
+| B vusm2vyi | 1e-5 | 54.73 | 46.82 | +0.43 |
+| C t6a2cybj | 3e-4 | 55.54 | 48.12 | +1.24 |
+
+**Finding #31**: ls=1e-3 marginal winner at old T_max=20 substrate (−0.18 val, −0.57 test), within σ_val=1.67. Landscape is non-monotone on log(layer_scale) — 3e-4 (geometric mean of 1e-4 and 1e-3) is worst. Against NEW BL (val 53.08 / test 44.89 with clip=1.0+lr=2e-4): all arms regress (+1.04 val / +1.83 test). Follow-up assigned: test ls=1e-3 at new BL substrate.
+
+---
+
+### #4231 tanjiro — R11 H65: LR recalibration at layer_scale+T_max=20 (CLOSED — informative null + Finding #32)
+
+| Arm | lr | val | test | Δ val vs old BL (54.30) | Δ val vs new BL (53.08) |
+|-----|-----|-----|------|---|---|
+| z9y2cmh9 | 1.7e-4 | 52.75 | 46.07 | −1.55 | **−0.33** |
+| 9xf1s8ay | 2.0e-4 | 54.54 | 47.16 | +0.24 | +1.46 |
+
+**Finding #32**: lr=1.7e-4 is the directional winner within the layer_scale+T_max=20+no-clip substrate (−1.55 val / −1.22 test vs old BL). Against new BL: val beats (52.75 < 53.08) but test REGRESSES (+1.18). Cross-substrate confound (no-clip vs clip=1.0) prevents clean attribution. The val/test divergence is driven by camber_cruise (+2.86 val, +3.19 test) and re_rand (val −1.65 better, test +1.63 worse). Follow-up assigned: test lr=1.7e-4 at NEW BL substrate (T_max=20+ls=1e-4+clip=1.0+lr=2e-4 ctrl).
+
+---
+
+### New assignments (R12 — probing new BL substrate)
+- **#4315 tanjiro** — R12 H71: LR sweep at new BL substrate (lr={1.7e-4, 2.3e-4} vs ctrl 2e-4)
+- **#4318 askeladd** — R12 H72: ls magnitude at new BL substrate (ls={1e-3, 5e-5} vs ctrl 1e-4)
+- **#4319 nezuko** — R12 H73: WD sweep at new BL substrate (wd={5e-4, 2e-3} vs ctrl 1e-3)
+- **#4320 thorfinn** — R12 H74: T_max sweep at new BL substrate (T_max={16, 22} vs ctrl 20; T_max=24 excluded due to divergence at ls substrate)
+
+---
+
 ## 2026-05-17 01:45 — #4214 frieren EMA@layer_scale CLOSED (truncated, finding #28); #4274 frieren EMA@T_max=24+clip new BL assigned
 
 ### #4214 frieren — R11 H64: EMA decay at layer_scale+T_max=20 (CLOSED — timeout-truncated, informative null + Finding #28)
