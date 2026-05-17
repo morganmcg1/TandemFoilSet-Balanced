@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 10:46 — #4348 alphonse MERGED (n_head=2, val=31.6653, −1.04%, **18th winner**); #4502 tanjiro CLOSED (informative but stale stack); #4564 alphonse (combined canonical validate + n_head=1), #4565 tanjiro (LR push combined canonical) assigned (slice_num=32, val=31.9978, −7.42%, **17th winner**); #4421 fern CLOSED (warmup=1 beats T_max=25 canonical but superseded); #4234 askeladd CLOSED (batch size failed on old stack); #3952 edward CLOSED (log-p aux negative on canonical); #4502 tanjiro assigned LR retune, #4504 nezuko EMA sweep. **4 idle students need assignments.**
+- **Date:** 2026-05-17 11:25 — **Final harvest tick.** Launch ends ~12:00 UTC (~35 min). **NEW STRONG SIGNAL discovered this tick: thorfinn #4541 `variant-slice24` (run `mlcvi650`) finished at val=31.3233 (best_epoch=22), test_re_rand=23.56, test_geom_camber_rc=38.43, test_single_in_dist=32.32 — beats current canonical (31.6653) by −1.05%.** ⚠ Important caveat: ran on n_head=4 (default), NOT n_head=2 (current canonical from #4348). Asked thorfinn to interrupt slice16 (won't finish) and post terminal SENPAI-RESULT for slice24 ASAP. Pending: 6 active WIP runs (#4564, #4565, #4538, #4539, #4540, #4541) at ep1-22; only #4541 slice24 has terminal arm. Previous tick: #4348 alphonse MERGED (n_head=2, val=31.6653, −1.04%, **18th winner**); #4296 thorfinn MERGED (slice_num=32, val=31.9978, −7.42%, **17th winner**).
 - **Branch:** `icml-appendix-willow-pai2i-48h-r3`
 - **Most recent human researcher directive:** None this launch.
 - **Canonical baseline (merged):** `val_avg/mae_surf_p = 31.6653`, `test_avg/mae_surf_p (excl cruise) = 31.502`
@@ -98,6 +98,24 @@ Old launch baseline: 135.30. Total gain: **−76.6%** over 18 compounding improv
 | **#4539** | **edward** | **T_max retune {25, 30, 35} at slice_num=32** (21-epoch calibration) | ~−1-3% (T_max sweet spot) |
 | **#4540** | **fern** | **LR push {2.5e-3, 3e-3} at slice_num=32** (LR ceiling re-test) | Unknown — previously failed at slice_num=64 |
 | **#4541** | **thorfinn** | **slice_num=16/24 finer sweep** (probe lower boundary) | ~−2-5% (direction confirmed <32 potential) |
+
+## Tick 5 results (11:25 UTC, ~35 min to launch end)
+
+### Strong signal: thorfinn slice_num=24 (PR #4541)
+- **Run mlcvi650, slice24, n_head=4 (default, pre-#4348), T_max=25, all other canonical:** val_avg/mae_surf_p = **31.3233** (best_epoch=22), test_re_rand=23.56, test_geom_camber_rc=38.43, test_single_in_dist=32.32.
+- **vs current canonical (n_head=2/slice64 measured: 31.6653):** −1.05%.
+- **vs previous canonical (n_head=4/slice32 measured: 31.9978, your own PR #4296):** −2.10%.
+- **Caveat:** n_head stack differs from current canonical. slice24+n_head=2 combo is UNMEASURED — could be even better or interact.
+- **Action:** Asked thorfinn to post terminal SENPAI-RESULT with slice24 metrics so we can review/merge before launch close.
+- **slice_num=16 arm:** Still at ~ep2/50; will not finish before 12:00.
+
+### In-flight runs at end of launch (cannot finish):
+- **#4564 alphonse** baseline-nhead2-slice32 (combined canonical validate) — ep3/50. The most strategically valuable run; would measure the unmeasured combined canonical.
+- **#4565 tanjiro** variant-lr25e3-nhead2-slice32 (lr=2.5e-3 on combined canonical) — ep1/50.
+- **#4538 askeladd** warmup1-slice32 — ep19/50, val=33.11 (still above canonical).
+- **#4539 edward** variant-tmax30-slice32 — ep8/50, val=65.04 (early).
+- **#4540 fern** variant-lr25e4-slice32 — ep20/50, val=32.06 (above canonical).
+- **#4541 thorfinn** variant-slice16 — ep2/50, val=239.04 (very early).
 
 ## Key learnings (cumulative)
 

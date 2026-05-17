@@ -1776,3 +1776,38 @@ Per-split test (n_head=2): test_single_in_dist=31.909, test_geom_camber_rc=39.34
 
 - Hypothesis: n_head=2+slice32 reduces per-step cost → more epochs → LR ceiling may be above 2e-3 on combined canonical.
 - 2 arms: lr ∈ {2.5e-3, 3e-3} at n_head=2+slice32+T_max=25.
+
+---
+
+## 2026-05-17 11:25 — PR #4541 (thorfinn): slice_num=16/24 sweep — **STRONG SIGNAL, harvest pending**
+
+- Branch: `willowpai2i48h3-thorfinn/slice-num-finer-sweep`
+- W&B runs: `mlcvi650` (variant-slice24, FINISHED), variant-slice16 (running ~ep2/50, will not finish before launch close)
+- Stack: T_max=25, slice_num ∈ {16, 24}, **n_head=4 (DEFAULT, NOT n_head=2 canonical)**, lr=2e-3, all other canonical
+
+**slice_num=24 result (vs current canonical 31.6653 = n_head=2 + slice64, and previous canonical 31.9978 = n_head=4 + slice32):**
+
+| Arm | slice_num | n_head | val_avg/mae_surf_p | Δ vs 31.6653 | Δ vs 31.9978 | best_epoch |
+|---|---|---|---|---|---|---|
+| **slice24** | **24** | **4 (default)** | **31.3233** | **−1.05%** | **−2.10%** | **22** |
+| slice16 | 16 | 4 (default) | (running, ~ep2/50) | — | — | — |
+
+Per-split test (slice24): test_re_rand=23.56, test_geom_camber_rc=38.43, test_single_in_dist=32.32. Computed test_avg/mae_surf_p_excl_cruise ≈ 31.44.
+
+**Analysis:** slice_num=24 confirms the coarser-attention direction even more aggressively than slice32. Mechanism: fewer slices → faster steps → 22 epochs in 30-min cap (vs 21 at slice32, vs 17 at slice64). Two-region physics (foil leading/trailing edges + wake) may map well to 24 attention groups. Best measured result this entire launch.
+
+**Caveat:** Ran on n_head=4 (default at time of assignment, before PR #4348 merged n_head=2 canonical). slice24+n_head=2 combination is UNMEASURED — could be additive (better) or interact non-trivially (worse).
+
+**Action:** Asked thorfinn to interrupt slice16 (cannot finish by 12:00 UTC launch end) and post terminal SENPAI-RESULT with slice24 metrics. Decision deferred until terminal marker posted.
+
+---
+
+## 2026-05-17 11:25 — Final harvest tick: WIP experiments at end of launch
+
+6 WIP runs in flight that will NOT complete before 12:00 UTC launch close:
+- **#4564 alphonse**: baseline-nhead2-slice32 at ep3/50 — most strategically valuable (combined canonical validate). Best harvest: post-launch via W&B.
+- **#4565 tanjiro**: variant-lr25e3-nhead2-slice32 at ep1/50 — LR push on combined canonical.
+- **#4538 askeladd**: warmup1-slice32 at ep19/50, val=33.11 (above canonical, would not have beaten).
+- **#4539 edward**: variant-tmax30-slice32 at ep8/50, val=65.04 (early, unclear trajectory).
+- **#4540 fern**: variant-lr25e4-slice32 at ep20/50, val=32.06 (lr=2.5e-4 ARM not push; would not have beaten).
+- **#4541 thorfinn**: variant-slice16 at ep2/50, val=239.04 (very early; sister arm slice24 produced the strong signal).
