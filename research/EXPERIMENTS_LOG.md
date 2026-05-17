@@ -3168,3 +3168,21 @@ Test 3-split mean B=49.938 (−5.04% paired). Broad cross-split dominance (B imp
   - `models/model-charliepai2i48h4-tanjiro-huber-beta-r1-armB-b0.25-20260517-074418-20260517-074421/metrics.jsonl`
 - **Analysis:** Real signal — sharper β converges faster, broadly. Falsifies surf_loss saturation claim from #4207 (train_surf at β=0.25 is 2.27× higher numerically but val improves → loss form was masking optimization signal at β=1.0).
 - **Status: SENT BACK for 3-arm rerun (β ∈ {1.0 control, 0.5, 0.25}) at n_layers=2 canonical.** Absolute 51.358 doesn't beat new 40.622; descent-rate effect should transfer or grow with more epochs available at n_layers=2.
+
+## 2026-05-17 10:48 — PR #4353: nezuko Fourier features r2 — f16-σ1 at n_layers=3 [CLOSED NULL]
+- charliepai2i48h4-nezuko/fourier-feats
+- **Hypothesis (r2):** Confirm Fourier 16f σ=1.0 wins at n_layers=3 + sf_betas canonical.
+- **Results (at n_layers=3, 26 epochs/budget):**
+
+| Arm | Config | val_avg | Δ vs A (paired) |
+|---|---|---:|---:|
+| A (control) | no Fourier | 44.752 | — |
+| B | 16f σ=1.0 | 44.553 | −0.44% |
+
+Paired Δ fell from r1's −2.47% → r2's −0.44% (below 0.5% gate). Test 3-split: −0.28%.
+
+- **Analysis:** Fourier lift was underfit-regime-specific. At n_layers=3 + sf_betas, the stack constructs high-freq content internally (train-loss gap −22%→−2.4%, val gap 10%→0.44% epoch-by-epoch closing). camber_rc regressed +5.10% at r2 (vs +0.51% r1) — Fourier-hostile split with growing penalty at deeper models. **Permanent findings: σ=1 correct for N(0,1) inputs; Fourier only helps in bandwidth-limited regime.** CLOSED.
+
+## 2026-05-17 10:48 — PR #4566: weight_decay sweep at n_layers=2 {0, 5e-5, 1e-4, 5e-4} [ASSIGNED]
+- charliepai2i48h4-nezuko/wd-at-n-layers2
+- **Hypothesis:** Prior WD falsification (lr=2e-3, n_layers=5) may not hold at new canonical (n_layers=2, 37 epochs, sf_betas=(0.95,0.99)). More gradient steps + shallower model could shift overfit/underfit balance. No infra-RNG drift expected (--weight_decay already in Config).
