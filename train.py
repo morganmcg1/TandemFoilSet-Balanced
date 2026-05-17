@@ -288,12 +288,14 @@ class Transolver(nn.Module):
                  slice_num=32, ref=8, unified_pos=False, cond_dim=0,
                  ffn_act="gelu", norm_type="layernorm",
                  fourier_pe_freqs: int = 0,
+                 dsdf_fourier_pe_freqs: int = 0,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.fourier_pe_freqs = fourier_pe_freqs
+        self.dsdf_fourier_pe_freqs = dsdf_fourier_pe_freqs
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
 
@@ -344,6 +346,12 @@ class Transolver(nn.Module):
         if self.fourier_pe_freqs > 0:
             ff = fourier_features(x[..., :2], self.fourier_pe_freqs)
             x = torch.cat([x, ff], dim=-1)
+        if self.dsdf_fourier_pe_freqs > 0:
+            # DSDF channels live at original dims 4:11 (signed distances to
+            # surface segments). Reused fourier_features helper — 2*K features
+            # per channel → 14*K added features for the 7 DSDF channels.
+            dsdf_ff = fourier_features(x[..., 4:11], self.dsdf_fourier_pe_freqs)
+            x = torch.cat([x, dsdf_ff], dim=-1)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx, cond=cond)
@@ -601,6 +609,8 @@ class Config:
     T_max: int = 15  # CosineAnnealingLR period; default preserves prior behavior
     fourier_pe: bool = False   # Tancik Fourier PE on (x, z) coords (H106)
     fourier_pe_freqs: int = 8  # Number of log-spaced frequencies; adds 4*K features
+    dsdf_fourier_pe: bool = False  # Tancik Fourier PE on DSDF channels x[..., 4:11] (H132)
+    dsdf_fourier_pe_freqs: int = 1  # K for DSDF Fourier; adds 14*K features
 
 
 cfg = sp.parse(Config)
@@ -636,7 +646,8 @@ val_loaders = {
 }
 
 fourier_pe_freqs = cfg.fourier_pe_freqs if cfg.fourier_pe else 0
-extra_pe_features = 4 * fourier_pe_freqs
+dsdf_fourier_pe_freqs = cfg.dsdf_fourier_pe_freqs if cfg.dsdf_fourier_pe else 0
+extra_pe_features = 4 * fourier_pe_freqs + 14 * dsdf_fourier_pe_freqs
 model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2 + extra_pe_features,
@@ -650,6 +661,7 @@ model_config = dict(
     ffn_act=cfg.ffn_act,
     norm_type=cfg.norm_type,
     fourier_pe_freqs=fourier_pe_freqs,
+    dsdf_fourier_pe_freqs=dsdf_fourier_pe_freqs,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -793,6 +805,8 @@ for epoch in range(MAX_EPOCHS):
         "T_max": cfg.T_max,
         "fourier_pe": cfg.fourier_pe,
         "fourier_pe_freqs": fourier_pe_freqs,
+        "dsdf_fourier_pe": cfg.dsdf_fourier_pe,
+        "dsdf_fourier_pe_freqs": dsdf_fourier_pe_freqs,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "gate_stats": gate_stats,
