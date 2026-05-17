@@ -5,6 +5,54 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-17 04:30 — PR #4222 (charliepai2i48h5-frieren): lr=7e-4+clip=1.0 compound on bs=2+n=10+δ=0.10 — CLOSED (lr=7e-4 doesn't transfer to lineage B; clip×δ reversal confirmed for 3rd time)
+
+- branch: `frieren/clip-lr-5way-compound`
+- hypothesis: 5-way compound (bs=2+n=10+δ=0.10+lr=7e-4+clip=1.0) — combines lineage A's lr win with lineage B's stack
+
+| arm | (lr, clip) | val_avg | Δ vs new best (56.124) | test_avg | best_ep | clip_frac@18 |
+|-----|-----------|---------|-------------------------|----------|---------|--------------|
+| arm-1 | (7e-4, 0.25) | 57.53 | **+2.5%** ✗ | 49.66 | 18/18 | 0.992 |
+| arm-2 | (7e-4, 1.0) | 58.38 | **+4.0%** ✗ | 49.96 | 17/18 | **0.644** |
+
+- metric artifacts: `models/model-charliepai2i48h5-frieren-arm1-bs2-n10-h010-lr7e4-clip025-20260517-015412/metrics.jsonl`, `models/model-charliepai2i48h5-frieren-arm2-bs2-n10-h010-lr7e4-clip10-20260517-022853/metrics.jsonl`
+
+**Analysis and conclusions:**
+
+**lr=7e-4 does NOT transfer from lineage A → lineage B.** At n=10+δ=0.10, lr=7e-4 produces noisier optimization despite clip-saturation. Mechanism: δ=0.10 + lr=7e-4 → faster traversal through L1-regime → larger raw gradients → late-cosine cannot recover. arm-1 val=57.53 (+2.5%) regresses, not the predicted -3.2% improvement.
+
+**THIRD INDEPENDENT CONFIRMATION of clip × δ interaction reversal at tight Huber knee** (joining nezuko #4223 and earlier observations): arm-2's clip_frac collapses from 0.992 (ep5) to **0.644 (ep18)** — 36% of late-training steps escape the clip ceiling. At δ=0.10, escaped-step direction has high-variance magnitude (L1-linear branch), producing late-training instability (ep14 val=70.86 spike, ep18 worse than ep17).
+
+**Settled**: lr=7e-4 + clip=1.0 + δ=0.10 is anti-compound. Stop testing clip=1.0 with δ=0.10 anywhere.
+
+**Implication for in-flight alphonse #4330**: slice=32 + lr=7e-4 + n=10 + δ=0.10 may show same regression for same reason. slice=32's +4-epoch budget MAY give cosine room to recover that this fixed-18-epoch experiment lacked.
+
+**Reassigned frieren to**: surf_weight upper sweep {12, 15} (#4352) — never explored above default 10.
+
+---
+
+## 2026-05-17 04:25 — PR #4220 (charliepai2i48h5-tanjiro): 4-way Huber merge n8+lr7e4+δ0.10 and δ=0.05 — CLOSED (mild val win on old baseline, regresses vs new best 56.124)
+
+- branch: `tanjiro/huber-4way-merge`
+- hypothesis: 4-way compound (n=8+lr=7e-4+δ=0.10) merges lineage A & B; δ=0.05 probes the Huber floor
+
+| arm | (n, lr, δ) | val_avg | Δ vs new best 56.124 | test_avg | best_ep |
+|-----|------------|---------|----------------------|----------|---------|
+| arm-1 | (8, 7e-4, 0.10) | 56.39 | **+0.47%** ✗ | 49.60 | 18/18 |
+| arm-2 | (10, 5e-4, 0.05) | 58.21 | **+3.7%** ✗ | 50.91 | 18/18 |
+
+- metric artifacts: `target/models/model-bf16-layerscale-bs2-n8-lr7e4-huber010-20260517-022328/metrics.jsonl`, `target/models/model-bf16-layerscale-bs2-n10-huber005-20260517-012252/metrics.jsonl`
+
+**Analysis and conclusions:**
+
+arm-1 (4-way): val=56.39 — beats OLD baseline (#4103, 56.92) but does NOT beat NEW best (#4221, 56.124). The 4-way val/test divergence is notable: arm-1 improves val vs #4103 by -0.93% but regresses test +0.57% across 3/4 splits. **The compound is approaching the val-generalization knee at 18-epoch budget** — adding levers improves val but the test gap doesn't follow.
+
+arm-2 (δ=0.05): val=58.21 — **breaks the monotonic Huber tightening trend**. The δ=0.30→0.15→0.10 monotonic improvement does NOT continue to 0.05. Mechanism: at δ=0.05 too many samples fall in the L1 linear region late (clip_frac=0.964 at ep18 vs 0.984 for arm-1), producing noisier optimization that cosine schedule can't compensate. **δ=0.10 is the Huber floor on n=10**.
+
+**Reassigned tanjiro to**: 5-way compound (slice=32 + n=8 + lr=7e-4 + δ=0.10) — adds slice=32 to your 4-way arm-1 stack. The +4-epoch budget from slice=32 may rescue what your 18-epoch budget couldn't.
+
+---
+
 ## 2026-05-17 04:00 — PR #4288 (charliepai2i48h5-fern): EMA × Huber δ=0.10 compound on new best stack — CLOSED (anti-additive, ~12% per-epoch overhead costs 2 epochs)
 
 - branch: `fern/ema-delta-compound`

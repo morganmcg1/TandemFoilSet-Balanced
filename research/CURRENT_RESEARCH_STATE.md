@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 04:05
+- **Date:** 2026-05-17 04:35
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
@@ -44,9 +44,9 @@
 |---|---|---|---|
 | edward | #4289 | n_hidden capacity {160, 192} on new best (bs=2+n=10+δ=0.10) | wave-15 NEW (just assigned) |
 | fern | #4331 | fourier_base sweep {64, 256} on new best stack | wave-15 NEW (just assigned) |
-| tanjiro | #4220 | 4-way merge (n=8+lr=7e-4+δ=0.10) + δ=0.05 | wave-14 WIP (long-running, multiple arms) |
+| tanjiro | #4349 | 5-way compound (slice=32 + n=8 + lr=7e-4 + δ=0.10) | wave-15 NEW (just assigned) |
 | thorfinn | #4298 | slice_num refinement — slice=40 + slice=48+T_max=24 on new best | wave-15 NEW (just assigned) |
-| frieren | #4222 | lr=7e-4+clip=1.0 on bs=2+n=10+δ=0.10 (5-way compound) | wave-14 WIP |
+| frieren | #4352 | surf_weight upper sweep {12, 15} on new best | wave-15 NEW (just assigned) |
 | nezuko | #4293 | sub-unity clip {0.15, 0.10} on bs=2+n=10+δ=0.10 | wave-15 NEW (just assigned) |
 | alphonse | #4330 | slice=32 + lr=7e-4 compound on new best (4-way merge w/lineage A's lr win) | wave-15 NEW (just assigned) |
 | askeladd | #4322 | weight_decay sweep {0.001, 0.005} on new best stack (slice=32+n=10+δ=0.10) | wave-15 NEW (just assigned) |
@@ -79,6 +79,10 @@
 - **EMA × δ=0.10 ANTI-ADDITIVE** (PR #4288 closed): EMA gap shrinks to +2.23 at δ=0.10 (Huber already does noise reduction) AND the ~12-14% per-epoch overhead costs 2 epochs in 30-min budget. Net: arm-1 val=60.42 (+7.6% vs new best). EMA is DEAD on current best stack at this budget.
 - **LR ceiling at 7e-4 for bs=2+n=8 lineage** (PR #4198 closed): lr=9e-4 val=59.02 (+3.34%), lr=1.2e-3 val=57.95 (+1.46%). Non-unimodal curve — γ-collapse partially offsets larger LR. clip-saturation robust to LR within 18-epoch window.
 - **Per-split signature emerging**: cruise + re_rand respond differently than single + rc to optimization changes. Three independent observations now (alphonse #4198, askeladd #4179, thorfinn #4221). Lower-magnitude / less-clip-saturated splits gain when single/rc don't. Strong candidate for per-split loss / per-split δ in future.
+- **lr=7e-4 does NOT transfer to lineage B** (frieren #4222 closed): val 57.53 (+2.5% vs new best). At δ=0.10+n=10, lr=7e-4 produces noisier L1-regime gradients; late-cosine can't recover at 18-epoch budget. May still work on slice=32 stack (+4 epoch budget) — alphonse #4330 testing.
+- **clip × δ reversal THIRD confirmation** (frieren #4222): clip_frac collapses 0.992→0.644 at clip=1.0+δ=0.10+lr=7e-4. 36% of late-training steps escape clip. STOP testing clip≥1.0 with δ=0.10 anywhere.
+- **δ=0.10 is the Huber floor on n=10** (tanjiro #4220 arm-2 closed): δ=0.05 regresses +3.7% vs new best. Monotonic Huber tightening 0.3→0.15→0.10 does NOT continue.
+- **Stack-lineage merger is sub-additive** (tanjiro #4220 arm-1 closed): 4-way compound (n=8+lr=7e-4+δ=0.10) val=56.39 — beats old baseline 56.92 but NOT new best 56.124. Adding slice=32 = 5-way (tanjiro #4349 testing).
 - **clip × δ interaction REVERSES at tight knee** (PR #4223 closed): clip=1.0 + δ=0.10 → clip_frac drops to 0.716 at ep17 (vs 1.0 on δ=0.30 stack). Tight Huber knee → smaller late-epoch gradients → clip rarely engages. clip=1.0 regresses +1.66% val on this stack. **Implies tighter clip {0.15, 0.10} may now help** (testing in nezuko #4293).
 - **surf_weight=5 regresses on n=10+δ=0.10** (PR #4223): val 57.594 +1.18%. surf_weight=10 already well-calibrated; rebalancing trades surf↑ vs vol↓ unfavorably.
 - **Memory headroom**: 18.43 GB peak at bs=2 vs 96 GB. n_hidden expansion is viable.
@@ -99,9 +103,9 @@
 ## Potential next research directions
 
 - **n_hidden > 192**: if edward #4279 confirms capacity helps, push to 224/256.
-- **δ=0.05 or L1**: tanjiro #4220 arm-2 testing. If monotonic, push lower.
+- **δ=0.05 settled**: tanjiro #4220 closed — regresses. δ=0.10 is the floor on n=10.
 - **LR warmup**: 5-epoch warmup on new best — untested.
 - **weight_decay {0.001, 0.005}**: askeladd #4322 testing on new best stack.
 - **Per-domain loss weighting**: cruise responds to δ=0.15 distinctly (−2.75%). A domain-specific δ or surf_weight could exploit this.
 - **slice_num=40 middle bracket + slice=48+T_max=24**: thorfinn #4298 testing (refining the slice=32 win).
-- **5-way compound (n=10+δ=0.10+lr=7e-4+clip=1.0)**: frieren #4222 testing.
+- **5-way compound (n=10+δ=0.10+lr=7e-4+clip=1.0)**: frieren #4222 CLOSED (regresses, clip×δ reversal confirmed). tanjiro #4349 testing different 5-way (slice=32+n=8+lr=7e-4+δ=0.10).
