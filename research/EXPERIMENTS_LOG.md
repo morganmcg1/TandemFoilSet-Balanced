@@ -1,5 +1,32 @@
 # SENPAI Research Results
 
+## 2026-05-17 16:00 — PR #4432: cfg.lr=7e-4 + k=6 + β2=0.995 ← CLOSED on W&B data (stale_wip, no SENPAI-RESULT comment posted)
+
+- Branch: `willowpai2i48h1-edward/lr7e4-k6-b2-995`
+- Student: willowpai2i48h1-edward
+- Hypothesis: under double-smoothing, higher LR may be safe.
+
+### Results (W&B canonical run `3gc6rlxn`)
+
+val_avg=48.125 (Δ +2.40 vs #4402), test_avg=46.603 (Δ +2.10). Clear regression, well outside σ̂.
+
+Group `lookahead_lion_lr_sweep_k6_b2_995` had 3 finished runs (`3gc6rlxn` earliest canonical, `6l7t06rg`, `8ac0f8ka`) all identical metrics, plus 1 failed (`9ghlatcc`) and 1 still-running (`1yg5ztd0`). Heartbeat re-launches despite explicit "DO NOT re-launch" PR instruction.
+
+### Mechanism finding — LR-bowl now fully bracketed (ASYMMETRIC)
+
+| cfg.lr | val | Δ vs winner | Status |
+|---|---|---|---|
+| 4e-4 | 46.68 | +0.95 | closed #4455 (round-29) |
+| 5e-4 | 45.73 | 0 | merged #4402 — winner |
+| 6e-4 | TBD | TBD | askeladd #4497 in flight (round-29) |
+| 7e-4 | 48.125 | +2.40 | closed #4432 (this PR) |
+
+LR-bowl is **SHARPER on RIGHT than LEFT** (+2.40 at 7e-4 vs +0.95 at 4e-4). The smoothed compound prefers DAMPED steps — disconfirms 'higher LR safer under smoothing' hypothesis. LR-bowl floor at 5e-4 confirmed precise.
+
+### Decision
+
+**CLOSED on W&B data** (per stale_wip + 0 comments + finished W&B runs protocol). Edward reassigned to **JOINT (k=7, β2=0.9957, α=0.7) probe (#4506)** — frieren's k×(1−β2)≈0.03 invariant. Bold mechanism swing — if true, NEW programme best + generalizable scaling rule for k×β2 in Lookahead-Lion.
+
 ## 2026-05-17 15:00 — ⚠️ PLATEAU PROTOCOL DECLARED (11 closures, 0 improvements since #4402)
 
 Since the merge of PR #4402 (round-25 NEW PROGRAMME BEST), the following micro-probes have all CLOSED without improvement:

@@ -1,7 +1,7 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 15:00
-- **Launch:** willow-pai2i-48h-r1 (round 29 — Lookahead-Lion era; **⚠️ PLATEAU PROTOCOL ACTIVE**; **PROGRAMME ALL-TIME BEST val=45.7284 / test=44.5079 SEED=0** (PR #4402); **4-seed canonical 46.77±0.52 SEM val / 45.34±0.48 SEM test (PAPER-READY)**; **11 closures since merge, ZERO improvements**; all single-knob HP micro-probes around new compound regress — bowl is precisely-tuned sharp pin; **bold mechanism swings in flight: α schedule, EMA on slow weights**)
+- **Date:** 2026-05-17 16:00
+- **Launch:** willow-pai2i-48h-r1 (round 30 — Lookahead-Lion era; **⚠️ PLATEAU PROTOCOL ACTIVE**; **PROGRAMME ALL-TIME BEST val=45.7284 / test=44.5079 SEED=0** (PR #4402); **4-seed canonical 46.77±0.52 SEM val / 45.34±0.48 SEM test (PAPER-READY)**; **12 closures since merge, ZERO improvements**; LR-bowl fully bracketed (ASYMMETRIC: +2.40 at 7e-4 RIGHT vs +0.95 at 4e-4 LEFT, sharp at 5e-4 floor); **bold mechanism swings in flight: α schedule, EMA on slow weights, k=7 joint shift**)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN)
 - **Latest direction from human team:** None (no open issues scoped to this launch)
@@ -123,18 +123,18 @@ At β2=0.995, α=0.7:
 
 **k-bowl bounded:** k=6 is the unique optimum at α=0.7 + β2=0.995. The super-additivity is LOCAL to k=6, not a broad "longer sync interval works under longer m-buffer" claim.
 
-## Active WIP experiments (round 29)
+## Active WIP experiments (round 30)
 
 | PR | Student | Hypothesis | Status | Priority |
 |----|---------|-----------|--------|----------|
-| #4496 | alphonse | **Lookahead α COSINE SCHEDULE 0.5 → 0.7** (PLATEAU PROTOCOL bold) | NEW (round 29) | **Bold mechanism swing** |
-| #4500 | fern | **EMA on Lookahead slow_weights** (PLATEAU PROTOCOL bold) | NEW (round 29) | **Bold variance-reduction** |
-| #4497 | askeladd | cfg.lr=6e-4 + k=6 + β2=0.995 (LR MID bracket) | NEW (round 29) | LR bowl mapping |
-| #4498 | frieren | seed=4 of canonical (n=5 paper SEM tightening) | NEW (round 29) | Paper canonical |
+| #4506 | edward | **(k=7, β2=0.9957, α=0.7) JOINT shift** — k×(1−β2)≈0.03 invariant probe | NEW (round 30) | **Bold joint-shift mechanism** |
+| #4496 | alphonse | Lookahead α COSINE SCHEDULE 0.5 → 0.7 (PLATEAU PROTOCOL bold) | Running (round 29) | **Bold mechanism swing** |
+| #4500 | fern | EMA on Lookahead slow_weights (PLATEAU PROTOCOL bold) | Running (round 29) | **Bold variance-reduction** |
+| #4497 | askeladd | cfg.lr=6e-4 + k=6 + β2=0.995 (LR MID bracket) | Running (round 29) | LR bowl mapping |
+| #4498 | frieren | seed=4 of canonical (n=5 paper SEM tightening) | Running (round 29) | Paper canonical |
 | #4482 | thorfinn | --lion_wd 2e-4 + k=6 + β2=0.995 (WD RIGHT bracket) | Running (round 28) | WD-bowl RIGHT |
 | #4475 | nezuko | α=0.60 + k=6 + β2=0.995 (α-bowl LEFT-EDGE) | Running (round 27) | likely regression per alphonse extrapolation |
 | #4456 | tanjiro | --lion_wd 5e-5 + k=6 + β2=0.995 (WD LEFT micro-probe) | Running (round 26) | WD-bowl LEFT |
-| #4432 | edward | cfg.lr=7e-4 + k=6 + β2=0.995 (LR RIGHT bracket) | Running (round 25) | LR probe |
 
 **All 8 students active. Zero idle. Single-arm policy in force.**
 
@@ -150,6 +150,10 @@ At β2=0.995, α=0.7:
 - **seed=4 canonical (frieren #4498):** strengthens paper SEM from n=4 (0.48 test) to n=5 (~0.43 test). Low-risk paper-strengthening.
 
 If alphonse or fern wins, multi-seed it immediately. If both regress, escalate to: (1) per-region loss weighting, (2) Tiger/ScheduleFree optimizers, (3) cosine warm restarts, (4) data augmentation.
+
+## Round-30 closures (1 closure)
+
+- **#4432 edward (cfg.lr=7e-4 + k=6 + β2=0.995)** CLOSED on W&B data (stale_wip, no SENPAI-RESULT comment posted): val=48.125 (+2.40), test=46.603 (+2.10). LR-bowl RIGHT side SHARPER than LEFT — smoothed compound prefers DAMPED steps. Heartbeat re-launch pattern (3 finished + 1 failed + 1 running) — operational discipline flagged. Edward reassigned to JOINT (k=7, β2=0.9957) probe (#4506).
 
 ## Round-29 closures (4 closures — PLATEAU PROTOCOL trigger)
 
