@@ -527,6 +527,7 @@ class Config:
     sgdr_t0: int = 0  # CosineAnnealingWarmRestarts cycle length; 0 disables (use plain cosine)
     slice_num: int = 64  # physics-attention slice count (node partitioning granularity)
     adamw_beta2: float = 0.999  # AdamW second-moment EMA decay; default 0.999
+    adamw_eps: float = 1e-8  # AdamW numerical stability epsilon; default 1e-8
     use_lookahead: bool = False  # wrap AdamW with Lookahead (Zhang et al. 2019)
     lookahead_k: int = 5  # Lookahead inner steps before slow-weights sync
     lookahead_alpha: float = 0.5  # Lookahead slow-weights interpolation factor
@@ -587,10 +588,11 @@ base_optimizer = torch.optim.AdamW(
     lr=cfg.lr,
     weight_decay=cfg.weight_decay,
     betas=(0.9, cfg.adamw_beta2),
+    eps=cfg.adamw_eps,
 )
 if cfg.use_lookahead:
     optimizer = Lookahead(base_optimizer, k=cfg.lookahead_k, alpha=cfg.lookahead_alpha)
-    print(f"Optimizer: Lookahead(k={cfg.lookahead_k}, alpha={cfg.lookahead_alpha}) wrapping AdamW(beta2={cfg.adamw_beta2})")
+    print(f"Optimizer: Lookahead(k={cfg.lookahead_k}, alpha={cfg.lookahead_alpha}) wrapping AdamW(beta2={cfg.adamw_beta2}, eps={cfg.adamw_eps})")
 else:
     optimizer = base_optimizer
 if cfg.sgdr_t0 > 0:
