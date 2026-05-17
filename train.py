@@ -379,6 +379,136 @@ class Lion(torch.optim.Optimizer):
         return loss
 
 
+class LionScheduleFree(torch.optim.Optimizer):
+    """Lion + Schedule-Free composition.
+
+    Sign-projected direction (Lion) applied to the SF z-iterate; the Polyak
+    average x is swapped into p via .eval() for validation/checkpointing.
+    Mirrors AdamWScheduleFree's in-place state layout: p holds y during train
+    mode, x is computed on-the-fly via lerp during eval. Maintains the same
+    2x param state as plain Lion (z + exp_avg).
+
+    Args:
+        params:           model parameters
+        lr:               base learning rate
+        betas:            (beta1, beta2) for Lion momentum (separate from SF momentum)
+        sf_momentum:      SF interpolation weight controlling y = sf_m*x + (1-sf_m)*z
+        weight_decay:     decoupled WD applied multiplicatively to y and z
+        warmup_steps:     linear LR warmup, mirroring AdamWScheduleFree
+        r:                polynomial weighting power for Polyak average
+        weight_lr_power:  lr power for Polyak weights
+    """
+
+    def __init__(self, params, lr: float = 1.5e-4, betas: tuple[float, float] = (0.9, 0.99),
+                 sf_momentum: float = 0.9, weight_decay: float = 0.0,
+                 warmup_steps: int = 0, r: float = 0.0, weight_lr_power: float = 2.0):
+        if lr <= 0.0:
+            raise ValueError(f"Invalid lr: {lr}")
+        if not 0.0 <= betas[0] < 1.0 or not 0.0 <= betas[1] < 1.0:
+            raise ValueError(f"Invalid betas: {betas}")
+        if not 0.0 < sf_momentum < 1.0:
+            raise ValueError(f"Invalid sf_momentum: {sf_momentum} (must be in (0,1))")
+        if weight_decay < 0.0:
+            raise ValueError(f"Invalid weight_decay: {weight_decay}")
+        defaults = dict(
+            lr=lr, betas=betas, sf_momentum=sf_momentum,
+            weight_decay=weight_decay, warmup_steps=warmup_steps,
+            r=r, k=0, train_mode=False, weight_sum=0.0,
+            lr_max=-1.0, scheduled_lr=0.0, weight_lr_power=weight_lr_power,
+        )
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def eval(self) -> None:
+        for group in self.param_groups:
+            if group["train_mode"]:
+                sf_m = group["sf_momentum"]
+                for p in group["params"]:
+                    state = self.state[p]
+                    if "z" in state:
+                        # p = y → x via lerp:  x = (1/sf_m)*y + (1 - 1/sf_m)*z
+                        p.lerp_(end=state["z"], weight=1.0 - 1.0 / sf_m)
+                group["train_mode"] = False
+
+    @torch.no_grad()
+    def train(self) -> None:
+        for group in self.param_groups:
+            if not group["train_mode"]:
+                sf_m = group["sf_momentum"]
+                for p in group["params"]:
+                    state = self.state[p]
+                    if "z" in state:
+                        # p = x → y via lerp:  y = sf_m*x + (1 - sf_m)*z
+                        p.lerp_(end=state["z"], weight=1.0 - sf_m)
+                group["train_mode"] = True
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        if not self.param_groups[0]["train_mode"]:
+            raise RuntimeError(
+                "LionScheduleFree.step() called outside train mode. "
+                "Call .train() before training and .eval() before validation."
+            )
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        for group in self.param_groups:
+            beta1, beta2 = group["betas"]
+            sf_m = group["sf_momentum"]
+            decay = group["weight_decay"]
+            k = group["k"]
+            r_pow = group["r"]
+            warmup_steps = group["warmup_steps"]
+            weight_lr_power = group["weight_lr_power"]
+
+            sched = (k + 1) / warmup_steps if (warmup_steps > 0 and k < warmup_steps) else 1.0
+            lr = group["lr"] * sched
+            group["scheduled_lr"] = lr
+            lr_max = group["lr_max"] = max(lr, group["lr_max"])
+
+            weight = ((k + 1) ** r_pow) * (lr_max ** weight_lr_power)
+            weight_sum = group["weight_sum"] = group["weight_sum"] + weight
+            try:
+                ckp1 = weight / weight_sum
+            except ZeroDivisionError:
+                ckp1 = 0.0
+
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                state = self.state[p]
+                if "z" not in state:
+                    state["z"] = torch.clone(p, memory_format=torch.preserve_format)
+                    state["exp_avg"] = torch.zeros_like(p, memory_format=torch.preserve_format)
+
+                y = p  # train mode: p holds y
+                grad = p.grad
+                z = state["z"]
+                exp_avg = state["exp_avg"]
+
+                # Lion sign-projected direction evaluated at y (grad was computed at y)
+                update = exp_avg.clone().mul_(beta1).add_(grad, alpha=1.0 - beta1).sign_()
+
+                # Schedule-Free y/z updates (z step uses unsigned z_k below)
+                y.lerp_(end=z, weight=ckp1)
+                y.add_(update, alpha=lr * (sf_m * (1.0 - ckp1) - 1.0))
+                z.sub_(update, alpha=lr)
+
+                # Decoupled weight decay applied multiplicatively to both iterates
+                if decay != 0.0:
+                    decay_factor = 1.0 - lr * decay
+                    y.mul_(decay_factor)
+                    z.mul_(decay_factor)
+
+                # Lion momentum EMA (uses raw grad, post-step)
+                exp_avg.mul_(beta2).add_(grad, alpha=1.0 - beta2)
+
+            group["k"] = k + 1
+        return loss
+
+
 # ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
@@ -495,7 +625,9 @@ def write_experiment_summary(
         "grad_clip_norm": cfg.grad_clip_norm,
         "use_schedule_free": cfg.use_schedule_free,
         "sf_warmup_steps": cfg.sf_warmup_steps if cfg.use_schedule_free else None,
+        "sf_momentum": cfg.sf_momentum if cfg.use_schedule_free else None,
         "optimizer": cfg.optimizer,
+        "optimizer_class": type(optimizer).__name__,
         "lion_lr": cfg.lion_lr if cfg.optimizer == "lion" else None,
         "lion_weight_decay": cfg.lion_weight_decay if cfg.optimizer == "lion" else None,
         "lion_betas": cfg.lion_betas if cfg.optimizer == "lion" else None,
@@ -556,6 +688,7 @@ class Config:
     grad_clip_norm: float | None = None  # if set, clip gradient L2 norm before optimizer.step()
     use_schedule_free: bool = False  # AdamWScheduleFree — drop the cosine scheduler
     sf_warmup_steps: int = 500  # warmup steps for Schedule-Free (README recommends warmup)
+    sf_momentum: float = 0.9  # SF interpolation weight (used by LionScheduleFree only; AdamW SF reuses beta1)
     optimizer: str = "adamw"  # one of: "adamw", "lion"
     lion_lr: float = 1.5e-4  # Lion lr (typically 3-10x smaller than AdamW; 3x of cfg.lr=5e-4)
     lion_weight_decay: float = 3e-4  # Lion wd (typically 3-10x larger than AdamW; 3x of cfg.weight_decay=1e-4)
@@ -618,7 +751,26 @@ ema = EMA(model, decay=cfg.ema_decay) if cfg.use_ema else None
 if ema is not None:
     print(f"EMA: enabled (decay={cfg.ema_decay}, warmup ramp (1+step)/(10+step))")
 
-if cfg.optimizer == "lion":
+if cfg.optimizer == "lion" and cfg.use_schedule_free:
+    lion_betas = tuple(float(b.strip()) for b in cfg.lion_betas.split(","))
+    if len(lion_betas) != 2:
+        raise ValueError(f"--lion_betas must be two comma-separated floats, got {cfg.lion_betas!r}")
+    optimizer = LionScheduleFree(
+        model.parameters(),
+        lr=cfg.lion_lr,
+        betas=lion_betas,
+        sf_momentum=cfg.sf_momentum,
+        weight_decay=cfg.lion_weight_decay,
+        warmup_steps=cfg.sf_warmup_steps,
+    )
+    scheduler = None
+    t_max_eff = None
+    print(
+        f"Optimizer: LionScheduleFree(lr={cfg.lion_lr}, betas={lion_betas}, "
+        f"sf_momentum={cfg.sf_momentum}, weight_decay={cfg.lion_weight_decay}, "
+        f"warmup_steps={cfg.sf_warmup_steps}); no scheduler"
+    )
+elif cfg.optimizer == "lion":
     lion_betas = tuple(float(b.strip()) for b in cfg.lion_betas.split(","))
     if len(lion_betas) != 2:
         raise ValueError(f"--lion_betas must be two comma-separated floats, got {cfg.lion_betas!r}")
@@ -671,6 +823,8 @@ elif cfg.optimizer == "adamw":
     print(f"Scheduler: cosine T_max={t_max_eff}, max_epochs={MAX_EPOCHS}")
 else:
     raise ValueError(f"Unknown --optimizer: {cfg.optimizer!r} (expected 'adamw' or 'lion')")
+
+print(f"Optimizer class: {type(optimizer).__name__}")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
