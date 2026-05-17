@@ -1,5 +1,39 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-17 06:45 — Plateau confirmed (9 consecutive non-improvements): 3 PRs CLOSED + 3 plateau-breaking assignments
+
+### #4382 edward V-norm — **CLOSED (catastrophic regress)**
+- W&B run: `2vfn3eia` (finished, no SENPAI-RESULT posted). Config: QK-norm + Lion + nh=176 + ep14 + V-norm extension.
+- val=72.52 (+54.4% regress vs new baseline), test=64.13 (+58.4% regress) — ALL 4 splits regress 39-96%
+- **Mechanism:** Q,K are addresses; V is content. Normalizing addresses helps; normalizing content destroys information the slice carries. V-norm fundamentally breaks the attention mechanism's expressiveness.
+- **Decision:** CLOSE V-norm permanently. Will not retry in any form.
+
+### #4366 fern Lookahead-k3 + QK-norm — **CLOSED (axis dead)**
+- W&B run: `jt8vxjyq` (finished). Config: Lookahead(k=3, α=0.5) + QK-norm + Lion + nh=176 + ep14.
+- val=50.03 (+6.5% regress), test=42.49 (+5.0% regress) — per merge rubric, CLOSE.
+- **Mechanism:** Lion + cosine-anneal produces smooth descent with minimal late-training oscillation. Lookahead's slow-weight averaging needs oscillation between sync points to add value. Without oscillation, Lookahead just biases toward earlier checkpoints (slower convergence).
+- **Generalization:** Same mechanism explains why EMA (#4178) also failed. Time-averaged optimization methods don't fit Lion+cosine-anneal trajectory. **Both Lookahead and EMA axes are now closed.**
+
+### #4413 askeladd wd5e-4 + QK-norm — **CLOSED (wd axis not orthogonal to QK-norm)**
+- W&B run: `l5xc0b9q` (finished). Config: wd=5e-4 + QK-norm + Lion + nh=176 + ep14.
+- val=47.37 (+0.81%), test=40.71 (+0.57%) — marginal regress on BOTH metrics
+- Per-split: single_in_dist −2.24% (win), geom_camber_rc +0.74%, cruise +2.85%, re_rand +1.87%
+- **Mechanism:** wd=5e-4 alone unlocked geom_camber_rc (-2.36 win) on old baseline. With QK-norm already stabilizing attention, the wd-only OOD benefit is absorbed by QK-norm. The mechanisms target the same surface (attention regularization), not orthogonal as hypothesized.
+- **Decision:** CLOSE wd axis on QK-norm stack. The wd=5e-4 win was an attention-regularization win that QK-norm now provides more directly.
+
+### PLATEAU CONFIRMED — 9 consecutive non-improvements since #4270 merged
+
+Sequence: #4178 (EMA, no signal) → #4232 (nh=208, AdamW) → #4366 k=5 (Lookahead regress) → #4280 (nh=192 regress) → #4285 (lr=2e-4 regress) → #4233 (AGC catastrophic) → #4354 (n_head=2 regress) → #4382 (V-norm catastrophic) → #4366 k=3 (Lookahead axis dead) → #4413 (wd+QK-norm regress).
+
+**Plateau protocol activated.** Pivoting to architecture changes:
+- **edward (#4416):** LayerScale (CaiT γ=1e-4) — learnable per-channel residual gating
+- **fern (#4417):** SWA at end-of-training (ep11-14 weight average) — eval-time procedure, not training-wrap
+- **askeladd (#4418):** Lion β1=0.95 (unhardcode `train.py:586`) — longer momentum window probe
+
+These shift to *different surfaces*: LayerScale gates residuals at training time; SWA is eval-time only (no optimization interference); Lion β1 changes momentum dynamics. None overlap with previously-closed mechanisms.
+
+---
+
 ## 2026-05-17 06:30 — Baseline shift cleanup: 4 PRs CLOSED (W&B data), 4 new PRs ASSIGNED + 2 send-backs
 
 ### #4366 fern Lookahead(k=5, α=0.5) — **SENT BACK for k=3 + QK-norm retest**

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-17 06:30 UTC
+- **Last updated:** 2026-05-17 06:45 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Primary metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -24,18 +24,18 @@ No GitHub Issues open for this track as of 2026-05-17 06:30 UTC. Proceeding from
 
 | PR | Student | Axis being tested | Status |
 |---|---|---|---|
-| **#4382** | edward | QKV-norm: extend QK-norm to also normalize V projections | WIP — running |
 | **#4383** | thorfinn | surf_weight sweep {5, 15} vs default 10 on QK-norm+Lion | WIP — running |
-| **#4366** | fern | Lookahead(k=3, α=0.5) on QK-norm+Lion (k=5 was too aggressive, retest) | WIP — sent back, rebase+rerun in progress |
-| **#4324** | askeladd | lion_wd=5e-4 + QK-norm stack retest (wd=5e-4 won vs old baseline) | WIP — sent back, rebase+rerun in progress |
-| **#4409** | frieren | mlp_ratio=3 + QK-norm + Lion at nh=176+ep12 (FFN capacity) | WIP — just assigned |
-| **#4410** | nezuko | loss_type=huber + QK-norm + Lion at nh=176+ep14 (outlier-robust loss) | WIP — just assigned |
-| **#4411** | tanjiro | coord_noise_std {0.005, 0.02} sweep + QK-norm + Lion (aug strength) | WIP — just assigned |
-| **#4412** | alphonse | batch_size=2 + QK-norm + Lion at nh=176+ep14 (finer gradient steps) | WIP — just assigned |
+| **#4409** | frieren | mlp_ratio=3 + QK-norm + Lion at nh=176+ep12 (FFN capacity) | WIP — running |
+| **#4410** | nezuko | loss_type=huber + QK-norm + Lion at nh=176+ep14 (outlier-robust loss) | WIP — running (ep<5) |
+| **#4411** | tanjiro | coord_noise_std {0.005, 0.02} sweep + QK-norm + Lion (aug strength) | WIP — pod setting up |
+| **#4412** | alphonse | batch_size=2 + QK-norm + Lion at nh=176+ep14 (finer gradient steps) | WIP — running (ep<5) |
+| **#4416** | edward | **LayerScale (CaiT γ=1e-4) + QK-norm + Lion** — residual gating | WIP — just assigned (plateau-break #1) |
+| **#4417** | fern | **SWA over ep11-14 + QK-norm + Lion** — eval-time weight average | WIP — just assigned (plateau-break #2) |
+| **#4418** | askeladd | **Lion β1=0.95 + QK-norm** — longer momentum window probe | WIP — just assigned (plateau-break #3) |
 
 **Zero idle students. Zero idle GPUs.**
 
-## Round-10 dead-ends (closed this cycle)
+## Round-10 dead-ends (cumulative, 8 closures since #4270 merged)
 
 | PR | Student | Axis | W&B verdict |
 |---|---|---|---|
@@ -43,6 +43,21 @@ No GitHub Issues open for this track as of 2026-05-17 06:30 UTC. Proceeding from
 | #4285 | nezuko | Lion lr=2e-4: 2 seeds at val 49.2-49.7, +4.8% vs new baseline | CLOSED |
 | #4233 | tanjiro | AGC clip=0.03: val=57.37, +22% catastrophic regress | CLOSED |
 | #4354 | alphonse | Lion n_head=2: 2 seeds at val 48.82-49.17, all 4 splits regress | CLOSED |
+| #4382 | edward | V-norm: val=72.52 (+54.4% CATASTROPHIC) — normalizing V destroys content | CLOSED |
+| #4366 | fern | Lookahead k=5 then k=3: val=50.03 on k=3 (+6.5% regress) — axis dead | CLOSED |
+| #4324/#4413 | askeladd | wd=5e-4 + QK-norm: marginal regress, mechanisms overlap on attention reg | CLOSED |
+| #4178 | thorfinn | EMA (decay=0.999): no signal — same mechanism failure as Lookahead | CLOSED (prior) |
+
+## PLATEAU PROTOCOL ACTIVATED (2026-05-17 06:45 UTC)
+
+**9 consecutive non-improvements since #4270 merged at 05:30 UTC.** Per CLAUDE.md plateau protocol:
+
+1. **Tier exhaustion:** Lion LR/wd/betas-via-default, AGC, EMA, Lookahead, V-norm, n_head=2, nh=192 all closed
+2. **Time-averaged optimization is structurally incompatible** with Lion+cosine-anneal (no late-training oscillation to average). Both EMA and Lookahead failed for this reason.
+3. **Strategy shift to architecture + eval-time tiers:**
+   - **LayerScale (CaiT, #4416 edward):** learnable per-channel residual gating, ViT-validated
+   - **SWA end-of-training (#4417 fern):** eval-time weight average (different from EMA/Lookahead — operates on converged checkpoints, not optimization trajectory)
+   - **Lion betas β1=0.95 (#4418 askeladd):** longer momentum window, optimizer dynamics tier
 
 ## Key learnings (Round-10 to date)
 
@@ -54,15 +69,14 @@ No GitHub Issues open for this track as of 2026-05-17 06:30 UTC. Proceeding from
 6. **AGC is redundant with Lion.** Lion's sign-update provides gradient-direction stability; AGC-on-top catastrophically regresses. AGC axis closed.
 7. **n_head=2 (d_head=88) doesn't help without QK-norm.** Uniform all-split regression confirms wider heads need normalization to unlock; could be retested with QK-norm but per-split showed no asymmetric signal.
 
-## Merge decisions on send-back PRs
+## Plateau-break next tier (Round-11 backlog if plateau continues)
 
-### #4366 fern Lookahead(k=3) retest
-- **Merge if:** val < 46.99 AND test < 40.48 (strict win on both)
-- **Close if:** either metric regresses — Lookahead axis closed
-
-### #4324 askeladd wd=5e-4 + QK-norm retest
-- **Merge if:** val < 46.99 AND test < 40.48
-- **Close if:** either metric regresses — wd axis needs further refinement (possibly 4e-4 or QK-norm shifts optimal wd)
+If LayerScale, SWA, Lion β1 all regress, escalate to:
+1. **Physics-informed loss** — divergence-free penalty (∇·u=0) on velocity output. Big-swing, ICML-worthy mechanism for CFD surrogates.
+2. **n_layers=6 at nh=128 or 144** — depth vs width tradeoff in same param budget.
+3. **Gradient-based input features** — append ∂p/∂x, ∂p/∂y to input encoding (compute via local finite-diff).
+4. **Multi-scale slice_num** — different physics-attention layers at slice_num ∈ {32, 64, 128}.
+5. **Skip connection scaling 1/√2** — classical transformer trick, completely untested on this stack.
 
 ## Round-10 backlog (post-current-round candidates)
 
