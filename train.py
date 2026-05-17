@@ -296,13 +296,26 @@ class Lookahead(torch.optim.Optimizer):
     optional logging of how far the fast trajectory wanders from the slow one.
     """
 
-    def __init__(self, base_optimizer, k=5, alpha=0.5):
+    def __init__(self, base_optimizer, k=5, alpha=0.5,
+                 ema_enabled=False, ema_decay=0.999, ema_warmup_steps=0):
         self.base = base_optimizer
         self.k = k
         self.alpha = alpha
         self.step_count = 0
+        self.outer_step_count = 0
         self.last_sync_diff_norm: float | None = None
         self.slow_state = {}
+        # EMA-on-slow-weights (SWA-style late-training stabilizer). EMA tracks
+        # the slow_state across outer (sync) steps once warmup completes. At
+        # eval/checkpoint time, callers may swap the EMA into p.data via
+        # apply_ema_to_model() and undo with restore_model().
+        self.ema_enabled = bool(ema_enabled)
+        self.ema_decay = float(ema_decay)
+        self.ema_warmup_steps = int(ema_warmup_steps)  # threshold on step_count
+        self.ema_state: dict = {}
+        self.ema_initialized = False
+        self.ema_update_count = 0
+        self._ema_backup: dict = {}
         for group in base_optimizer.param_groups:
             for p in group["params"]:
                 self.slow_state[p] = p.data.clone().detach()
@@ -330,7 +343,47 @@ class Lookahead(torch.optim.Optimizer):
                     p.data.copy_(slow)
             if sq_sum is not None:
                 self.last_sync_diff_norm = float(sq_sum.sqrt().item())
+            self.outer_step_count += 1
+            if self.ema_enabled and self.step_count >= self.ema_warmup_steps:
+                if not self.ema_initialized:
+                    for group in self.base.param_groups:
+                        for p in group["params"]:
+                            self.ema_state[p] = self.slow_state[p].clone().detach()
+                    self.ema_initialized = True
+                else:
+                    for group in self.base.param_groups:
+                        for p in group["params"]:
+                            ema = self.ema_state[p]
+                            ema.mul_(self.ema_decay).add_(
+                                self.slow_state[p], alpha=1.0 - self.ema_decay
+                            )
+                self.ema_update_count += 1
         return loss
+
+    @torch.no_grad()
+    def apply_ema_to_model(self) -> bool:
+        """Swap EMA-of-slow into model parameters, backing up current values.
+
+        Returns True if EMA was applied, False if EMA isn't ready (disabled or
+        still in warmup). Call ``restore_model()`` afterwards to undo.
+        """
+        if not (self.ema_enabled and self.ema_initialized):
+            return False
+        for group in self.base.param_groups:
+            for p in group["params"]:
+                self._ema_backup[p] = p.data.clone().detach()
+                p.data.copy_(self.ema_state[p])
+        return True
+
+    @torch.no_grad()
+    def restore_model(self) -> None:
+        """Restore params from the backup taken by apply_ema_to_model. No-op if no backup."""
+        if not self._ema_backup:
+            return
+        for group in self.base.param_groups:
+            for p in group["params"]:
+                p.data.copy_(self._ema_backup[p])
+        self._ema_backup = {}
 
 
 class Transolver(nn.Module):
@@ -572,6 +625,9 @@ class Config:
     lion_b2: float = 0.99  # Lion beta2; default matches historical baseline
     lookahead_k: int = 5
     lookahead_alpha: float = 0.5
+    ema_slow_weights: bool = False
+    ema_decay: float = 0.999
+    ema_warmup_epochs: int = 8
 
 
 cfg = sp.parse(Config)
@@ -641,9 +697,16 @@ else:
         model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.95)
     )
 if cfg.lookahead_k > 0:
-    optimizer = Lookahead(base_optimizer, k=cfg.lookahead_k, alpha=cfg.lookahead_alpha)
+    _ema_warmup_inner_steps = cfg.ema_warmup_epochs * len(train_loader)
+    optimizer = Lookahead(
+        base_optimizer, k=cfg.lookahead_k, alpha=cfg.lookahead_alpha,
+        ema_enabled=cfg.ema_slow_weights, ema_decay=cfg.ema_decay,
+        ema_warmup_steps=_ema_warmup_inner_steps,
+    )
 else:
     optimizer = base_optimizer
+    if cfg.ema_slow_weights:
+        raise ValueError("--ema_slow_weights requires --lookahead_k > 0")
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(base_optimizer, T_max=17)
 
 run = wandb.init(
@@ -704,6 +767,11 @@ run.summary["lion_b2"] = cfg.lion_b2
 run.summary["lookahead_k"] = cfg.lookahead_k
 run.summary["lookahead_alpha"] = cfg.lookahead_alpha
 run.summary["lookahead_on"] = _lookahead_on
+run.summary["ema_slow_weights"] = cfg.ema_slow_weights
+run.summary["ema_decay"] = cfg.ema_decay
+run.summary["ema_warmup_epochs"] = cfg.ema_warmup_epochs
+if _lookahead_on and cfg.ema_slow_weights:
+    run.summary["ema_warmup_inner_steps"] = optimizer.ema_warmup_steps
 
 # Rolling buffer for per-step train losses to compute volatility (window=100).
 _train_loss_window: deque[float] = deque(maxlen=100)
@@ -773,6 +841,13 @@ for epoch in range(MAX_EPOCHS):
     epoch_surf /= max(n_batches, 1)
 
     # --- Validate ---
+    # When EMA-on-slow-weights is active and warmed up, swap EMA weights into
+    # the model for eval+save, then restore live training weights afterwards
+    # so the next epoch's training continues from the fast trajectory.
+    _ema_active = False
+    if _lookahead_on and cfg.ema_slow_weights:
+        _ema_active = optimizer.apply_ema_to_model()
+
     model.eval()
     split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
@@ -796,6 +871,10 @@ for epoch in range(MAX_EPOCHS):
         "gpu_mem_gb_peak": peak_gb,
         "global_step": global_step,
     }
+    if _lookahead_on and cfg.ema_slow_weights:
+        log_metrics["val/ema_used"] = float(_ema_active)
+        log_metrics["val/ema_update_count"] = optimizer.ema_update_count
+        log_metrics["val/ema_outer_step_count"] = optimizer.outer_step_count
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
@@ -810,15 +889,19 @@ for epoch in range(MAX_EPOCHS):
             "epoch": epoch + 1,
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
+            "ema_used": _ema_active,
         }
         torch.save(model.state_dict(), model_path)
         tag = " *"
 
+    if _ema_active:
+        optimizer.restore_model()
 
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s, step={step_time_ms:.1f}ms) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        + (f"  [EMA]" if _ema_active else "")
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
