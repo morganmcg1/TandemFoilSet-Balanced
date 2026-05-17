@@ -2377,3 +2377,59 @@ torch.compile delivered a clean -27% s/epoch with no metric regression (Arm B ti
 - H103 (tanjiro): mlp_ratio=3 — FFN expansion within block
 
 Together these probe the four orthogonal capacity dimensions under bf16's expanded budget.
+
+---
+
+## 2026-05-17 — PR #4239: H98 Lion β₁ retune at β₂=0.997 (fern) — CLOSED, informative tie
+
+- Branch: `charliepai2i48h3-fern/h98-beta1-retune-at-beta2-0997`
+- Hypothesis: β₁=0.85 or β₁=0.95 improves on default β₁=0.9 at the new β₂=0.997 baseline.
+
+| Arm | β₁ | val_avg | Δ vs H88 (41.22) | Δ vs H95 (40.51) | test 3-split |
+|-----|------|---------|-------------------|-------------------|--------------|
+| A | 0.85 | 40.5804 | −0.64 (tie) | +0.07 (tie) | 39.4821 |
+| B | 0.95 | 47.0926 | +5.88 | +6.58 | 44.4086 |
+| H88 baseline | 0.90 | 41.2153 | — | +0.71 | 39.5337 |
+
+Arm A directional improvement across 3/4 val splits (single_in_dist −1.53, cruise −1.03, re_rand −0.07; rc neutral +0.09). Each individual delta within 2σ=1.7 noise floor. Confirms H90 (askeladd at β₂=0.995): β₁ landscape asymmetric — lower β₁ trends better, higher (0.95) regresses badly. Tested at fp32; β₁=0.85 + bf16 compound noted for future test (predicted ~39.85 — still within noise).
+
+**Status: CLOSED — β₁=0.9 locked. β₁=0.85 noted as a future compound candidate with bf16.**
+
+---
+
+## 2026-05-17 — PR #4196: H93 WSD reshape (nezuko) — Arm C WIN, sent back for rebase
+
+- Branch: `charliepai2i48h3-nezuko/hypothesis_h93_wsd_schedule`
+- Hypothesis: Budget-aware WSD reshape (0/10/5 and 0/5/10) at β₂=0.997. No warmup (H76 closed warmup), fits 15-epoch budget so the decay tail actually fires.
+
+| Arm | Schedule | val_avg | Δ vs H88 (41.22) | Δ vs H95 (40.51) | test 3-split |
+|-----|----------|---------|-------------------|-------------------|--------------|
+| B | WSD 0/10/5 (stable=10, decay=5) | 41.5351 | +0.32 (tie) | +1.02 (tie) | 41.3310 |
+| **C** | **WSD 0/5/10 (stable=5, decay=10)** | **39.5100** | **−1.71 (boundary win)** | **−1.00 (within noise, but trend)** | **38.5345** |
+
+**Arm C per-split vs H95 (current best):**
+- val_geom_camber_rc: 54.50 → 51.22 (Δ-3.28) — biggest gain on hardest split
+- val_geom_camber_cruise: 25.00 → 23.61 (Δ-1.40)
+- val_re_rand: 42.43 → 42.15 (Δ-0.28)
+- val_single_in_dist: 40.09 → 41.06 (Δ+0.97) — small loss
+- test_avg: 39.02 → 38.53 (Δ-0.48)
+
+**Mechanism:** Forcing 10 epochs of cosine LR decay (vs T_max=15 baseline which decays over all 15 epochs) gives more wall-time near-zero-LR fine-tune — and that pays off on the hardest geometric OOD splits. The stable plateau provides 5 epochs of full-LR coarse training; the long decay (10 epochs) refines the optimum.
+
+**Status: SENT BACK for clean rebase only (no rerun if conflicts are clean).** Branch DIRTY against current advisor branch. After successful rebase, this merges as the new best.
+
+---
+
+## 2026-05-17 — Cycle 36 Assignments/Returns
+
+| PR | Student | Hypothesis | Note |
+|----|---------|-----------|------|
+| #4217 | thorfinn | **H96 (re-sent): compile + bf16 + T_max=21 compound (Arms C, D)** | First send-back comment was lost (bash background killed); re-posted in foreground |
+| #4196 | nezuko | **H93 (sent back): clean rebase, Arm C is winner** | Standing winner pending rebase |
+| #4316 | fern | **H112: AoA + log(Re) + gap/stagger input jitter** | XS complexity; targets val_re_rand and val_geom_camber_cruise OOD splits via continuous-cond Gaussian noise; 3 jitter magnitudes (σ=0.02, 0.05, 0.1) |
+
+**Cycle summary:**
+- 8 WIP experiments, 0 idle students
+- Standing winner: H93 Arm C (WSD 0/5/10) at val=39.51 / test=38.53 — pending rebase before merge
+- Compound test queued mentally: WSD 0/5/10 + bf16 → predicted val ~37-38 if effects compound
+- Schedule lever has new headroom (WSD 0/5/10 is a real signal); capacity lever still has 4 active probes (H100/H101/H102/H103); efficiency stack has compile+bf16 compound active (H96)
