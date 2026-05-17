@@ -282,6 +282,97 @@ def fourier_features(coords: torch.Tensor, num_freqs: int) -> torch.Tensor:
     return torch.cat([proj.sin(), proj.cos()], dim=-1).flatten(-2)
 
 
+def compute_dual_coord_features(
+    x_raw: torch.Tensor,
+    is_surface: torch.Tensor,
+    per_foil: bool = False,
+) -> torch.Tensor:
+    """LE/TE-relative coordinates per node, GeoMPNN-style (arXiv 2412.09399).
+
+    LE = surface node with minimum global x (across all surface nodes per sample).
+    TE = surface node with maximum global x. Non-surface and padded nodes are
+    excluded from LE/TE search via ±inf masking. For tandem samples in
+    ``per_foil`` mode, surface nodes are split at the per-sample median x
+    and LE/TE are computed independently per foil; single-foil samples emit
+    zeros for the foil-2 channels.
+
+    Args:
+      x_raw: (B, N, 24) raw (un-normalized) input features.
+      is_surface: (B, N) bool mask of true (non-padded) surface nodes.
+      per_foil: if True, return 8 features (per-foil LE/TE); else 4 (global).
+
+    Returns:
+      (B, N, 4) if per_foil=False, else (B, N, 8). Same dtype/device as x_raw.
+    """
+    B, N, _ = x_raw.shape
+    xy = x_raw[..., 0:2]  # (B, N, 2)
+    x_coord = xy[..., 0]  # (B, N)
+
+    # Identify global LE/TE per sample over real surface nodes.
+    le_mask_val = x_coord.masked_fill(~is_surface, float("inf"))
+    te_mask_val = x_coord.masked_fill(~is_surface, float("-inf"))
+    le_idx = le_mask_val.argmin(dim=1)  # (B,)
+    te_idx = te_mask_val.argmax(dim=1)  # (B,)
+    batch_idx = torch.arange(B, device=x_raw.device)
+    le_coords = xy[batch_idx, le_idx]  # (B, 2)
+    te_coords = xy[batch_idx, te_idx]  # (B, 2)
+
+    delta_le = xy - le_coords.unsqueeze(1)  # (B, N, 2)
+    delta_te = xy - te_coords.unsqueeze(1)  # (B, N, 2)
+
+    if not per_foil:
+        return torch.cat([delta_le, delta_te], dim=-1)  # (B, N, 4)
+
+    # Per-foil split for tandem samples. Tandem if AoA2, gap, or stagger ≠ 0
+    # in the raw cond features (idx 18, 22, 23). Single-foil → foil 2 = zeros.
+    cond_tandem = (
+        x_raw[:, 0, 18].abs() + x_raw[:, 0, 22].abs() + x_raw[:, 0, 23].abs()
+    ) > 1e-6
+    # Per-sample median x of surface nodes splits front (foil 1) from rear (foil 2).
+    surf_x_for_median = x_coord.masked_fill(~is_surface, float("nan"))
+    median_x = torch.nanmedian(surf_x_for_median, dim=1).values  # (B,)
+
+    delta_le2 = torch.zeros_like(delta_le)
+    delta_te2 = torch.zeros_like(delta_te)
+    if cond_tandem.any():
+        is_foil1 = is_surface & (x_coord <= median_x.unsqueeze(1))
+        is_foil2 = is_surface & (x_coord > median_x.unsqueeze(1))
+
+        # Foil 1: re-identify LE/TE inside foil 1's surface nodes (overrides global).
+        le1_val = x_coord.masked_fill(~is_foil1, float("inf"))
+        te1_val = x_coord.masked_fill(~is_foil1, float("-inf"))
+        le1_idx = le1_val.argmin(dim=1)
+        te1_idx = te1_val.argmax(dim=1)
+        le1_coords = xy[batch_idx, le1_idx]
+        te1_coords = xy[batch_idx, te1_idx]
+        d_le1 = xy - le1_coords.unsqueeze(1)
+        d_te1 = xy - te1_coords.unsqueeze(1)
+
+        # Foil 2 (rear). Need to handle the case where a single-foil sample
+        # has no nodes above median (rare since median splits the surface).
+        # argmin/argmax on a row of all -inf/+inf returns 0 — fine, but then
+        # the coordinates may be off. We gate per-sample on cond_tandem.
+        le2_val = x_coord.masked_fill(~is_foil2, float("inf"))
+        te2_val = x_coord.masked_fill(~is_foil2, float("-inf"))
+        le2_idx = le2_val.argmin(dim=1)
+        te2_idx = te2_val.argmax(dim=1)
+        le2_coords = xy[batch_idx, le2_idx]
+        te2_coords = xy[batch_idx, te2_idx]
+        d_le2 = xy - le2_coords.unsqueeze(1)
+        d_te2 = xy - te2_coords.unsqueeze(1)
+
+        # For tandem samples: use per-foil features. Foil 1 channels still come
+        # from the foil-1 split (the front foil); foil 2 channels from foil-2.
+        # For single-foil samples: foil 1 = global LE/TE, foil 2 = zeros.
+        sample_mask = cond_tandem.view(B, 1, 1).to(d_le1.dtype)
+        delta_le = sample_mask * d_le1 + (1.0 - sample_mask) * delta_le
+        delta_te = sample_mask * d_te1 + (1.0 - sample_mask) * delta_te
+        delta_le2 = sample_mask * d_le2
+        delta_te2 = sample_mask * d_te2
+
+    return torch.cat([delta_le, delta_te, delta_le2, delta_te2], dim=-1)  # (B, N, 8)
+
+
 class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
@@ -341,6 +432,10 @@ class Transolver(nn.Module):
         # Slice with an explicit end so any per-node features appended after
         # (e.g. Fourier PE at dim 24+) don't leak into the FiLM input.
         cond = x[:, 0, 13:13 + self.cond_dim] if self.cond_dim > 0 else None
+        # Append LE/TE-relative coordinates (H131) before the Fourier PE block
+        # so the model preprocess sees a single concatenated input.
+        if "dual_coord_features" in data:
+            x = torch.cat([x, data["dual_coord_features"]], dim=-1)
         if self.fourier_pe_freqs > 0:
             ff = fourier_features(x[..., :2], self.fourier_pe_freqs)
             x = torch.cat([x, ff], dim=-1)
@@ -354,12 +449,19 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device, use_bf16: bool = False) -> dict[str, float]:
+def evaluate_split(
+    model, loader, stats, surf_weight, device,
+    use_bf16: bool = False,
+    dual_coord_kind: str | None = None,
+) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    ``dual_coord_kind`` ∈ {None, 'global', 'per_foil'} controls whether LE/TE
+    dual-coordinate features (H131) are computed and fed to the model.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -375,8 +477,13 @@ def evaluate_split(model, loader, stats, surf_weight, device, use_bf16: bool = F
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            data_in: dict = {"x": x_norm}
+            if dual_coord_kind is not None:
+                data_in["dual_coord_features"] = compute_dual_coord_features(
+                    x, is_surface, per_foil=(dual_coord_kind == "per_foil"),
+                )
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bf16):
-                pred = model({"x": x_norm})["preds"]
+                pred = model(data_in)["preds"]
             # Loss and MAE accumulation in fp32 for stable reductions.
             pred = pred.float()
 
@@ -470,7 +577,11 @@ def write_experiment_summary(
     print(f"\nSaved experiment summary to {summary_path}")
 
 
-def collect_gate_stats(model: nn.Module, loader, stats: dict, device, use_bf16: bool = False) -> list[dict]:
+def collect_gate_stats(
+    model: nn.Module, loader, stats: dict, device,
+    use_bf16: bool = False,
+    dual_coord_kind: str | None = None,
+) -> list[dict]:
     """One-batch GEGLU gate-activation health. Captures post-activation gate
     mean/std for each GEGLU module. Uses the first batch of ``loader``.
     """
@@ -497,9 +608,15 @@ def collect_gate_stats(model: nn.Module, loader, stats: dict, device, use_bf16: 
         with torch.no_grad():
             for x, y, is_surface, mask in loader:
                 x = x.to(device, non_blocking=True)
+                is_surface = is_surface.to(device, non_blocking=True)
                 x_norm = (x - stats["x_mean"]) / stats["x_std"]
+                data_in: dict = {"x": x_norm}
+                if dual_coord_kind is not None:
+                    data_in["dual_coord_features"] = compute_dual_coord_features(
+                        x, is_surface, per_foil=(dual_coord_kind == "per_foil"),
+                    )
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bf16):
-                    _ = model({"x": x_norm})
+                    _ = model(data_in)
                 break
     finally:
         for h in handles:
@@ -601,6 +718,8 @@ class Config:
     T_max: int = 15  # CosineAnnealingLR period; default preserves prior behavior
     fourier_pe: bool = False   # Tancik Fourier PE on (x, z) coords (H106)
     fourier_pe_freqs: int = 8  # Number of log-spaced frequencies; adds 4*K features
+    dual_coord: bool = False   # LE+TE dual coordinate system (H131); appends 4 features
+    dual_coord_per_foil: bool = False  # Per-foil LE+TE for tandem; appends 8 features
 
 
 cfg = sp.parse(Config)
@@ -637,9 +756,16 @@ val_loaders = {
 
 fourier_pe_freqs = cfg.fourier_pe_freqs if cfg.fourier_pe else 0
 extra_pe_features = 4 * fourier_pe_freqs
+# H131: LE+TE dual coordinate features. 4 channels for global, 8 for per-foil.
+if cfg.dual_coord_per_foil:
+    dual_coord_extra = 8
+elif cfg.dual_coord:
+    dual_coord_extra = 4
+else:
+    dual_coord_extra = 0
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2 + extra_pe_features,
+    fun_dim=X_DIM - 2 + extra_pe_features + dual_coord_extra,
     out_dim=3,
     n_hidden=128,
     n_layers=cfg.n_layers,
@@ -692,6 +818,36 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
 
+# H131: which dual-coord variant to use ('global', 'per_foil', or None).
+dual_coord_kind: str | None = (
+    "per_foil" if cfg.dual_coord_per_foil else ("global" if cfg.dual_coord else None)
+)
+# Sanity-check LE/TE identification on the first train batch before training.
+if dual_coord_kind is not None:
+    with torch.no_grad():
+        _sx, _sy, _ssurf, _smask = next(iter(train_loader))
+        _sx_dev = _sx.to(device)
+        _ssurf_dev = _ssurf.to(device)
+        _x_coord = _sx_dev[..., 0]
+        _le_idx = _x_coord.masked_fill(~_ssurf_dev, float("inf")).argmin(dim=1)
+        _te_idx = _x_coord.masked_fill(~_ssurf_dev, float("-inf")).argmax(dim=1)
+        _b = torch.arange(_sx_dev.size(0), device=device)
+        _le = _sx_dev[_b, _le_idx, 0:2]
+        _te = _sx_dev[_b, _te_idx, 0:2]
+        print(f"[H131 sanity] dual_coord_kind={dual_coord_kind}, batch shape={tuple(_sx.shape)}")
+        for i in range(min(2, _sx.size(0))):
+            print(f"  sample {i}: LE=({_le[i, 0]:.4f}, {_le[i, 1]:.4f})  TE=({_te[i, 0]:.4f}, {_te[i, 1]:.4f})  n_surf={int(_ssurf[i].sum())}")
+        _dual = compute_dual_coord_features(_sx_dev, _ssurf_dev, per_foil=(dual_coord_kind == "per_foil"))
+        _surf_sample0 = _ssurf_dev[0]
+        print(f"  dual_coord_features.shape={tuple(_dual.shape)}")
+        print(f"  sample 0 LE-rel(x,z) range: ({_dual[0, _surf_sample0, 0].abs().max():.4f}, {_dual[0, _surf_sample0, 1].abs().max():.4f})")
+        print(f"  sample 0 TE-rel(x,z) range: ({_dual[0, _surf_sample0, 2].abs().max():.4f}, {_dual[0, _surf_sample0, 3].abs().max():.4f})")
+        if dual_coord_kind == "per_foil":
+            print(f"  sample 0 foil2-LE-rel(x,z) range: ({_dual[0, _surf_sample0, 4].abs().max():.4f}, {_dual[0, _surf_sample0, 5].abs().max():.4f})")
+            print(f"  sample 0 foil2-TE-rel(x,z) range: ({_dual[0, _surf_sample0, 6].abs().max():.4f}, {_dual[0, _surf_sample0, 7].abs().max():.4f})")
+        del _sx, _sy, _ssurf, _smask, _sx_dev, _ssurf_dev, _dual
+        torch.cuda.empty_cache()
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -711,8 +867,13 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        data_in: dict = {"x": x_norm}
+        if dual_coord_kind is not None:
+            data_in["dual_coord_features"] = compute_dual_coord_features(
+                x, is_surface, per_foil=(dual_coord_kind == "per_foil"),
+            )
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=cfg.use_bf16):
-            pred = model({"x": x_norm})["preds"]
+            pred = model(data_in)["preds"]
         # Loss computation in fp32: reductions on tiny Huber thresholds (0.25, 0.5)
         # benefit from full precision, and Lion only needs gradient signs anyway.
         pred = pred.float()
@@ -755,7 +916,10 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, use_bf16=cfg.use_bf16)
+        name: evaluate_split(
+            model, loader, stats, cfg.surf_weight, device,
+            use_bf16=cfg.use_bf16, dual_coord_kind=dual_coord_kind,
+        )
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -775,7 +939,10 @@ for epoch in range(MAX_EPOCHS):
 
     gate_stats = []
     if cfg.ffn_act in ("geglu", "swiglu"):
-        gate_stats = collect_gate_stats(model, val_loaders["val_single_in_dist"], stats, device, use_bf16=cfg.use_bf16)
+        gate_stats = collect_gate_stats(
+            model, val_loaders["val_single_in_dist"], stats, device,
+            use_bf16=cfg.use_bf16, dual_coord_kind=dual_coord_kind,
+        )
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     append_metrics_jsonl(metrics_jsonl_path, {
@@ -793,6 +960,9 @@ for epoch in range(MAX_EPOCHS):
         "T_max": cfg.T_max,
         "fourier_pe": cfg.fourier_pe,
         "fourier_pe_freqs": fourier_pe_freqs,
+        "dual_coord": cfg.dual_coord,
+        "dual_coord_per_foil": cfg.dual_coord_per_foil,
+        "dual_coord_kind": dual_coord_kind,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "gate_stats": gate_stats,
@@ -826,7 +996,10 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, use_bf16=cfg.use_bf16)
+            name: evaluate_split(
+                model, loader, stats, cfg.surf_weight, device,
+                use_bf16=cfg.use_bf16, dual_coord_kind=dual_coord_kind,
+            )
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
