@@ -526,6 +526,7 @@ class Config:
     n_head: int = 4  # number of attention heads; n_hidden must be divisible by n_head
     sgdr_t0: int = 0  # CosineAnnealingWarmRestarts cycle length; 0 disables (use plain cosine)
     slice_num: int = 64  # physics-attention slice count (node partitioning granularity)
+    n_layers: int = 5  # Transolver block depth (number of stacked TransolverBlocks)
     adamw_beta2: float = 0.999  # AdamW second-moment EMA decay; default 0.999
     use_lookahead: bool = False  # wrap AdamW with Lookahead (Zhang et al. 2019)
     lookahead_k: int = 5  # Lookahead inner steps before slow-weights sync
@@ -563,7 +564,7 @@ model_config = dict(
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=128,
-    n_layers=5,
+    n_layers=cfg.n_layers,
     n_head=cfg.n_head,
     slice_num=cfg.slice_num,
     mlp_ratio=cfg.mlp_ratio,
@@ -575,7 +576,7 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)  "
-      f"[use_swiglu={cfg.use_swiglu}, mlp_ratio={cfg.mlp_ratio}, n_head={cfg.n_head}, slice_num={cfg.slice_num}]")
+      f"[use_swiglu={cfg.use_swiglu}, mlp_ratio={cfg.mlp_ratio}, n_head={cfg.n_head}, slice_num={cfg.slice_num}, n_layers={cfg.n_layers}]")
 
 ema_model = copy.deepcopy(model)
 for p in ema_model.parameters():
