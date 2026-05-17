@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-17 07:40 UTC (R29 — alphonse 2-arm β sweep on mlp_ratio=2 stack: β=0.05 gave val=34.60/test=29.52 vs 36.13 = −1.53pt orthogonal gain; sent back for confirmation on grad-clip stack)
+- **Updated:** 2026-05-17 08:50 UTC (R30 — closed #4441/#4442/#4281 (val regressions; β/grad_clip non-orthogonal; capacity compute-bound; asym-FFN cruise gain reversed); 3 new: #4492 per-channel β, #4493 dropout sweep, #4494 mlp_ratio=3 uniform)
 - **Track:** Charlie local-metrics arm (`charlie-pai2i-48h-r1`)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-48h-r1`
 - **Target base:** `icml-appendix-charlie`
@@ -60,7 +60,9 @@ Per-split test: single=32.69, rc=43.66, cruise=14.47, re_rand=27.79.
 | #4444 | fern | surf_weight {5, 7} downward sweep on grad-clip stack | loss | WIP — R28 fresh |
 | #4445 | nezuko | grad_clip rate sweep {0.5, 2.0} — explore max_norm axis | optim | WIP — R28 fresh |
 | #4446 | askeladd | EMA decay {0.995, 0.999} retest on grad-clip stack | optim | WIP — R28 fresh |
-| #4281 | alphonse | SmoothL1 β=0.05 confirmation on grad-clip stack (R29 send-back; mlp_ratio=2 no-clip result was val=34.60/test=29.52) | loss | WIP — R29 send-back |
+| #4492 | alphonse | Per-channel β (β_uxy=0.05, β_p=0.25) — address p-channel tail asymmetry | loss | WIP — R30 fresh |
+| #4493 | thorfinn | Dropout sweep {0.05, 0.0} on grad-clip stack — test regularization redundancy | optim/reg | WIP — R30 fresh |
+| #4494 | tanjiro | mlp_ratio=3 uniform on grad-clip stack — capacity vs placement disentangle | architecture | WIP — R30 fresh |
 
 ## Fully closed axes (updated for grad-clip stack baseline)
 
@@ -101,9 +103,17 @@ Per-split test: single=32.69, rc=43.66, cruise=14.47, re_rand=27.79.
 5. **surf_weight {5, 7} on grad-clip stack** — IN FLIGHT (fern #4444).
 6. **grad_clip rate {0.5, 2.0}** — IN FLIGHT (nezuko #4445).
 7. **EMA decay {0.995, 0.999} on grad-clip stack** — IN FLIGHT (askeladd #4446).
-8. **SmoothL1 β=0.05 confirmation on grad-clip stack** — IN FLIGHT (alphonse #4281 R29 send-back). R28 result was val=34.60 on mlp_ratio=2 no-clip (−1.53 vs 36.13 = strong orthogonality with mlp_ratio=2). Expected ≈32.15 if β fully orthogonal to grad_clip; will close axis cleanly.
-9. **rc-split structural bottleneck**: all non-architectural interventions failed; need geometric inductive bias (equivariant features, explicit geometry encoding, data augmentation)
-10. **dropout retest on grad-clip stack** — closed at 0.1 on old stack; may shift with stable training
-11. **warmup_steps retest on grad-clip stack** — closed at 200 on old stack; the capacity-warmup interaction may be different now
-12. **n_hidden=160 on grad-clip stack** — if n_hidden=144 wins, probe even wider
-13. **Batch size** — batch=8 closed on old stack; may differ with stable gradients
+8. **Per-channel β (β_uxy=0.05, β_p=0.25)** — IN FLIGHT (alphonse #4492). β/grad_clip are NOT orthogonal (R29 confirmed); per-channel approach may decouple the channel-specific residual-regime effects.
+9. **Dropout sweep {0.05, 0.0}** — IN FLIGHT (thorfinn #4493). Grad_clip fires 100% of steps — likely competing with dropout for regularization. If dropout=0 wins, critical finding on over-regularization.
+10. **mlp_ratio=3 uniform** — IN FLIGHT (tanjiro #4494). Disentangles capacity (more FFN width) from placement (asym-last-block). Closes the capacity axis cleanly.
+11. **rc-split structural bottleneck**: grad_clip and capacity (n_hidden=144 +1.66 rc) BOTH help rc, but n_hidden=144 regresses in-dist. Asymmetric capacity for OOD-relevant features is a deep avenue.
+12. **warmup_steps retest on grad-clip stack** — closed at 200 on old stack; optimizer dynamics shifted substantially (100% clip activation changes effective LR curve)
+13. **n_hidden=160 on grad-clip stack** — compute-bound diagnosis from thorfinn confirmed; need bigger budget or compute-efficiency win
+14. **Batch size** — batch=8 closed on old stack; unclear on grad-clip stack
+
+## R30 critical insights
+
+1. **β and grad_clip are NOT orthogonal**: both impose "preserve small-error gradient signal" through competing mechanisms. uniform β=0.05 + grad_clip: val=34.00 (+0.32, within noise) with test=28.72 (−0.93). The overlap is fundamental: clip normalizes ‖g‖ to 1.0 which already imposes constant-magnitude gradient direction regardless of error magnitude.
+2. **Asymmetric FFN (last-block) cruise gain was a gradient-instability artifact**: pre-clip the wider readout was partially attenuating gradient noise; once grad_clip handles that directly, the gain evaporates (+0.59 cruise regression post-clip).
+3. **n_hidden=144 is compute-bound NOT capacity-bound**: 33 epochs at 56s vs 37 epochs at 48s for n_hidden=128. The wider model converges slower than it can exhaust within the 30-min budget. rc improved (−1.66) despite val_avg regression — suggests capacity DOES help rc but the budget doesn't let it converge.
+4. **Regularization redundancy**: grad_clip active 100% of steps at pre-clip norm 37–90 mean = extreme continuous regularization. dropout=0.1 on top may be over-constraining the model, explaining why val_single_in_dist regressed (+3.59 thorfinn, +4.18 alphonse β=0.05) while test improved.

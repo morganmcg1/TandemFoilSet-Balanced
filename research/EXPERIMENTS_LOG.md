@@ -2150,3 +2150,94 @@ None — 7 students still WIP on R28 batch, alphonse re-assigned to #4281 single
 3. **camber_cruise is the dominant beneficiary of sharper Huber** (−3.03pt). This split has the smallest residual magnitudes — exactly where extending the linear regime decouples gradient signal from L2 shrinkage.
 4. **camber_rc reverse-engineered**: pure outlier-sensitivity worry was wrong. β=0.1 *slightly hurt* camber_rc (+0.58); β=0.05 *recovered* it (−0.51). The L1-regime gradient signal is more informative than the L2 quadratic for medium-large residuals at this scale.
 5. **Pure L1 (MAE) loss is a clean follow-up**: with two consistent data points along the β-axis showing roughly linear gain, the β→0 limit (MAE) is a single screening run away. Reserve for R30 if β=0.05 + grad_clip confirms.
+
+---
+
+# R30 — 2026-05-17 08:50 UTC
+
+## PR Reviews
+
+### PR #4441 — thorfinn: n_hidden=144 + grad_clip
+
+- **Branch**: charliepai2i48h1-thorfinn/n-hidden-144-grad-clip
+- **Result**: val=34.1675 (+0.49 vs 33.68 baseline), test=28.9936 (−0.66 baseline)
+- **Status**: CLOSED — val regression on primary metric; compute-bound at 33/50 epochs (56s/epoch, 30-min timeout)
+
+| Split | Baseline val | n_hidden=144 val | Δ |
+|-------|-------------|-----------------|---|
+| val_avg | 33.676 | 34.168 | +0.49 |
+| single_in_dist | 31.858 | 35.448 | +3.59 |
+| geom_camber_rc | 48.254 | 46.593 | **−1.66** |
+| geom_camber_cruise | 17.771 | 18.265 | +0.49 |
+| re_rand | 36.820 | 36.364 | −0.46 |
+| **test_avg** | **29.65** | **28.99** | **−0.66** |
+
+Key findings:
+- rc gained −1.66 (second-best rc improvement on new stack) — capacity genuinely helps rc bottleneck
+- single_in_dist regressed +3.59 (same pattern as other R30 runs — over-regularization signature?)
+- Test improved despite val regression — all 4 test splits improved
+- Still descending strongly at cutoff (Δ_last_2 = −0.32) — compute-bound, not converged
+- n_hidden=144 improves by −2.63 vs n_hidden=144+no-clip (PR #4397: val=36.80 → 34.17) — clip does stabilize but n_hidden=128 wins within this compute budget (faster convergence)
+- Grad clip active 100% of steps; pre-clip norm mean 23 (epoch 33) — norms lower than n_hidden=128 stack but still massive
+
+### PR #4442 — tanjiro: asym-FFN last-block + grad_clip
+
+- **Branch**: charliepai2i48h1-tanjiro/asym-ffn-last-3-grad-clip
+- **Result**: val=34.0029 (+0.33 vs 33.68), test=29.4157 (−0.23 baseline)
+- **Status**: CLOSED — val regression; cruise gain REVERSED under clip
+
+| Split | Baseline val | asym-FFN val | Δ |
+|-------|-------------|-------------|---|
+| val_avg | 33.676 | 34.003 | +0.33 |
+| single_in_dist | 31.858 | 34.061 | +2.20 |
+| geom_camber_rc | 48.254 | 47.660 | −0.59 |
+| **geom_camber_cruise** | **17.771** | **18.360** | **+0.59 (REGRESSION)** |
+| re_rand | 36.820 | 35.931 | −0.89 |
+
+Pre-clip (#4399 on old stack): cruise −0.78. Post-clip: cruise +0.59. **Sign reversal** = the pre-clip cruise gain was gradient-instability artifact (wider readout block acted as implicit gradient attenuator). Grad_clip handles this directly; asym-FFN then only adds 62k params to a 1499-sample training set.
+
+Mechanistic insight: with ‖g‖ capped at 1.0 and 100% clip activation, the gradient direction (not magnitude) dominates. Asymmetric FFN's implicit magnitude-attenuation role vanishes, leaving pure overparameterization. **Asym-FFN axis fully closed on grad-clip stack.**
+
+### PR #4281 — alphonse: β=0.05 on grad-clip stack (R29 confirmation arm)
+
+- **Branch**: charliepai2i48h1-alphonse/smoothl1-beta-0.1-sharper-huber
+- **Result**: val=34.0007 (+0.32, 0.52σ within noise), test=28.7159 (−0.93 baseline)
+- **Status**: CLOSED — β/grad_clip NOT orthogonal; val within noise but not a clear win
+
+| Split | Baseline val | β=0.05+clip val | Δ |
+|-------|-------------|----------------|---|
+| val_avg | 33.676 | 34.001 | +0.32 |
+| single_in_dist | 31.858 | 36.040 | **+4.18 (regression)** |
+| geom_camber_rc | 48.254 | 46.004 | −2.25 |
+| geom_camber_cruise | 17.771 | 17.470 | −0.30 |
+| re_rand | 36.820 | 36.495 | −0.32 |
+| **test_avg** | **29.65** | **28.72** | **−0.93** |
+
+Critical pattern: 3/4 val splits improve, test ALL 4 improve, but single_in_dist val +4.18 dominates avg.
+Root cause of non-orthogonality: β=0.05 extends L1-regime (constant gradient for small errors) and grad_clip normalizes ‖g‖ to 1.0 on every step. Both impose "don't lose small-error gradient signal" — competing effects, not compounding.
+The single_in_dist anomaly (val +4.18 vs test −0.45 on same split) suggests seed/partition variance on the easiest split. Combined with 100% clip activation, the clip is distorting the in-dist loss landscape.
+
+**β-axis status: CLOSED on grad-clip stack** (uniform β). Per-channel β assigned to follow up.
+
+## R30 Closures Summary
+
+| PR | Student | val_avg | vs Baseline | Status |
+|----|---------|---------|-------------|--------|
+| #4441 | thorfinn | 34.17 | +0.49 | CLOSED — compute-bound, val regression |
+| #4442 | tanjiro | 34.00 | +0.33 | CLOSED — cruise reversed, val regression |
+| #4281 | alphonse | 34.00 | +0.32 | CLOSED — β/clip non-orthogonal, within noise |
+
+## R30 Pattern
+
+All three closures share the same fingerprint: val regression concentrated in single_in_dist (+2.20/+3.59/+4.18) while 3/4 OOD splits improve and test ALL improves. This suggests:
+1. **Val single_in_dist is high-variance (seed-sensitive)** on the grad-clip stack — single seed results are misleading for that split
+2. **Grad_clip is providing sufficient regularization** — additional regulators (dropout, asymmetric params, sharper β) all compete rather than compound
+3. **The optimizer is capacity-bounded, not regularization-bounded** — the model's steady-state val isn't at the regularization floor but at the compute/capacity floor
+
+## R30 New Assignments
+
+| PR | Student | Hypothesis | Theme |
+|----|---------|------------|-------|
+| #4492 | alphonse | Per-channel β (β_uxy=0.05, β_p=0.25) — address p-channel tail asymmetry | loss |
+| #4493 | thorfinn | Dropout sweep {0.05, 0.0} on grad-clip stack — test regularization redundancy | optim/reg |
+| #4494 | tanjiro | mlp_ratio=3 uniform on grad-clip stack — capacity vs placement disentangle | architecture |
