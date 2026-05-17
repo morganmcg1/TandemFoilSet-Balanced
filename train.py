@@ -250,7 +250,7 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, beta_uxy=0.05, beta_p=0.25) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -275,7 +275,9 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
                 pred = model({"x": x_norm})["preds"]
             pred = pred.float()
 
-            sq_err = F.smooth_l1_loss(pred, y_norm, reduction='none', beta=0.25)
+            sq_err_uxy = F.smooth_l1_loss(pred[..., :2], y_norm[..., :2], reduction='none', beta=beta_uxy)
+            sq_err_p = F.smooth_l1_loss(pred[..., 2:3], y_norm[..., 2:3], reduction='none', beta=beta_p)
+            sq_err = torch.cat([sq_err_uxy, sq_err_p], dim=-1)
             sq_err_clean = torch.where(torch.isfinite(sq_err), sq_err, torch.zeros_like(sq_err))
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
@@ -351,6 +353,9 @@ def write_experiment_summary(
         "epochs_configured": cfg.epochs,
         "optimizer": "schedulefree.AdamWScheduleFree",
         "sf_warmup_steps": cfg.sf_warmup_steps,
+        "max_grad_norm": cfg.max_grad_norm,
+        "beta_uxy": cfg.beta_uxy,
+        "beta_p": cfg.beta_p,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -400,6 +405,8 @@ class Config:
     ema_decay: float = 0.997  # EMA decay for shadow model evaluated at val/test
     sf_warmup_steps: int = 200  # Schedule-Free linear LR warmup
     max_grad_norm: float = 1.0  # Gradient clipping max norm (set 0 to disable)
+    beta_uxy: float = 0.05  # SmoothL1 beta for velocity channels (Ux, Uy)
+    beta_p: float = 0.25  # SmoothL1 beta for pressure channel (p)
 
 
 cfg = sp.parse(Config)
@@ -411,6 +418,8 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
+print(f"DEBUG channel ordering: y_std shape={tuple(stats['y_std'].shape)}, y_std={stats['y_std'].tolist()}, y_mean={stats['y_mean'].tolist()}")
+print(f"DEBUG beta config: beta_uxy={cfg.beta_uxy}, beta_p={cfg.beta_p}")
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
@@ -515,7 +524,9 @@ for epoch in range(MAX_EPOCHS):
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
             pred = model({"x": x_norm})["preds"]
-            sq_err = F.smooth_l1_loss(pred, y_norm, reduction='none', beta=0.25)
+            sq_err_uxy = F.smooth_l1_loss(pred[..., :2], y_norm[..., :2], reduction='none', beta=cfg.beta_uxy)
+            sq_err_p = F.smooth_l1_loss(pred[..., 2:3], y_norm[..., 2:3], reduction='none', beta=cfg.beta_p)
+            sq_err = torch.cat([sq_err_uxy, sq_err_p], dim=-1)
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
@@ -556,7 +567,7 @@ for epoch in range(MAX_EPOCHS):
     optimizer.eval()
     ema_model.eval()
     split_metrics = {
-        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device, beta_uxy=cfg.beta_uxy, beta_p=cfg.beta_p)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -626,7 +637,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, beta_uxy=cfg.beta_uxy, beta_p=cfg.beta_p)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
