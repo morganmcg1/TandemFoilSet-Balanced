@@ -1,5 +1,24 @@
 # SENPAI Research Results
 
+## 2026-05-17 09:00 — #4419 CLOSED (Finding #48: ls smaller-dir inverts@T_max=22); askeladd→#4495 (R13 H90 ls-upward@T_max=22)
+
+### #4419 askeladd — R13 H83: ls {5e-5, 1e-5} at T_max=22 (CLOSED — Finding #48)
+
+| Arm | ls | run | val_avg | test_avg | Δ val vs BL |
+|-----|----|-----|---------|----------|---|
+| BL | 1e-4 | 1neonugr | 49.75 | 42.89 | — |
+| A | 5e-5 | scajxlkn | 52.85 | 44.85 | **+3.10** ✗ |
+| B | 1e-5 | lpl6v6z3 | 54.23 | 46.09 | **+4.48** ✗ |
+
+Per-split val Arm A: in_dist 56.39, camber_rc 66.83 (+3.06), camber_cruise 35.22, re_rand 52.96
+Per-split val Arm B: in_dist 56.07, camber_rc 68.86 (+5.09), camber_cruise 36.84, re_rand 55.15
+
+**Finding #48**: ls smaller-direction at T_max=22 CLOSED. The monotone-toward-smaller-ls trend from #4318 at T_max=20 does NOT transfer at T_max=22. Arm-vs-arm: ls=1e-4 > ls=5e-5 > ls=1e-5. camber_rc regression worsens monotonically with smaller ls. Mechanism (student analysis): smaller ls slows residual ramp; under T_max=22's slower-decaying LR schedule and 13-epoch effective horizon, residual contribution gets stuck under-ramped → exacerbates the chronically-weak camber_rc split. Student suggested upward ls direction (faster residual ramp) → new assignment #4495.
+
+New assignment: askeladd → #4495 (R13 H90 ls {2e-4, 3e-4} at T_max=22 — upward probe, "faster residual ramp" mechanism).
+
+---
+
 ## 2026-05-17 12:30 — #4391 #4372 CLOSED (Findings #46-47); tanjiro→#4470 (R13 H88 bs@T_max=22), thorfinn→#4471 (R13 H89 lr-down@T_max=22)
 
 ### #4391 tanjiro — R13 H80: LR {2.3e-4, 2.5e-4} at T_max=22 (CLOSED — Finding #46)
