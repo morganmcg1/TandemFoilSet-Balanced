@@ -2595,3 +2595,47 @@ Arm B (λ=0.01): val=37.1878 (Δ-0.07 within noise). Arm A (λ=0.1): val=39.07 (
 | #4422 | nezuko | **H122: Lookahead(Lion) k=5 α=0.5 at H106 baseline** | HIGH (orthogonal optimizer-level mechanism) |
 
 **Cycle summary:** H119 closed (no compound). H115 returned to wip for slice80+Fourier compound. Nezuko reassigned to Lookahead. 8 WIP, 0 idle.
+
+---
+
+## 2026-05-17 — PR #4394: H120 Fourier K=2, K=1 (askeladd) — MERGED, NEW BEST
+
+- Branch: `charliepai2i48h3-askeladd/h120-fourier-freq-sweep`
+- Hypothesis: K=8→K=4 monotone improvement; test K=2 and K=1 to find optimum.
+
+| K | val_avg | test 3-split | Source |
+|---|---------|-------------|--------|
+| 8 | 36.91 | — | H106 Arm A |
+| 4 | 35.9159 | 35.1221 | H106 Arm B (prior best) |
+| 2 | 36.2021 | 34.8488 | H120 Arm A |
+| **1** | **35.6651** | **33.3976** | **H120 Arm B (NEW BEST)** |
+
+Per-split K=1 vs K=4 baseline: val_single_in_dist +3.98 (K=4 better for in-dist), val_geom_camber_rc -2.79, val_geom_camber_cruise -0.84, val_re_rand -1.35. Test trend strictly monotone: K=1 beats K=4 on ALL three test splits (Δ-1.21, -2.67, -1.30).
+
+**Mechanism:** K=1 → features = [sin(2πx), cos(2πx), sin(2πz), cos(2πz)] — single global wavelength = chord length, exactly the scale of foil geometry. Higher K adds sub-chord wavelengths that the model overfits on training data but cannot transfer to OOD geometry.
+
+**Status: MERGED. New baseline val=35.6651 / test=33.3976. Cumulative R5 gain: −30.44 pts vs H37b.**
+
+---
+
+## 2026-05-17 — PR #4392: H104 per-sample p std normalization (alphonse) — CLOSED, catastrophic
+
+val=287.75 vs baseline 35.92 (8× worse). Fundamental flaw: per-sample normalization makes target `y_norm/p_std` depend on per-sample statistics the model cannot observe at inference. Amplification (p_std min 0.0012 → |target| up to 165) + bf16 instability. Per-sample p norm lever closed.
+
+---
+
+## 2026-05-17 — Stale drafts #4378, #4379 closed
+
+- #4378 (fern/H116 log(Re) aux head): duplicate of closed H107. Never started. Closed.
+- #4379 (tanjiro/H117 Fourier PE K=8, K=4): duplicate of merged H106. Never started. Closed.
+
+---
+
+## 2026-05-17 — Cycle 43 Assignments
+
+| PR | Student | Hypothesis | Priority |
+|----|---------|-----------|---------|
+| #4451 | askeladd | **H123: Fourier K=0 ablation + K=1 scale=0.5** | TOP (complete sweep: does monotone trend extend to K=0?) |
+| #4452 | alphonse | **H124: EMA weight averaging τ=0.999, τ=0.9995 at H120 K=1 baseline** | HIGH (zero-compute orthogonal mechanism) |
+
+**Cycle summary:** H120 K=1 merged (new best val=35.67, test=33.40). H104 closed (catastrophic). Stale H116/H117 drafts closed. 8 WIP, 0 idle.
