@@ -487,6 +487,8 @@ class Config:
     slice_num: int = 64
     use_swiglu: bool = False
     swiglu_hidden_mult: float = 1.0  # 1.0 = full hidden; 0.6667 = param-matched
+    y_mirror_v2_prob: float = 0.0          # probability of applying y-mirror per training batch. 0 = off.
+    y_mirror_v2_flip_globals: bool = True  # if True, also flip AoA0, AoA1, stagger and u_y target
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -552,6 +554,17 @@ print(
     f"use_swiglu={cfg.use_swiglu}, swiglu_hidden_mult={cfg.swiglu_hidden_mult})"
 )
 
+if cfg.y_mirror_v2_prob > 0.0:
+    xms = stats["x_mean"].squeeze() / stats["x_std"].squeeze()
+    yms = stats["y_mean"].squeeze() / stats["y_std"].squeeze()
+    print(f"y-mirror-v2: prob={cfg.y_mirror_v2_prob}, flip_globals={cfg.y_mirror_v2_flip_globals}")
+    print(f"  bias corrections (2*mean/std): pos_y={2*xms[1].item():.4f}, saf_1={2*xms[3].item():.4f}")
+    if cfg.y_mirror_v2_flip_globals:
+        print(
+            f"  globals: AoA0={2*xms[14].item():.4f}, AoA1={2*xms[18].item():.4f}, "
+            f"stagger={2*xms[23].item():.4f}, u_y={2*yms[1].item():.4f}"
+        )
+
 optimizer = Lion(model.parameters(), lr=cfg.lr, betas=(0.9, 0.99), weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.cosine_t_max_epochs)
 ema = EMA(model, decay=cfg.ema_decay)
@@ -596,6 +609,22 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
+
+        # Y-mirror v2: apply Navier-Stokes y-symmetry in NORMALIZED space with bias correction.
+        # x_norm_mirrored[k] = -x_norm[k] - 2*mean[k]/std[k]  (physics-exact symmetric pair).
+        if cfg.y_mirror_v2_prob > 0.0 and model.training:
+            if torch.rand(1, device=x.device).item() < cfg.y_mirror_v2_prob:
+                x_mean_std = stats["x_mean"].squeeze() / stats["x_std"].squeeze()  # (24,)
+                y_mean_std = stats["y_mean"].squeeze() / stats["y_std"].squeeze()  # (3,)
+                # Geometry fields: pos_y=1, saf_1=3
+                x_norm[..., 1] = -x_norm[..., 1] - 2.0 * x_mean_std[1]
+                x_norm[..., 3] = -x_norm[..., 3] - 2.0 * x_mean_std[3]
+                if cfg.y_mirror_v2_flip_globals:
+                    # Global broadcast fields: AoA0=14, AoA1=18, stagger=23
+                    for k in (14, 18, 23):
+                        x_norm[..., k] = -x_norm[..., k] - 2.0 * x_mean_std[k]
+                    # Target y: u_y=1
+                    y_norm[..., 1] = -y_norm[..., 1] - 2.0 * y_mean_std[1]
 
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             pred = model({"x": x_norm})["preds"]
