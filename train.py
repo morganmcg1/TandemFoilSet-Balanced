@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import copy
+import json
 import os
 import subprocess
 import time
@@ -530,6 +531,8 @@ class Config:
     use_lookahead: bool = False  # wrap AdamW with Lookahead (Zhang et al. 2019)
     lookahead_k: int = 5  # Lookahead inner steps before slow-weights sync
     lookahead_alpha: float = 0.5  # Lookahead slow-weights interpolation factor
+    camber_oversample_weight: float = 1.0  # >1 oversamples high-camber raceCar-tandem samples (PR #4311); 1=disabled
+    camber_oversample_domain: str = "racecar_tandem"  # which domain group to apply camber-stratified sampling to
 
 
 cfg = sp.parse(Config)
@@ -541,6 +544,77 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
+
+# --- PR #4311: camber-stratified WeightedRandomSampler ---
+# Within the chosen domain partition (default raceCar tandem — the training
+# domain whose held-out front-foil cambers form val_geom_camber_rc), oversample
+# samples with higher NACA camber (front foil) so the model sees more
+# high-camber pressure distributions per epoch. This adjusts SAMPLING FREQUENCY
+# only; per-sample loss weights are unchanged, which avoids the backbone
+# starvation that killed loss-reweighting in PR #4204.
+camber_diag: dict[str, float] = {}
+if cfg.camber_oversample_weight != 1.0 and not cfg.debug:
+    with open(Path(cfg.splits_dir) / "meta.json") as f:
+        _meta = json.load(f)
+    _domain_groups = _meta["domain_groups"]
+    if cfg.camber_oversample_domain not in _domain_groups:
+        raise ValueError(
+            f"camber_oversample_domain={cfg.camber_oversample_domain!r} not in "
+            f"domain_groups {list(_domain_groups.keys())}"
+        )
+    _idx_to_group = {i: name for name, idxs in _domain_groups.items() for i in idxs}
+    _n = len(train_ds)
+    _cambers = torch.zeros(_n, dtype=torch.float64)
+    _t0 = time.time()
+    for _i in range(_n):
+        _s = torch.load(train_ds.files[_i], weights_only=True)
+        _cambers[_i] = _s["x"][0, 15].item()  # NACA foil 1 camber (constant per sample, normalized [0,1])
+    print(f"[CAMBER-OVERSAMPLE] read per-sample camber for {_n} samples in {time.time()-_t0:.1f}s")
+
+    _target_idx = torch.tensor(
+        [_i for _i in range(_n) if _idx_to_group[_i] == cfg.camber_oversample_domain],
+        dtype=torch.long,
+    )
+    _target_cambers = _cambers[_target_idx]
+    _cmin = _target_cambers.min().item()
+    _cmax = _target_cambers.max().item()
+    _c_norm = (_target_cambers - _cmin) / (_cmax - _cmin + 1e-6)
+    _multiplier = 1.0 + (cfg.camber_oversample_weight - 1.0) * _c_norm
+    # PR-specified formula: weight_i = base_weight_i * (1 + (k-1) * c_norm)
+    # (Cross-domain mass shift toward the target partition is an expected
+    #  side-effect — racecar_tandem mass grows by mean(multiplier).)
+    sample_weights = sample_weights.clone()
+    sample_weights[_target_idx] = sample_weights[_target_idx] * _multiplier
+
+    _tw = sample_weights[_target_idx]
+    # Cross-domain mass shift diagnostic
+    _domain_mass = {
+        name: sample_weights[torch.tensor(idxs, dtype=torch.long)].sum().item()
+        for name, idxs in _domain_groups.items()
+    }
+    _total_mass = sum(_domain_mass.values())
+    camber_diag = {
+        "debug/camber_weight_min": _tw.min().item(),
+        "debug/camber_weight_max": _tw.max().item(),
+        "debug/camber_weight_mean": _tw.mean().item(),
+        "debug/camber_weight_max_min_ratio": _tw.max().item() / max(_tw.min().item(), 1e-12),
+        "debug/camber_cmin": _cmin,
+        "debug/camber_cmax": _cmax,
+        "debug/camber_multiplier_mean": _multiplier.mean().item(),
+        **{f"debug/domain_mass_frac/{name}": m / _total_mass for name, m in _domain_mass.items()},
+    }
+    print(
+        f"[CAMBER-OVERSAMPLE] domain={cfg.camber_oversample_domain} k={cfg.camber_oversample_weight} "
+        f"weight_min={camber_diag['debug/camber_weight_min']:.6e} "
+        f"weight_max={camber_diag['debug/camber_weight_max']:.6e} "
+        f"weight_mean={camber_diag['debug/camber_weight_mean']:.6e} "
+        f"max/min={camber_diag['debug/camber_weight_max_min_ratio']:.3f} "
+        f"(target {cfg.camber_oversample_weight:.2f})"
+    )
+    print(
+        f"[CAMBER-OVERSAMPLE] effective domain mass fractions: "
+        + ", ".join(f"{n}={camber_diag[f'debug/domain_mass_frac/{n}']:.3f}" for n in _domain_groups)
+    )
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
@@ -623,6 +697,9 @@ wandb.define_metric("val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
+
+if camber_diag:
+    wandb.summary.update(camber_diag)
 
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
