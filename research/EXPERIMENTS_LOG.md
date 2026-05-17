@@ -3007,3 +3007,59 @@ Two arms:
 Win condition: val_avg < 33.4710. Primary diagnostic: val_geom_camber_rc vs in-dist regression ratio.
 
 **8 WIP remaining (H130-H132, H136-H139), 0 idle.**
+
+---
+
+## 2026-05-17 — PR #4509: H132 DSDF Fourier PE (alphonse) — CLOSED, negative vs H128 baseline
+
+- Branch: `charliepai2i48h3-alphonse/h132-dsdf-fourier`
+- Hypothesis: Apply K=1 Fourier PE to 7 DSDF channels on top of H120 K=1 coord-Fourier baseline.
+
+### Results (vs H128 current baseline 33.4710/32.638)
+
+| Metric | H128 baseline | Arm A (coord+DSDF K=1) | Arm B (DSDF-only K=1) |
+|--------|-------------:|---------------------:|--------------------:|
+| val_avg | 33.4710 | 35.5987 (+2.13) | 37.2444 (+3.77) |
+| val_geom_camber_rc | 45.76 | 48.02 (+2.26) | 49.78 (+4.02) |
+| test 3-split | 32.638 | 34.6325 (+1.99) | 35.7143 (+3.08) |
+| val_single_in_dist | 31.74 | 32.57 (+0.83) | 36.40 (+4.66) |
+
+Both arms regress on all splits vs H128. Val_geom_camber_rc moved the WRONG direction.
+
+Key diagnostic: Arm A's val_single_in_dist drop vs H120 (−3.64) did NOT transfer to test (+0.59) — classic in-dist overfitting without OOD benefit. Arm B confirms DSDF cannot subsume coord Fourier (different scales of geometric variation).
+
+**Lever: DSDF Fourier ❌ CLOSED.**
+
+**7 WIP (H130, H134, H136-H141), alphonse reassigned to H141 NACA Fourier.**
+
+---
+
+## 2026-05-17 — PR #4480: H131 LE+TE dual coordinates (fern) — CLOSED, negative vs H128 baseline
+
+- Branch: `charliepai2i48h3-fern/h131-le-te-dual-coords`
+- Hypothesis: LE+TE distance/direction features improve OOD camber generalization.
+
+### Results (3 runs — 2× Arm A global 4-feat, 1× Arm B per-foil 8-feat)
+
+| Run | val_avg | Δ vs H128 | val_geom_camber_rc | Δ vs H128 OOD | test 3-split |
+|-----|--------:|----------:|-------------------:|--------------:|-------------:|
+| A1 (best) | 34.4091 | +0.94 | 46.1193 | +0.36 | 33.3935 (+0.76) |
+| A2 | 34.9553 | +1.48 | 48.3911 | +2.63 | 33.8762 (+1.24) |
+| A mean | 34.6822 | +1.21 | 47.2552 | +1.50 | 33.6348 (+1.00) |
+| B per-foil | 35.3846 | +1.91 | 49.6026 | +3.84 | 33.9477 (+1.31) |
+
+A1 hit −1.44 vs H120 on val_geom_camber_rc (encouraging) but A2 hit +0.83. Spread of 2.27 pts on OOD split — too noisy to call a win. All runs worse vs H128 baseline. Per-foil definitively worse.
+
+**Lever: LE+TE dual coords ❌ CLOSED (current form).** High variance on OOD effect; superseded by H128.
+
+**6 WIP (H130, H134, H136-H139), fern reassigned to H140 surface curvature.**
+
+---
+
+## 2026-05-17 — Cycle 53: H140 surface curvature κ (fern, #4594) + H141 NACA Fourier cond (alphonse, #4596)
+
+**H140:** Local signed curvature κ at each surface node (PCA-based from K=8 nearest surface neighbors). Volume nodes κ=0. Direct intrinsic camber proxy. Two arms: raw κ (1 dim) and κ+Fourier [sin(κ),cos(κ)] (3 dims). Uses fern's existing surface-node detection from H131.
+
+**H141:** Fourier K={1,2} encoding of full 11-dim conditioning vector (Re, AoA, NACA digits, gap, stagger). Enrichment (appends sin/cos alongside originals), NOT perturbation — avoids H112/H135 FiLM brittleness failure mode. Normalizes each cond dim to [0,1] using training-set statistics.
+
+**8 WIP remaining (H130, H134, H136-H141), 0 idle.**

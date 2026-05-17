@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-17 (cycle 52 — H133 spectral norm CLOSED; H139 attn temperature assigned)
+- **Date**: 2026-05-17 (cycle 53 — H132/H131 closed; H140/H141 assigned)
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
-- **Round**: 5 late-phase — **CURRENT BEST: H128 Arm A (compile + T_max=24, val=33.4710 / test=32.638, PR #4463).** Cycle 52: H133 spectral norm closed (OOD benefit real but superseded by H128 for the current baseline). H139 attention temperature τ={1.5,2.0} assigned to edward. 8 WIP.
+- **Round**: 5 late-phase — **CURRENT BEST: H128 Arm A (compile + T_max=24, val=33.4710 / test=32.638, PR #4463).** Cycle 53: H132 DSDF Fourier closed (negative vs H128 baseline); H131 LE+TE coords closed (marginal vs H120, negative vs H128). H140 surface curvature assigned to fern; H141 NACA Fourier conditioning assigned to alphonse. Askeladd watchdog rate-limit recovery in progress. 8 WIP.
 - **Most recent human research directive**: None received
 
 ## Current Best
@@ -55,6 +55,8 @@ H128's −1.08 pts val_avg gain and −0.44 pts test gain are inside the noise b
 - Literal Mixup (sample pairs): mesh identity violation + H55 repeat (H129)
 - Condition-only Mixup: FiLM pathway brittle — uniform regression +14.6 pts val (H135); H112-repeat signature
 - Spectral norm (in_project_slice): OOD mechanism real (−1 pt camber) but superseded by H128's −2.02 pts; too aggressive on in-dist (H133)
+- DSDF Fourier PE: negative vs H128; DSDF ≠ coord Fourier, per-node Fourier on DSDF inflates in-dist DOF (H132)
+- LE+TE dual coords: A1 seed hit OOD (−1.44 vs H120) but A2 missed (+0.83); per-foil definitively worse; effect not robust vs new baseline (H131)
 - slice_num=80 + Fourier: anti-compound (H115 Arm C)
 - Per-sample p norm: catastrophic (H104)
 - FiLM cond jitter: washes out conditioning (H112)
@@ -83,6 +85,8 @@ H128's −1.08 pts val_avg gain and −0.44 pts test gain are inside the noise b
 | **#4480** | fern | **H131: LE+TE dual coord features (4/8 extra dims)** | HIGH (input repr, OOD-targeted) | ~32-34 |
 | **#4527** | edward | **H133: spectral norm on in_project_slice** | HIGH (Lipschitz regularization) | ~32.5-34 |
 | **#4529** | nezuko | **H135: condition-only Mixup α={0.2,0.5}** | HIGH (camber-axis augmentation) | ~32-34 |
+| **#4596** | alphonse | **H141: Fourier K={1,2} encoding of conditioning features (NACA+flow)** | HIGH (cond repr, camber interp) | ~32-34 |
+| **#4594** | fern | **H140: local surface curvature κ as input feature** | HIGH (geom feature, OOD camber proxy) | ~32-34 |
 | **#4582** | edward | **H139: attention temperature τ={1.5, 2.0} (softer OOD attention)** | HIGH (attention mechanism, OOD-targeted) | ~32-34 |
 | **#4571** | nezuko | **H138: camber boundary curriculum WeightedRandomSampler M=5,9 upweight** | HIGH (OOD sampler, no perturbation) | ~32-34 |
 | **#4563** | frieren | **H137: SAM (Sharpness-Aware Minimization) ρ={0.05, 0.1}** | HIGH (flat-minimum OOD generalization) | ~32-34 |
@@ -110,6 +114,10 @@ H128's −1.08 pts val_avg gain and −0.44 pts test gain are inside the noise b
 | FFN dropout | ❌ CLOSED — negative, all p values wrong direction (H126) | none | Train-val gap unchanged; OOD gap is geometric extrapolation not co-adaptation |
 | Condition-only Mixup | ❌ CLOSED — H112-repeat, FiLM pathway brittle (H135) | none | +14.6 pts val_avg, uniform regression; cond-augmentation axis closed |
 | Spectral norm (in_project_slice) | ❌ CLOSED — mechanism real but ceiling too low vs H128 baseline (H133) | none | −1 pt OOD gain but +3 pts in-dist regression; H128 already −2 pts OOD |
+| DSDF Fourier features | ❌ CLOSED — negative vs H128 (+2.13 val, +2.26 OOD camber) (H132) | none | DSDF cannot subsume coord Fourier; inflate in-dist DOF without OOD transfer |
+| LE+TE dual coords | ❌ CLOSED — marginal vs H120 ref, negative vs H128 (+1.21 mean) (H131) | none | Global better than per-foil; A1 seed hit OOD but A2 missed; high variance |
+| Surface curvature κ features | 🔬 H140 active (raw κ, κ+Fourier) | none | Direct camber proxy; local intrinsic geometry |
+| NACA Fourier conditioning | 🔬 H141 active K={1,2} | none | Fourier on cond dims; enrichment not perturbation; smooth camber basis |
 | Condition-only Mixup | 🔬 H135 active | none | Geometry-safe Mixup on NACA+flow params; H129 literal-Mixup closed |
 | LE+TE dual coords | 🔬 H131 active | none | OOD-targeted input repr; Texas A&M arXiv 2412.09399 |
 | DSDF Fourier features | 🔬 H132 active | none | Applies H120 K=1 mechanism to signed-distance channels |
