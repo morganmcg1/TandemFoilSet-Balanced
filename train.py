@@ -569,6 +569,7 @@ class Config:
     use_swiglu: bool = False
     use_geglu: bool = False
     use_lion: bool = False
+    lion_b1: float = 0.9
     lookahead_k: int = 5
     lookahead_alpha: float = 0.5
 
@@ -633,7 +634,7 @@ if cfg.use_lion:
     # constant magnitude (lr/3 here, matching the PR #4123 recipe).
     base_optimizer = Lion(
         model.parameters(), lr=cfg.lr / 3.0, weight_decay=cfg.weight_decay,
-        betas=(0.9, 0.99),
+        betas=(cfg.lion_b1, 0.99),
     )
 else:
     base_optimizer = torch.optim.AdamW(
@@ -699,6 +700,8 @@ run.summary["optim/weight_decay"] = _wd_per_group[0]
 run.summary["optimizer"] = _optim_name
 run.summary["base_optimizer"] = _base_name
 run.summary["use_lion"] = cfg.use_lion
+run.summary["lion_b1"] = cfg.lion_b1
+run.summary["lion_b2"] = 0.99
 run.summary["lookahead_k"] = cfg.lookahead_k
 run.summary["lookahead_alpha"] = cfg.lookahead_alpha
 run.summary["lookahead_on"] = _lookahead_on
