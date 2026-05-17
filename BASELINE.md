@@ -1,30 +1,32 @@
 # Baseline — icml-appendix-willow-pai2i-48h-r3
 
-## Current best (as of 2026-05-17 05:33) — PR #4336: LR re-tune on T_max=25 canonical (lr=2e-3)
+## Current best (as of 2026-05-17 08:45) — PR #4447: Cosine T_max=20 (finer cooldown sweep, 16th winner)
 
-Fifteen winners merged: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + SOAP optimizer (PR #3283, −31.7%) + SOAP precond_freq=5 (PR #3495, −1.78%) + EMA model weights decay=0.999 (PR #3430, −18.8%) + EMA decay=0.99 (PR #3591, −3.85%) + Huber beta=0.5 (PR #3316, −6.05%) + Cauchy loss c=1.0 (PR #3612, −3.67%) + Huber beta=0.1 (PR #3868, −3.77%) + Lookahead k=5 (PR #3947, −4.14%) + Gradient clipping max_norm=1.0 (PR #3497, −2.72%) + Huber beta=0.01 (PR #4037, −2.51%) + bfloat16 autocast (PR #3975, −9.74%) + cosine T_max=25 (PR #4263, −8.47%) + **lr=2e-3** (PR #4336, tanjiro, **−6.33% vs previous canonical**).
+Sixteen winners merged: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + SOAP optimizer (PR #3283, −31.7%) + SOAP precond_freq=5 (PR #3495, −1.78%) + EMA model weights decay=0.999 (PR #3430, −18.8%) + EMA decay=0.99 (PR #3591, −3.85%) + Huber beta=0.5 (PR #3316, −6.05%) + Cauchy loss c=1.0 (PR #3612, −3.67%) + Huber beta=0.1 (PR #3868, −3.77%) + Lookahead k=5 (PR #3947, −4.14%) + Gradient clipping max_norm=1.0 (PR #3497, −2.72%) + Huber beta=0.01 (PR #4037, −2.51%) + bfloat16 autocast (PR #3975, −9.74%) + cosine T_max=25 (PR #4263, −8.47%) + lr=2e-3 (PR #4336, −6.33%) + **cosine T_max=20** (PR #4447, tanjiro, **−2.72% vs previous canonical**).
 
 **Primary ranking metric:**
-- `val_avg/mae_surf_p` = **35.5322** (run `myusvvzs`, tanjiro variant-lr2e3-tmax25, best epoch 17)
+- `val_avg/mae_surf_p` = **34.5662** (run `r1trjd2d`, tanjiro variant-tmax20, best epoch 17)
 
 **Test (paper-facing):**
-- `test_avg/mae_surf_p_excl_cruise` (3-split mean) = **37.1052** (−4.98% vs previous 39.0519)
-  - `test_single_in_dist/mae_surf_p` = 38.1541
-  - `test_geom_camber_rc/mae_surf_p` = 44.1434
-  - `test_re_rand/mae_surf_p` = 29.0182
+- `test_avg/mae_surf_p_excl_cruise` (3-split mean) = **35.5786** (−4.11% vs previous 37.1052)
+  - `test_single_in_dist/mae_surf_p` = 36.2261
+  - `test_geom_camber_rc/mae_surf_p` = 42.5063
+  - `test_re_rand/mae_surf_p` = 28.0034
   - `test_geom_camber_cruise/mae_surf_p` = NaN (pre-existing bug)
+
+Note: T_max=17 arm (a5vd7t9y) also beats canonical on val (35.2454, −0.81%) and wins test_excl_cruise (35.2148, −5.10%). T_max=20 is primary-metric winner on val.
 
 **Config (post-merge):**
 - Transolver: n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, dropout=0
-- **SOAP optimizer** (precondition_frequency=5) **lr=2e-3**, warmup_epochs=3 (LinearLR) → CosineAnnealingLR(T_max=22, i.e. `--cosine_t_max 25`), weight_decay=1e-4, batch_size=4, surf_weight=10.0
+- **SOAP optimizer** (precondition_frequency=5) **lr=2e-3**, warmup_epochs=3 (LinearLR) → **CosineAnnealingLR(`--cosine_t_max 20`)**, weight_decay=1e-4, batch_size=4, surf_weight=10.0
 - 50 epochs, **Huber loss (huber_beta=0.01, cauchy_c=0.0)**; `vol_loss + 10*surf_loss`
 - **EMA of model weights** (ema_decay=0.99, updated each training step)
 - **Lookahead (k=5, alpha=0.5)** wrapping SOAP
 - **Gradient clipping (max_norm=1.0)** applied before optimizer.step()
 - **bfloat16 autocast** (`--use_bf16`): forward + loss in bf16, backward + optimizer in fp32; no GradScaler
-- **cosine_t_max=25** (`--cosine_t_max 25`): cosine phase = 25 − 3 warmup = 22 effective epochs; LR at epoch 17 ≈ 5.8e-4 (29% of peak)
+- **cosine_t_max=20** (`--cosine_t_max 20`): cosine phase = 20 − 3 warmup = 17 effective epochs; LR at epoch 17 ≈ 1.5e-4 (7.5% of peak); cosine reaches floor at epoch 20
 - Wall-clock: ~30 min cap, **best epoch 17**; epoch_time ~107s
-- Peak VRAM: **~33.0 GB** (identical model/batch/precision to #4263)
+- Peak VRAM: **~33.0 GB**
 - `param count = 0.66M`
 
 **Reproduce:**
@@ -39,10 +41,26 @@ cd target/ && python train.py \
   --use_lookahead --lookahead_k 5 --lookahead_alpha 0.5 \
   --grad_clip 1.0 \
   --use_bf16 \
-  --cosine_t_max 25
+  --cosine_t_max 20
 ```
 
-**Mechanism note:** With T_max=25 restoring genuine cosine cooldown, the LR ceiling lifted: monotone improvement 1e-3 → 1.5e-3 → 2e-3 on val (37.94 → 36.44 → 35.53), all on the same 17-epoch budget. The cosine cooldown's variance-reduction role means higher peak LR is safe — it's annealed away before best_epoch. SOAP+Lookahead+grad_clip+bf16 is stable at 2× canonical LR with no NaN or divergence. The previous T_max=50 schedule effectively ran constant LR, which hit a ceiling at lr=1e-3; T_max=25 unlocks the proper LR sweep range.
+**Mechanism note:** T_max=20 brings the cosine cooldown significantly closer to best_epoch=17. At T_max=25 the LR was still at 29% of peak at epoch 17; at T_max=20 it drops to 7.5% — nearly fully cooled. This accelerates variance reduction without fully silencing the optimizer before best_epoch (unlike T_max=17 which hits LR=0 exactly at epoch 17 and primarily tests EMA polishing). The T_max=17 arm shows slightly better test (-5.10%) than T_max=20 (-4.11%) — indicating the final ~2 epochs of EMA polishing help generalization more than the minuscule LR gradient — but T_max=20 wins val (-2.72%).
+
+---
+
+## Previous best (as of 2026-05-17 05:33) — PR #4336: LR re-tune on T_max=25 canonical (lr=2e-3)
+
+Fifteen winners merged: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + SOAP optimizer (PR #3283, −31.7%) + SOAP precond_freq=5 (PR #3495, −1.78%) + EMA model weights decay=0.999 (PR #3430, −18.8%) + EMA decay=0.99 (PR #3591, −3.85%) + Huber beta=0.5 (PR #3316, −6.05%) + Cauchy loss c=1.0 (PR #3612, −3.67%) + Huber beta=0.1 (PR #3868, −3.77%) + Lookahead k=5 (PR #3947, −4.14%) + Gradient clipping max_norm=1.0 (PR #3497, −2.72%) + Huber beta=0.01 (PR #4037, −2.51%) + bfloat16 autocast (PR #3975, −9.74%) + cosine T_max=25 (PR #4263, −8.47%) + **lr=2e-3** (PR #4336, tanjiro, **−6.33% vs previous canonical**).
+
+**Primary ranking metric:**
+- `val_avg/mae_surf_p` = **35.5322** (run `myusvvzs`, tanjiro variant-lr2e3-tmax25, best epoch 17)
+
+**Test (paper-facing):**
+- `test_avg/mae_surf_p_excl_cruise` (3-split mean) = **37.1052** (−4.98% vs previous 39.0519)
+  - `test_single_in_dist/mae_surf_p` = 38.1541
+  - `test_geom_camber_rc/mae_surf_p` = 44.1434
+  - `test_re_rand/mae_surf_p` = 29.0182
+  - `test_geom_camber_cruise/mae_surf_p` = NaN (pre-existing bug)
 
 ---
 
