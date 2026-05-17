@@ -313,6 +313,31 @@ class Lookahead(torch.optim.Optimizer):
     def zero_grad(self, set_to_none=True):
         self.base.zero_grad(set_to_none=set_to_none)
 
+    def slow_weights_state_dict(self, model: nn.Module) -> dict[str, torch.Tensor]:
+        """Return a deepcopied state_dict keyed by parameter name, holding slow weights.
+
+        Use to snapshot the Lookahead slow trajectory for SWA-style averaging — the
+        snapshot is independent of subsequent in-place updates to ``self.slow_state``.
+        Any model buffer (e.g. LN running stats; Transolver has none) is copied from
+        the model's own state_dict so the result is a complete drop-in for
+        ``model.load_state_dict``.
+        """
+        param_to_name = {id(p): n for n, p in model.named_parameters()}
+        seen = set()
+        out: dict[str, torch.Tensor] = {}
+        for group in self.base.param_groups:
+            for p in group["params"]:
+                name = param_to_name.get(id(p))
+                if name is None or name in seen:
+                    continue
+                seen.add(name)
+                out[name] = self.slow_state[p].detach().clone()
+        # Include any non-parameter buffers verbatim so the returned dict is
+        # a complete state_dict the model can load_state_dict from directly.
+        for name, buf in model.named_buffers():
+            out[name] = buf.detach().clone()
+        return out
+
     @torch.no_grad()
     def step(self, closure=None):
         loss = self.base.step(closure)
@@ -572,6 +597,7 @@ class Config:
     lion_b2: float = 0.99  # Lion beta2; default matches historical baseline
     lookahead_k: int = 5
     lookahead_alpha: float = 0.5
+    swa_last_n: int = 0  # 0 = disabled; N>0 = average slow_weights snapshots from last N epochs
 
 
 cfg = sp.parse(Config)
@@ -708,6 +734,32 @@ run.summary["lookahead_on"] = _lookahead_on
 # Rolling buffer for per-step train losses to compute volatility (window=100).
 _train_loss_window: deque[float] = deque(maxlen=100)
 
+# SWA: collect slow_weights snapshots at the END of every epoch, retaining only
+# the most recent ``cfg.swa_last_n`` via a bounded deque. Robust to early
+# termination — final snapshots are always "last N completed epochs" regardless
+# of timeout. Variance reduction via uniform averaging of post-convergence
+# snapshots (Izmailov et al. 2018). Disabled when swa_last_n == 0.
+_swa_snapshots: deque[dict[str, torch.Tensor]] = deque(maxlen=max(cfg.swa_last_n, 1))
+_swa_snapshot_epochs: deque[int] = deque(maxlen=max(cfg.swa_last_n, 1))
+run.summary["swa/last_n"] = cfg.swa_last_n
+if cfg.swa_last_n > 0:
+    print(f"SWA enabled: keeping rolling window of last {cfg.swa_last_n} "
+          f"slow_weights snapshots (uniform mean used for final eval)")
+
+# SWA variants — each entry is (name, weight_tail). The weight_tail is right-
+# aligned: weight_tail[-1] applies to the latest snapshot, weight_tail[-2] to
+# the one before, and so on. Weights must sum to 1. Variants whose tail is
+# longer than the available snapshot count are skipped at eval time.
+# - last4_uniform: PR #4546 baseline (uniform mean over ep 14-17).
+# - last2_uniform: PR #4546 follow-up Variant A (only ep 16-17, fully converged).
+# - weighted:      PR #4546 follow-up Variant B (ep-17-heavy, downweights still-
+#                  LR-having ep 14 to 10%).
+SWA_VARIANTS: list[tuple[str, list[float]]] = [
+    ("last4_uniform", [0.25, 0.25, 0.25, 0.25]),
+    ("last2_uniform", [0.5, 0.5]),
+    ("weighted",      [0.10, 0.15, 0.25, 0.50]),
+]
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -767,6 +819,20 @@ for epoch in range(MAX_EPOCHS):
     if device.type == "cuda":
         torch.cuda.synchronize()
     train_loop_dt = time.time() - train_loop_t0
+
+    # SWA snapshot: take the slow_weights at the end of this training pass,
+    # before validation. Bounded deque drops oldest snapshot beyond swa_last_n.
+    # Use slow_state when Lookahead is on; fall back to model.state_dict()
+    # (fast weights) when Lookahead is off so the flag remains meaningful for
+    # non-Lookahead optimizers.
+    if cfg.swa_last_n > 0:
+        if _lookahead_on:
+            _swa_snapshots.append(optimizer.slow_weights_state_dict(model))
+        else:
+            _swa_snapshots.append(
+                {k: v.detach().clone() for k, v in model.state_dict().items()}
+            )
+        _swa_snapshot_epochs.append(epoch + 1)
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
@@ -864,6 +930,138 @@ if best_metrics:
             test_log[f"test_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
+
+    # --- SWA: averaged-snapshot evaluation (separate from the best-checkpoint eval above) ---
+    # Loop over SWA_VARIANTS; each variant gets its own (val + test) eval pass.
+    # Backward-compat keys (no variant suffix) mirror the last4_uniform variant
+    # so existing dashboards keep working.
+    swa_variant_results: dict[str, dict[str, float | dict]] = {}
+    if _swa_snapshots:
+        snap_list = list(_swa_snapshots)
+        snap_epochs = list(_swa_snapshot_epochs)
+        n_snap = len(snap_list)
+        ref_state = model.state_dict()
+        print(f"\nSWA: collected {n_snap} slow_weights snapshots from end of epochs {snap_epochs}")
+        run.summary["swa/snapshot_epochs"] = snap_epochs
+        run.summary["swa/n_snapshots"] = n_snap
+
+        # Persist snapshots to disk so future post-hoc variants don't need a
+        # re-train. Files: model_dir/swa_snapshot_epoch_<N>.pt
+        for snap, snap_ep in zip(snap_list, snap_epochs):
+            torch.save(snap, model_dir / f"swa_snapshot_epoch_{snap_ep}.pt")
+        print(f"  saved {n_snap} per-epoch snapshots to {model_dir}/swa_snapshot_epoch_*.pt")
+
+        for variant_name, weight_tail in SWA_VARIANTS:
+            tail_len = len(weight_tail)
+            if tail_len > n_snap:
+                print(f"  SKIP variant '{variant_name}' (needs {tail_len} snapshots, have {n_snap})")
+                continue
+            # Right-align: take the last tail_len snapshots; weight_tail[i] applies
+            # to snap_list[n_snap - tail_len + i].
+            used_snaps = snap_list[n_snap - tail_len:]
+            used_epochs = snap_epochs[n_snap - tail_len:]
+            w_sum = float(sum(weight_tail))
+            weights = [w / w_sum for w in weight_tail]  # normalise to sum=1 just in case
+
+            swa_state: dict[str, torch.Tensor] = {}
+            for k in used_snaps[0].keys():
+                acc = used_snaps[0][k].float() * weights[0]
+                for snap, w in zip(used_snaps[1:], weights[1:]):
+                    acc = acc + snap[k].float() * w
+                if k in ref_state:
+                    acc = acc.to(ref_state[k].dtype)
+                swa_state[k] = acc
+
+            model.load_state_dict(swa_state)
+            model.eval()
+
+            swa_val_split_metrics = {
+                name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+                for name, loader in val_loaders.items()
+            }
+            swa_val_avg_dict = aggregate_splits(swa_val_split_metrics)
+            print(f"\n  SWA[{variant_name}]  epochs={used_epochs}  weights={[round(w,3) for w in weights]}")
+            print(f"    SWA VAL  avg_surf_p={swa_val_avg_dict['avg/mae_surf_p']:.4f}")
+            for name in VAL_SPLIT_NAMES:
+                print_split_metrics(f"swa_{variant_name}_{name}", swa_val_split_metrics[name])
+
+            swa_test_split_metrics = None
+            swa_test_avg_dict = None
+            if not cfg.skip_test and 'test_loaders' in dir():
+                swa_test_split_metrics = {
+                    name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+                    for name, loader in test_loaders.items()
+                }
+                swa_test_avg_dict = aggregate_splits(swa_test_split_metrics)
+                print(f"    SWA TEST avg_surf_p={swa_test_avg_dict['avg/mae_surf_p']:.4f}")
+                for name in TEST_SPLIT_NAMES:
+                    print_split_metrics(f"swa_{variant_name}_{name}", swa_test_split_metrics[name])
+
+            swa_log: dict[str, float | str | int] = {}
+            for split_name, m in swa_val_split_metrics.items():
+                for k, v in m.items():
+                    swa_log[f"swa_{variant_name}_{split_name}/{k}"] = v
+            for k, v in swa_val_avg_dict.items():
+                swa_log[f"swa_{variant_name}_val_{k}"] = v
+            if swa_test_split_metrics is not None:
+                for split_name, m in swa_test_split_metrics.items():
+                    for k, v in m.items():
+                        swa_log[f"swa_{variant_name}_test/{split_name}/{k}"] = v
+                for k, v in swa_test_avg_dict.items():
+                    swa_log[f"swa_{variant_name}_test_{k}"] = v
+            swa_log[f"swa_{variant_name}/n_snapshots"] = tail_len
+            swa_log[f"swa_{variant_name}/epochs_str"] = ",".join(map(str, used_epochs))
+
+            wandb.log(swa_log)
+            wandb.summary.update(swa_log)
+            run.summary[f"swa_{variant_name}/snapshot_epochs"] = used_epochs
+            run.summary[f"swa_{variant_name}/weights"] = weights
+
+            swa_variant_results[variant_name] = {
+                "val_avg": dict(swa_val_avg_dict),
+                "test_avg": dict(swa_test_avg_dict) if swa_test_avg_dict is not None else None,
+                "val_splits": {k: dict(v) for k, v in swa_val_split_metrics.items()},
+                "test_splits": {k: dict(v) for k, v in (swa_test_split_metrics or {}).items()},
+                "epochs": used_epochs,
+                "weights": weights,
+            }
+
+            # Quick A/B delta summary for the PR comment.
+            d_val = swa_val_avg_dict["avg/mae_surf_p"] - best_avg_surf_p
+            print(f"    Δ val vs best ckpt: {d_val:+.4f}")
+            if swa_test_avg_dict is not None and test_avg is not None:
+                d_test = swa_test_avg_dict["avg/mae_surf_p"] - test_avg["avg/mae_surf_p"]
+                print(f"    Δ test vs best ckpt: {d_test:+.4f}")
+
+        # Back-compat aliases: mirror last4_uniform metrics to the old swa_* keys
+        # so dashboards built against PR #4546 results keep working.
+        if "last4_uniform" in swa_variant_results:
+            r = swa_variant_results["last4_uniform"]
+            compat_log: dict[str, float] = {}
+            for k, v in r["val_avg"].items():
+                compat_log[f"swa_val_{k}"] = v
+            for split_name, m in r["val_splits"].items():
+                for k, v in m.items():
+                    compat_log[f"swa_{split_name}/{k}"] = v
+            if r["test_avg"] is not None:
+                for k, v in r["test_avg"].items():
+                    compat_log[f"swa_test_{k}"] = v
+                for split_name, m in r["test_splits"].items():
+                    for k, v in m.items():
+                        compat_log[f"swa_test/{split_name}/{k}"] = v
+            compat_log["swa/n_snapshots"] = len(r["epochs"])
+            wandb.log(compat_log)
+            wandb.summary.update(compat_log)
+
+        # Concise A/B summary across all variants for log inspection.
+        print("\n  SWA variant summary (Δ vs baseline best-ckpt):")
+        print(f"    {'variant':<16s}  {'val_avg':>10s}  {'test_avg':>10s}  {'Δval':>7s}  {'Δtest':>7s}")
+        for variant_name, r in swa_variant_results.items():
+            v = r["val_avg"]["avg/mae_surf_p"]
+            t = r["test_avg"]["avg/mae_surf_p"] if r["test_avg"] is not None else float("nan")
+            dv = v - best_avg_surf_p
+            dt = (t - test_avg["avg/mae_surf_p"]) if (test_avg is not None and r["test_avg"] is not None) else float("nan")
+            print(f"    {variant_name:<16s}  {v:10.4f}  {t:10.4f}  {dv:+7.4f}  {dt:+7.4f}")
 
     save_model_artifact(
         run=run,
