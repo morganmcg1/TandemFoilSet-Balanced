@@ -1,5 +1,69 @@
 # SENPAI Research Results
 
+## 2026-05-17 11:00 — #4326 #4329 #4346 CLOSED (Findings #43-45); alphonse→#4434 (R13 H85 Huber β@T_max=22), edward→#4436 (R13 H86 wd@T_max=22), fern→#4437 (R13 H87 σ-calib@T_max=22)
+
+### #4326 alphonse — R12 H75: Huber β sweep at new BL substrate (CLOSED — Finding #43)
+
+| Arm | β | run | val_avg | test_avg | Δ val vs old BL (53.08) | Δ val vs NEW BL (49.75) |
+|-----|---|-----|---------|----------|---|---|
+| BL | 0.05 | d3qlknrv | 53.08 | 44.89 | — | +3.33 |
+| A | 0.03 | wuc7qy10 | 55.39 | 47.06 | +2.31 | +5.64 |
+| **B** | **0.10** | **phelxelv** | **51.93** | **44.44** | **−1.15** | **+2.18** |
+
+Per-split Arm B (β=0.10) vs BL:
+- in_dist: val **−1.42** ✓, test +0.35
+- camber_rc: val +0.32, test +1.40 ✗ (only weakness)
+- **camber_cruise: val −2.96 / test −2.29** ✓✓ (LARGEST cruise win across all R12 T_max=20 sweeps)
+- re_rand: val −0.52 / test −1.25 ✓
+
+**Finding #43**: β=0.10 is the directional winner at T_max=20 substrate. Wider Huber smooth region helps low-magnitude pressure gradients in the cruise domain. Does NOT beat new BL (+2.18 val) as experiment was at T_max=20. Strong R13 candidate: β=0.10 at T_max=22.
+
+New assignment: #4434 alphonse — R13 H85: Huber β∈{0.10, 0.15} at T_max=22.
+
+---
+
+### #4329 edward — R12 H77: Lion β1 sweep at new BL substrate (CLOSED — Finding #44)
+
+| Arm | β1 | best run | val_avg | test_avg | Δ val vs NEW BL |
+|-----|-----|---------|---------|----------|---|
+| BL | 0.9 | d3qlknrv | 53.08 | 44.89 | +3.33 |
+| A (best) | 0.85 | qqiue12e | 54.17 | 47.68 | **+4.42** |
+| A (other) | 0.85 | z5ae1b0p | 56.05 | 48.25 | +6.30 |
+| A crashes | 0.85 | qj85mcsc, 3126iw7f | diverged | — | — |
+| B | 0.95 | 6eb9ji08 | 53.58 | 45.64 | **+3.83** |
+
+**Finding #44**: Lion β1 axis **doubly closed** at T_max=20 substrate. β1=0.85 is **unstable** (2 of 4 launches diverged — clip=1.0 + ls + lr=2e-4 amplifies the instability from too-fast momentum warmup). β1=0.95 marginally ties old BL (+0.50 val) but does not reach new BL (+3.83). β1=0.9 is robustly optimal. Lion β1 axis closed across all tested substrates (old: Finding #30, new T_max=20: Finding #44).
+
+New assignment: #4436 edward — R13 H86: wd∈{2e-3, 3e-3} at T_max=22 (transfer Finding #42 per-split signal).
+
+---
+
+### #4346 fern — R12 H78: Multi-seed BL replication at T_max=20 (CLOSED — Finding #45)
+
+5-seed BL σ at T_max=20 substrate:
+
+| Seed | run | val_avg | test_avg |
+|------|-----|---------|----------|
+| BL_a | 0zrrntw3 | 55.87 | 47.55 |
+| BL_b | jqmn2nw7 | 53.27 | 45.35 |
+| BL_c | d3qlknrv | 53.08 | 44.89 |
+| 42 | 6mdrdrwx | 52.61 | 45.75 |
+| 2026 | e2ex4rdt | 51.18 | 43.70 |
+| **Mean ± σ** | | **53.20 ± 1.70** | **45.45 ± 1.40** |
+
+Per-split σ (val): in_dist 2.27, camber_rc 3.43 (HIGHEST), camber_cruise 1.39, re_rand 1.18.
+
+**Finding #45**: σ_val ≈ 1.7, σ_test ≈ 1.4 at T_max=20 substrate. camber_rc has 2× higher σ than other splits — improvements on rc need higher threshold. **Implications for merge decisions**:
+- Improvements <1 val: likely seed noise
+- Improvements 1-2 val: weak signal, ideally confirm with 2nd seed
+- Improvements ≥2 val: statistically robust (>1σ)
+
+The merged BL `1neonugr` (T_max=22, val 49.75) is **~2.0 val below the T_max=20 5-seed mean** — consistent with T_max=22 being a real improvement. But T_max=22 σ is unknown. Assigned fern to characterize T_max=22 σ (#4437).
+
+New assignment: #4437 fern — R13 H87: multi-seed BL replication at T_max=22 (3-seed σ calibration).
+
+---
+
 ## 2026-05-17 10:30 — #4318 #4319 CLOSED (Findings #41-42); askeladd→#4419 (R13 H83 ls@T_max=22), nezuko→#4420 (R13 H84 surf_weight@T_max=22); #4326 #4329 #4346 pinged
 
 ### #4318 askeladd — R12 H72: layer_scale magnitude at new BL substrate (CLOSED — Finding #41)
