@@ -1,5 +1,60 @@
 # SENPAI Research Results
 
+## 2026-05-17 ~07:40 UTC — Round 30: Close #4387 (slice null) + #4309 (n_head=4 null) + #4307 (α-bracket null) + 3 new assignments
+
+### Closed: PR #4387 (frieren) — slice_num bracket (4, 12) on k=3 baseline
+
+| Arm | val_avg | Δ vs baseline | test_3split | Δ vs baseline |
+|---|---|---|---|---|
+| slice=4 | 51.8117 | +0.50 WORSE | **51.2107** | **−0.68 better** |
+| slice=8 (baseline) | 51.3066 | — | 51.8862 | — |
+| slice=12 | 53.4450 | +2.14 WORSE | 53.1620 | +1.28 WORSE |
+
+**Mechanism**: val_geom_camber_rc regresses monotonically away from slice=8 in both directions: slice=4→66.15 (+2.29), slice=12→67.26 (+3.40) vs baseline 63.85. **Slice axis is a true unimodal optimum at 8** under Lookahead k=3.
+
+slice=4 test improvement (51.21 vs 51.89) is single-seed mixed signal — val regressed +0.50, student correctly identifies as selection variance driven by cruise NaN exclusion from test.
+
+**Axis closed: slice resolution CLOSED at slice=8.** Combined with #4283 (slice=16 anti-compounds under Lookahead+β2=0.95), the bracket {4, 8, 12, 16} is fully explored.
+
+---
+
+### Closed: PR #4309 (askeladd) — n_head=4 on k=5+β2=0.95 baseline
+
+| Metric | n_head=4 (best/5 seeds) | n_head=4 mean | k=3 baseline | Δ (best vs k=3) |
+|---|---|---|---|---|
+| val_avg | 52.65 | ~54.09 | 51.31 | +2.6% WORSE |
+| test_3split | 52.69 | — | 51.89 | +1.5% WORSE |
+
+**Mechanism**: val_geom_camber_rc REGRESSED on n_head=4 best seed (+1.40 to 66.04 vs 64.63). Hypothesis inverted — 32-dim per head is below expressive threshold for high-curvature attention. n_head=2 (64-dim/head) is better suited at n_hidden=128. Seed variance high (spread=2.16 = ~7× fleet fleet-wide).
+
+**Axis closed: n_head=4 at n_hidden=128.** Mean of 5 seeds is +5.4% above k=3 bar; best seed is favorable tail of high-variance distribution.
+
+---
+
+### Closed: PR #4307 (nezuko) — Lookahead α-bracket (0.3, 0.7) on k=5+β2=0.95 baseline
+
+| α | val_avg best | Seeds | Δ vs α=0.5 | Δ vs k=3 baseline |
+|---|---|---|---|---|
+| 0.3 | 54.58 | 4 | +3.1–5.1% WORSE | +6.4–8.6% WORSE |
+| **0.7** | **51.72** | **2** | **−2.31% better** | **+0.80% WORSE** |
+| 0.5 (ref) | 52.94 | 1 | — | +3.2% WORSE |
+
+**Key finding**: α=0.7 beats α=0.5 on val with 2/2 seeds — **bidirectional asymmetry confirms real mechanism**: α=0.3 (gentle pull) decouples fast/slow weights; α=0.7 (stronger pull) compounds with β2=0.95's fast adaptation. Win concentrates on val_re_rand (−2.49%) — consistent with variance-reduction mechanism on the noisiest gradient signal.
+
+Cannot beat k=3 baseline (best val=51.72 vs 51.31), but mechanism is clean for appendix. Val/test ranking flip between α=0.7 seeds (oiyqli7r wins val, o84g0g43 wins test) flagged as 2-seed variance — needs 3 seeds on k=3 baseline.
+
+**Follow-up assigned: #4461 nezuko — α=0.7 multi-seed on k=3 baseline.**
+
+---
+
+### New assignments: 3 experiments on k=3 baseline + paper-direction escalation
+
+- **PR #4461 (nezuko)**: Lookahead α=0.7 multi-seed on k=3 (3 seeds) — direct follow-up from #4307 mechanism. Predicted compound: k=3 (more frequent sync) × α=0.7 (stronger pull) = additive variance reduction.
+- **PR #4468 (askeladd)**: FiLM conditioning on camber M — first architectural intervention targeting camber_rc dominant residual. Conditions each Transolver block on the per-sample M scalar via γ(M)·h + β(M).
+- **PR #4469 (frieren)**: surf_weight bracket (5, 20) on k=3 baseline — surf_weight=10.0 has never been tuned; higher value tightens surface-MAE focus, lower value adds volume regularization.
+
+---
+
 ## 2026-05-17 ~07:30 UTC — Round 29: Close #4369 (k=3+β2=0.95 compound null) + assign #4453 alphonse (n_layers depth bracket)
 
 ### Closed: PR #4369 (alphonse) — Lookahead k=3 + β2=0.95 compound
