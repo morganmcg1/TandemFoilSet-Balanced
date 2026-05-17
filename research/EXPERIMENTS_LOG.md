@@ -1611,3 +1611,59 @@ Per-split test (arm2, lr=3e-3): test_single_in_dist=38.2106, test_geom_camber_rc
 - Hypothesis: best_epoch=17 has been invariant across all canonical runs (30-min wall-clock cap binds there). T_max=25 leaves 30% of cosine cooldown unrealized at best_epoch (LR still at 23% of peak). Smaller T_max should yield more aggressive cooldown at the model's natural stopping point.
 - 2 arms: cosine_t_max ∈ {17, 20} at canonical lr=2e-3, all else unchanged.
 - Decision rule: if either beats baseline val=35.5322, merge as 16th winner; expect downstream re-tune of LR after T_max settles.
+
+## 2026-05-17 08:45 — PR #4447 (tanjiro): Cosine T_max finer sweep {17, 20} at canonical lr=2e-3 — **MERGED (16th winner)**
+
+- Branch: `willowpai2i48h3-tanjiro/cosine-tmax-finer`
+- W&B runs: `a5vd7t9y` (arm1 T_max=17), `r1trjd2d` (arm2 T_max=20) — **WINNER**
+- Hypothesis: best_epoch=17 invariant → T_max=25 leaves LR at 29% of peak at best_epoch; smaller T_max should yield more aggressive variance reduction.
+
+**Result (vs canonical val=35.5322, test=37.1052):**
+
+| Arm | T_max | val_avg/mae_surf_p | Δ val | test_excl_cruise | Δ test | best_epoch |
+|---|---|---|---|---|---|---|
+| canonical | 25 | 35.5322 | — | 37.1052 | — | 17 |
+| 1 | **17** | 35.2454 | **−0.81%** | **35.2148** | **−5.10%** | 17 |
+| 2 (W) | **20** | **34.5662** | **−2.72%** | 35.5786 | **−4.11%** | 17 |
+
+Per-split test (arm2, T_max=20): test_single_in_dist=36.2261, test_geom_camber_rc=42.5063, test_re_rand=28.0034
+
+**Analysis:** Both arms beat canonical — T_max axis confirmed again. T_max=20 wins on val (primary metric, −2.72%); T_max=17 wins on test (−5.10%) via near-zero LR EMA polishing effect. Both stacks valid; primary-metric winner (T_max=20) set as new canonical. LR at best_epoch=17: T_max=20 → 1.5e-4 (7.5% of peak); T_max=17 → 0 (fully cooled). The "EMA polishing" regime (epochs 17-20 at ~0 LR) seems to help test generalization but not val. New canonical T_max=20, LR ceiling re-test in flight (#4502).
+
+**New canonical:** val=34.5662, test=35.5786. **MERGED.**
+
+## 2026-05-17 08:45 — PR #4423 (nezuko): Dropout sweep {0.05, 0.1} on 15-winner canonical — **CLOSED**
+
+- Branch: `willowpai2i48h3-nezuko/dropout-sweep`
+- W&B runs: `gs81atqo` (dropout=0.05), `x5eac62w` (dropout=0.10)
+- Hypothesis: Dropout avoids val/test divergence from wd by forcing feature redundancy vs. weight magnitude penalty.
+
+**Result (vs canonical 35.5322):**
+
+| Arm | dropout | val_avg/mae_surf_p | Δ val | test_excl_cruise | Δ test |
+|---|---|---|---|---|---|
+| canonical | 0.0 | 35.5322 | — | 37.1052 | — |
+| 1 | 0.05 | 35.9211 | +1.09% | 37.5030 | +1.07% |
+| 2 | 0.10 | 36.2042 | +1.89% | 37.4466 | +1.46% |
+
+**Analysis:** Both arms regress consistently on val AND test. Unlike wd (which showed val/test divergence), dropout hurts both metrics equally — no divergence, just noise. Mechanism: 17-epoch budget is insufficient for dropout-forced reconstruction to mature. Strong regularization in the short-budget regime consistently underperforms. **Closes the dropout axis** for light (0.05-0.1) Transformer dropout. Heavier regularization (stochastic depth) might differ but is a separate hypothesis.
+
+**Decision: CLOSED.**
+
+## 2026-05-17 08:45 — PR #4234 (askeladd): Batch size sweep {4, 6, 8} — **SENT BACK (wrong stack)**
+
+- Branch: `willowpai2i48h3-askeladd/batch-size-sweep`
+- W&B runs: `3wpha0i5` (bs=4), `gzl7cztp` (bs=6), `wz4y3wdy` (bs=8) — all on **lr=0.001** (old stack)
+- Result: bs=4 val=37.94 (+6.76%), bs=6 val=41.39 (+16.48%), bs=8 val=49.72 (+39.94%) vs NEW canonical
+
+All 3 arms ran on lr=1e-3 (14th-winner canonical). The current canonical is lr=2e-3, T_max=20. Results are not comparable and inflated by the LR mismatch (larger batch typically needs proportionally higher LR; at fixed lr=1e-3 the effective learning rate per sample becomes too small). Sent back with instructions to re-run bs ∈ {4, 6, 8} on the 16-winner canonical (lr=2e-3, T_max=20).
+
+## 2026-05-17 08:45 — Assignment: #4502 tanjiro lr-retune-tmax20
+
+- Hypothesis: T_max=20's more aggressive cooldown may re-lift the LR ceiling above 2e-3.
+- 2 arms: lr ∈ {2.5e-3, 3e-3} at canonical T_max=20.
+
+## 2026-05-17 08:45 — Assignment: #4504 nezuko ema-decay-sweep-tmax20
+
+- Hypothesis: EMA decay=0.99 optimized on old canonical; T_max=20's aggressive cooldown changes the EMA polishing dynamics.
+- 2 arms: ema_decay ∈ {0.995, 0.999} at T_max=20 canonical.
