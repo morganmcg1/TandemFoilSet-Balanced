@@ -580,6 +580,7 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
     use_bf16: bool = False   # Enable bf16 mixed-precision via torch.autocast (H95)
+    input_jitter_std: float = 0.0  # σ for Gaussian noise on continuous cond dims during training (0 disables) (H112)
 
 
 cfg = sp.parse(Config)
@@ -687,6 +688,24 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        if cfg.input_jitter_std > 0 and model.training:
+            # Last 11 dims are global conditioning: 0=log(Re), 1=AoA1, 2:5=NACA1,
+            # 5=AoA2, 6:9=NACA2, 9=gap, 10=stagger. Categorical NACA digit dims
+            # are kept clean; only continuous dims get Gaussian jitter. The same
+            # per-sample noise is broadcast across all N nodes since cond is
+            # global (model reads x[:, 0, 13:] for FiLM).
+            std_per_dim = torch.full(
+                (11,), cfg.input_jitter_std,
+                device=x_norm.device, dtype=x_norm.dtype,
+            )
+            std_per_dim[2:5] = 0.0
+            std_per_dim[6:9] = 0.0
+            noise = torch.randn(
+                x_norm.shape[0], 1, 11,
+                device=x_norm.device, dtype=x_norm.dtype,
+            ) * std_per_dim
+            x_norm = x_norm.clone()
+            x_norm[:, :, -11:] = x_norm[:, :, -11:] + noise
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=cfg.use_bf16):
             pred = model({"x": x_norm})["preds"]
         # Loss computation in fp32: reductions on tiny Huber thresholds (0.25, 0.5)
@@ -766,6 +785,7 @@ for epoch in range(MAX_EPOCHS):
         "norm_type": cfg.norm_type,
         "ffn_act": cfg.ffn_act,
         "use_bf16": cfg.use_bf16,
+        "input_jitter_std": cfg.input_jitter_std,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "gate_stats": gate_stats,
