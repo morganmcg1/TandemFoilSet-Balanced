@@ -82,7 +82,7 @@ python train.py \
 
 **val_avg/mae_surf_p: 52.258** | test 3-split: 51.206
 
-## In-Flight Experiments (~04:10 UTC)
+## In-Flight Experiments (~06:55 UTC)
 
 | Student | PR | Hypothesis | Stack | Priority |
 |---------|----|----|----|----|
@@ -91,7 +91,7 @@ python train.py \
 | ⭐ **thorfinn** | **#4303** | **slice_num sweep: {32, 64, 96, 128}** | SF-AdamW lr=3e-3 + --seed 1 (requires Config edit) | **HIGH — third primary Transolver architecture axis** |
 | ⭐ **alphonse** | **#4317** | **SF-AdamW betas 2×2: (beta1, beta2) ∈ {0.9, 0.95}×{0.99, 0.999}** | SF-AdamW lr=3e-3 + --seed 1 | **MED-HIGH — optimizer-internal axis never swept** |
 | ⭐ **askeladd** | **#4351** | **n_head sweep: {2, 4, 8} at lr=3e-3** | SF-AdamW lr=3e-3 + --seed 1 (requires Config edit) | **HIGH — final primary architecture axis; completes {n_hidden, n_layers, slice_num, mlp_ratio, n_head} family** |
-| ⭐ **tanjiro** | **#4207** | **surf_weight R2: {5, 8, 10, 15}** | SF-AdamW lr=3e-3 + --seed 1 | **HIGH — R1 paired Δ ≥1.86%; R2 at canonical resolves direction** |
+| ⭐ **tanjiro** | **#4438** | **Huber β sweep: {0.25, 0.5, 1.0 control, 2.0}** | SF-AdamW lr=3e-3 + --seed 1 | **HIGH — surf_weight R2 showed surface loss saturated; β controls L2↔L1 transition form** |
 | ⭐ **fern** | **#4339** | **mlp_ratio sweep: {1, 2, 4, 6}** | SF-AdamW lr=3e-3 + --seed 1 (requires Config edit) | **HIGH — 4th primary architecture axis; under-fit regime confirmed by #4208** |
 | ⭐ **nezuko** | **#4353** | **Fourier feature coordinate encoding: {raw, 16f-σ1, 32f-σ10, 64f-σ10}** | SF-AdamW lr=3e-3 + --seed 1 | **HIGH — preprocessing axis untouched; Tancik et al. 2020 strong prior on coord-regression tasks; orthogonal to all architecture sweeps** |
 
@@ -134,6 +134,15 @@ If n_layers=3 confirms at the canonical val/test, the follow-up surface to map n
 5. **n_layers=3 × longer schedule.** If shallow models converge faster per epoch, push to 60 or 75 epochs at the same wall-clock by reducing eval frequency.
 6. **n_layers=3 × clip-relax.** Pair with edward's clip sweep winner if it lands.
 
+## Key Cross-Cutting Finding (06:50 UTC)
+
+**Seed-variance at lr=3e-3 is ~2.47%** (from tanjiro #4207 R2: seed=1 canonical = 53.549 vs seed=0 = 52.258). At lr=2e-3 the same gap was ~0.34%. This means:
+
+- Any paired win < ~2.5% is within seed noise — cannot guarantee absolute improvement over canonical
+- The strict merge gate (beat 52.258 absolute) requires multi-seed confirmation for close wins
+- Frieren's #4248 provisional paired Δ (~14.7%) is **safely above** the seed-noise floor — no multi-seed needed
+- Other in-flight sweeps: only wins > ~2.5% paired will be clean merge candidates
+
 ## Falsified / Closed Hypotheses
 
 | PR | Hypothesis | Result | Lesson |
@@ -151,3 +160,4 @@ If n_layers=3 confirms at the canonical val/test, the follow-up surface to map n
 | **#4225** | **n_hidden sweep {96, 128, 160, 192} at lr=2e-3** | **val/test invert; step-count loss dominates capacity gain** | **Width saturated at 30-min budget; sec/epoch ∝ n_hidden; n_head is next axis** |
 | **#4246** | **SF-AdamW LR extension {3e-3, 4e-3, 5e-3, 7e-3}** | **All regress: +5.3% at 4e-3, +16% at 7e-3** | **LR axis definitively closed; peak is 3e-3; 98% clip-rate motivates clip loosening** |
 | **#4081** | **FiLM head width (stale WIP, no commits 9.5h)** | **Zero progress; stale lr=5e-4** | **Closed for non-delivery; FiLM-head-width on backlog after primary capacity axes** |
+| **#4207** | **surf_weight R2 {5, 8, 10, 15} at lr=3e-3** | **A (w=5) wins paired −1.66%; fails absolute gate (+0.77% above 52.258)** | **Close per second rule (wins paired but regresses absolute); seed-noise floor at lr=3e-3 is ~2.47% — critical for all in-flight paired sweeps** |

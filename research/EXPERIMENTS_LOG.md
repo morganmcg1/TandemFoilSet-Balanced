@@ -2910,3 +2910,47 @@ LR extension null. No merge. Assigning edward to clip threshold re-test at canon
 - Arms: {off (control), 16-freq σ=1, 32-freq σ=10 (primary), 64-freq σ=10}
 - Requires ~20-line infra change: FourierFeatures module + config flags + space_dim update.
 
+
+---
+
+## 2026-05-17 06:50 — PR #4207 [CLOSED/NULL]: tanjiro surf_weight R2 at canonical lr=3e-3
+
+- **Student branch:** `charliepai2i48h4-tanjiro/surf-weight-r1`
+- **Hypothesis R2:** Best R1 arms (w=5, w=15) at canonical lr=3e-3, with w=8 added to probe the [5, 10] gap. Arms: {5 (A), 10 control (B), 8 (C), 15 (D)}.
+
+### Results
+
+| Arm | surf_weight | val_avg | Δ vs B (paired) | Δ vs canonical 52.258 |
+|---|---:|---:|---:|---:|
+| A | 5 | 52.659 | **−1.66%** | +0.77% |
+| B (control) | 10 | 53.549 | — | +2.47% |
+| C | 8 | 53.089 | −0.86% | +1.59% |
+| D | 15 | 53.834 | +0.53% (regression) | +3.02% |
+
+Test 3-split (seed=1):
+
+| Arm | test_3split | Δ vs B | Δ vs canonical 51.206 |
+|---|---:|---:|---:|
+| A | 51.559 | −1.96% | +0.69% |
+| C | 51.313 | **−2.43%** | +0.21% |
+| B | 52.590 | — | +2.70% |
+| D | 53.202 | +1.16% | +3.90% |
+
+- **Decision:** CLOSE per second decision rule (wins paired but fails absolute gate).
+- **Critical new finding: seed-variance at lr=3e-3.** Arm B (canonical config + seed=1) = 53.549 vs canonical seed=0 = 52.258 → **+2.47% gap from seed alone**. At lr=2e-3, the same gap was only ~0.34%. At lr=3e-3 the optimizer is near the stability boundary; seed-induced trajectory differences amplify at the budget-truncated edge. **This affects all paired sweeps at canonical: any paired win < ~2.5% cannot be confirmed as an absolute improvement over canonical without multi-seed verification.**
+- Artifacts: `models/model-charliepai2i48h4-tanjiro-surf-weight-r2-arm{A,B,C,D}-*/metrics.jsonl`
+
+### Lessons
+
+1. Lower surf_weight (w=5) Pareto-dominates val splits at lr=3e-3; R1's per-split disagreement collapsed at canonical LR.
+2. The surf/vol contribution ratio (2.54 at w=5 vs 6.21 at w=15) spans 2.5×, yet val_surf barely moves — surface objective is saturated.
+3. Seed-noise floor at lr=3e-3 is ~2.5%, well above the 0.5% paired merge gate. Multi-seed confirmation needed for close winners. Frieren's #4248 paired Δ ~14.7% is safely above this floor.
+
+---
+
+## 2026-05-17 06:52 — PR #4438 [ASSIGNED]: tanjiro Huber loss β sweep {0.25, 0.5, 1.0, 2.0} at lr=3e-3
+
+- **Student branch:** `charliepai2i48h4-tanjiro/huber-beta-r1`
+- **Hypothesis:** The Huber β parameter (hardcoded 1.0) controls L2↔L1 transition. Given surf_weight R2's finding that surface loss is saturated across weights, the loss *form* is the next axis. β controls robustness to large-residual outliers (stagnation, separation). Arms: {0.25, 0.5, 1.0 control, 2.0}.
+- Requires infra: expose `--huber_beta` in Config + plumb into both smooth_l1_loss calls.
+
