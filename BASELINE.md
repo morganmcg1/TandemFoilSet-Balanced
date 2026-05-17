@@ -903,3 +903,57 @@ python train.py \
 # NEXT: shallower probe {1,2,3}; longer-budget rerun at n_layers=3; re-test architecture axes at new canonical
 ```
 
+---
+
+## 2026-05-17 08:08 — PR #4317: SF-AdamW betas — beta1=0.95 beta2=0.99 (compound improvement)
+
+**Measured at prior n_layers=5 canonical: val_avg/mae_surf_p = 50.273** (Δ −3.80% vs prior 52.258; Δ **−6.12% paired** vs Arm A control)
+**Test 3-split mean = 48.726** (Δ −4.84% vs prior canonical test 51.206; Δ **−7.35% paired**)
+
+**Note:** This PR was measured against the prior n_layers=5 canonical. The new n_layers=3 canonical (from PR #4248) was merged moments earlier — so 50.273 is at the OLD depth. The paired Δ of −6.12% is an **optimizer-level effect** (SF-AdamW Polyak iterate quality) and is plausibly orthogonal to depth; folding it into the canonical via merge applies the compound-improvement principle. An empirical (n_layers=3 × sf_betas=(0.95, 0.99)) measurement is pending in follow-up experiments.
+
+### Headline 2×2 paired Δ table (val_avg/mae_surf_p)
+
+| Arm | β1 | β2 | val_avg | Δ vs A paired |
+|---|---:|---:|---:|---:|
+| A (control) | 0.9 | 0.999 | 53.549 | — |
+| B | 0.9 | 0.99 | 52.443 | −2.07% |
+| C | 0.95 | 0.999 | 51.810 | −3.25% |
+| **D (winner)** | **0.95** | **0.99** | **50.273** | **−6.12%** |
+
+Main effects: β1↑ (0.9→0.95) = −1.95, β2↓ (0.999→0.99) = −1.32, β1×β2 interaction = −0.43 (mild synergy). Both axes pull same direction, combine ~additively.
+
+### Mechanism (negative result on candidate hypothesis)
+
+Hypothesis tested: β1↑ might reduce gradient-clip rate. **Disconfirmed.** Clip rate stays at 0.95–0.98 for every arm throughout training; β1 affects it by < 0.01. The β1↑ win must operate via Polyak iterate quality (the SF-AdamW averaging mechanism), NOT gradient-norm smoothing.
+
+### Reproduce
+
+```bash
+cd target/
+python train.py \
+  --amp_dtype bf16 \
+  --use_ema --ema_decay 0.999 \
+  --film_cond --two_shot_film \
+  --grad_clip_norm 1.0 \
+  --use_schedule_free --lr 3e-3 \
+  --n_layers 3 \
+  --sf_beta1 0.95 --sf_beta2 0.99
+```
+
+### Current best config (carry forward to all new experiments)
+
+```python
+# Loss: Huber (smooth_l1_loss, beta=1.0)
+# AMP: --amp_dtype bf16
+# Scheduler: NONE (--use_schedule_free replaces cosine)
+# EMA: --use_ema --ema_decay 0.999
+# FiLM: --film_cond --two_shot_film
+# Optimizer: SF-AdamW lr=3e-3, weight_decay=1e-4, warmup_steps=500
+# Optimizer betas: sf_beta1=0.95, sf_beta2=0.99 (NEW)
+# Gradient clip: --grad_clip_norm 1.0
+# Model: n_hidden=128, n_layers=3, n_head=4, slice_num=64, mlp_ratio=2
+# surf_weight=10
+# NEXT: empirical (n_layers=3 × sf_betas=(0.95, 0.99)) confirmation; SF-beta frontier extension
+```
+
