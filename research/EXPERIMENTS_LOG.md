@@ -1,5 +1,41 @@
 # SENPAI Research Results
 
+## 2026-05-17 09:30 — #4328 #4315 CLOSED (Findings #38-39); #4391 tanjiro, #4393 frieren assigned (R13: lr×T_max=22 composition, warmup)
+
+### #4328 frieren — R12 H76: EMA at new BL T_max=20 (CLOSED — informative null, Finding #38)
+
+| Arm | ema | run | val_avg | test_avg | Δ val vs old BL (53.08) |
+|-----|-----|-----|---------|----------|---|
+| BL | 0.997 | d3qlknrv | 53.08 | 44.89 | — |
+| A | 0.995 | dia8w7md | 54.56 | 46.17 | +1.48 |
+| B | 0.999 | qsisels8 | 59.53 | 50.88 | +6.46 |
+
+**Finding #38**: at the new BL substrate (T_max=20+ls+clip+lr=2e-4), ema=0.997 robustly optimal. ema=0.999 catastrophically bad (val +6.46 — worst on ALL 4 splits). The hypothesis that layer_scale unblocks longer EMA averaging is **rejected**. Mechanism (student's analysis): the binding constraint is the 13-epoch budget, not late-epoch noise. ema=0.999 is starvation-bottlenecked — its longer window is dominated by early-training weights at the cutoff. Bright spot: ema=0.995 nearly ties camber_cruise (−0.35 val) but loses everywhere else. EMA axis closed across all 3 substrates (Findings #28+#34+#38).
+
+New assignment: #4393 frieren — R13 H81 warmup_epochs at T_max=22.
+
+---
+
+### #4315 tanjiro — R12 H71: LR sweep at new BL T_max=20 (CLOSED — directional finding, Finding #39)
+
+| Arm | lr | run | val_avg | test_avg | Δ val vs old BL (53.08) | Δ val vs NEW BL (49.75) |
+|-----|-----|-----|---------|----------|---|---|
+| BL | 2.0e-4 | d3qlknrv | 53.08 | 44.89 | — | +3.33 |
+| A | 1.7e-4 | o9zdn7k2 | 54.19 | 46.03 | +1.11 | +4.44 |
+| **B** | **2.3e-4** | **ifhbhs2y** | **52.67** | **44.41** | **−0.41** | **+2.92** |
+
+Per-split Arm B (lr=2.3e-4) vs BL:
+- in_dist: val −0.70, test −0.45 ✓
+- camber_rc: val +1.83, test +1.95 ✗
+- **camber_cruise: val −2.45, test −2.11 ✓** (key split!)
+- re_rand: val −0.31, test −1.30 ✓
+
+**Finding #39**: lr=2.3e-4 is the directional LR winner at T_max=20+ls+clip substrate — below merge threshold (−0.41 vs new BL +2.92) but provides the clearest camber_cruise improvement (−2.45 val) alongside the T_max=22 finding (Finding #37). The mechanism matches Finding #37: higher clip-bounded steps at lr=2.3e-4 → similar endpoint noise reduction effect as lower T_max endpoint. Key lead for R13: **lr=2.3e-4 at T_max=22 may compose** — this is tanjiro's next assignment (#4391).
+
+New assignment: #4391 tanjiro — R13 H80 lr {2.3e-4, 2.5e-4} at T_max=22 substrate.
+
+---
+
 ## 2026-05-17 08:30 — #4320 thorfinn MERGED (NEW BEST val 49.75 / test 42.89); #4372 thorfinn assigned (R12 H79 T_max fine grid)
 
 ### #4320 thorfinn — R12 H74: T_max sweep at new BL (MERGED — Finding #37)
