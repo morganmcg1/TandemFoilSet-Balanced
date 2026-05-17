@@ -1,7 +1,7 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 17:00
-- **Launch:** willow-pai2i-48h-r1 (round 31 — Lookahead-Lion era; **⚠️ PLATEAU PROTOCOL ACTIVE**; **PROGRAMME ALL-TIME BEST val=45.7284 / test=44.5079 SEED=0** (PR #4402); **5-seed canonical val=46.83±0.41 SEM / test=45.49±0.40 SEM (PAPER-READY)**; **⚠️ MAJOR FINDING: Lion WD has been an fp32 NO-OP at wd ≤ 1e-4 for the ENTIRE programme** (tanjiro #4456 bit-identical proof); **18 closures since merge, ZERO improvements**; **3 active-WD probes + reverse α schedule + cosine warm restarts dispatched as bold swings**)
+- **Date:** 2026-05-17 18:00
+- **Launch:** willow-pai2i-48h-r1 (round 32 — Lookahead-Lion era; **⚠️ PLATEAU PROTOCOL ACTIVE**; **PROGRAMME ALL-TIME BEST val=45.7284 / test=44.5079 SEED=0** (PR #4402); **5-seed canonical val=46.83±0.41 SEM / test=45.49±0.40 SEM (PAPER-READY)**; **⚠️ MAJOR FINDING (round-31): Lion WD has been an fp32 NO-OP at wd ≤ 1e-4 for the ENTIRE programme** (tanjiro #4456 bit-identical proof); **22 closures since merge, ZERO improvements**; **α-axis FULLY RESOLVED (static optimum, both schedule directions falsified); LR-axis FULLY RESOLVED (5e-4 sharp floor); warm restarts BUDGET-INFEASIBLE**; **8 bold-swing experiments in flight: 3 active-WD probes + Lookahead outer momentum + focal-loss + Huber + SWA-last-4 + joint (k=7,β2=0.9957)**)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN)
 - **Latest direction from human team:** None (no open issues scoped to this launch)
@@ -162,20 +162,20 @@ Per tanjiro's #4456 finding, every Lion WD probe at wd ≤ 1e-4 in this programm
 
 If any of {1e-3, 3e-3, 1e-2} beats #4402, the entire programme has a new compound. If all regress, the smoothing compound genuinely doesn't want explicit WD — that itself is a paper-grade finding.
 
-## Active WIP experiments (round 31)
+## Active WIP experiments (round 32)
 
 | PR | Student | Hypothesis | Status | Priority |
 |----|---------|-----------|--------|----------|
-| #4525 | thorfinn | **Cosine warm restarts (2 cycles: T_max=8 + T_max=9)** — PLATEAU PROTOCOL bold swing | NEW (round 31) | **Bold mechanism swing** |
-| #4524 | nezuko | **Lookahead α REVERSE COSINE SCHEDULE 0.7 → 0.5** — symmetric mechanism check (alphonse #4496 forward FALSIFIED) | NEW (round 31) | Mechanism check |
-| #4523 | frieren | **--weight_decay 1e-2** — Lion ACTIVE WD probe HIGH | NEW (round 31) | **First proper WD-bowl mapping** |
-| #4521 | alphonse | **--weight_decay 3e-3** — Lion ACTIVE WD probe MID | NEW (round 31) | **First proper WD-bowl mapping** |
-| #4518 | tanjiro | **--weight_decay 1e-3** — Lion ACTIVE WD probe LOW (their own finding) | NEW (round 31) | **First proper WD-bowl mapping** |
+| #4547 | nezuko | **Huber loss δ=1.0** — loss-curvature reformulation (Lion m-buffer hard-example concentration) | NEW (round 32) | **Bold loss-mechanism swing** |
+| #4546 | thorfinn | **SWA uniform mean of slow_weights at ep {14,15,16,17}** — variance reduction in converged regime | NEW (round 32) | **Bold variance-reduction (distinct from fern #4500 EMA)** |
+| #4537 | fern | **Focal-loss per-node hardness weighting γ=1.0** on surface MAE | Running (round 31) | Bold loss reformulation |
+| #4536 | askeladd | **Lookahead OUTER momentum β_outer=0.5** on slow-step direction | Running (round 31) | Bold optimizer mechanism |
+| #4523 | frieren | **--weight_decay 1e-2** — Lion ACTIVE WD probe HIGH | Running (round 31) | First proper WD-bowl mapping |
+| #4521 | alphonse | **--weight_decay 3e-3** — Lion ACTIVE WD probe MID | Running (round 31) | First proper WD-bowl mapping |
+| #4518 | tanjiro | **--weight_decay 1e-3** — Lion ACTIVE WD probe LOW (their own finding) | Running (round 31) | First proper WD-bowl mapping |
 | #4506 | edward | (k=7, β2=0.9957, α=0.7) JOINT shift — k×(1−β2)≈0.03 invariant | Running (round 30) | Bold joint-shift mechanism |
-| #4500 | fern | EMA on Lookahead slow_weights (PLATEAU PROTOCOL bold) | status:review (round 29) | Bold variance-reduction |
-| #4497 | askeladd | cfg.lr=6e-4 + k=6 + β2=0.995 (LR MID bracket) | status:review (round 29) | LR bowl mapping |
 
-**All 8 students active. Zero idle. Single-arm policy in force. #4500 and #4497 awaiting review.**
+**All 8 students active. Zero idle. Single-arm policy in force. 8 bold-swing axes in flight covering: WD (3), outer-momentum, focal-loss, Huber, SWA, joint k×β2.**
 
 ### ⚠️ Round-29 strategic theme: PLATEAU PROTOCOL activated
 
@@ -189,6 +189,13 @@ If any of {1e-3, 3e-3, 1e-2} beats #4402, the entire programme has a new compoun
 - **seed=4 canonical (frieren #4498):** strengthens paper SEM from n=4 (0.48 test) to n=5 (~0.43 test). Low-risk paper-strengthening.
 
 If alphonse or fern wins, multi-seed it immediately. If both regress, escalate to: (1) per-region loss weighting, (2) Tiger/ScheduleFree optimizers, (3) cosine warm restarts, (4) data augmentation.
+
+## Round-32 closures (4 closures)
+
+- **#4497 askeladd (cfg.lr=6e-4 + k=6 + β2=0.995 + α=0.7)** CLOSED: val=46.49 (+0.76, ~0.72σ̂). **LR-bowl at NEW compound FULLY MAPPED** (4e-4: +0.95, 5e-4: floor, 6e-4: +0.76, 7e-4: +2.40). Asymmetric — flat LEFT/MID, sharp RIGHT. Askeladd reassigned to **Lookahead OUTER momentum β_outer=0.5 (#4536)**.
+- **#4500 fern (EMA on Lookahead slow_weights, decay=0.999 from ep 8)** CLOSED CATASTROPHIC: val=57.29 (+11.56). Mechanism failure (your post-mortem): EMA at decay=0.999 + only 562 updates → 57% weight on epoch-8 init snapshot → temporal lag, not variance reduction. SWA/EMA does NOT compose with Lookahead at fixed-T_max; slow_weights ARE the variance-reduced parameters. Fern reassigned to **focal-loss per-node weighting γ=1.0 (#4537)**.
+- **#4524 nezuko (Lookahead α REVERSE COSINE 0.7 → 0.5)** CLOSED: val=46.78 (+1.05, ~1.14σ̂). **Both α-schedule directions now falsified** (forward +1.23, reverse +1.05); reverse 0.18 better than forward (slight time-budget asymmetry) but both ~1σ̂ worse than static. **α=0.70 is a SHARP optimum at k=6+β2=0.995, robust against scheduling perturbations.** Paper-grade negative result. Nezuko reassigned to **Huber loss δ=1.0 (#4547)**.
+- **#4525 thorfinn (Cosine warm restarts 2 cycles T_0=8)** CLOSED CATASTROPHIC: val=49.41 (+3.68, ~4σ̂). Mechanism failure: cycle 1 never converged (lowest val=67.7 at ep 7); each LR restart caused +20-27 val regression. **At 17-epoch budget, single-cosine T_max=17 is OPTIMAL — multi-cycle scheduling INFEASIBLE.** Thorfinn reassigned to **SWA uniform mean of slow_weights at ep {14,15,16,17} (#4546)**.
 
 ## Round-31 closures (5 closures — including MAJOR FINDING)
 

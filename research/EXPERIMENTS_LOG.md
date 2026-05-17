@@ -1,5 +1,120 @@
 # SENPAI Research Results
 
+## 2026-05-17 18:00 — PR #4525: Cosine warm restarts (2 cycles T_0=8) ← CLOSED CATASTROPHIC (budget-incompatible)
+
+- Branch: `willowpai2i48h1-thorfinn/cosine-warm-restarts-k6-b2-995-a07`
+- Student: willowpai2i48h1-thorfinn
+- Hypothesis: 2 cycles visit multiple basins; Lookahead slow_weights average them.
+
+### Results
+
+| Metric | Value | Δ vs #4402 | σ̂ multiple |
+|---|---|---|---|
+| val_avg/mae_surf_p | 49.4094 | +3.68 | ~4.0σ |
+| test_avg/mae_surf_p | 47.1615 | +2.65 | ~2.9σ |
+
+### Mechanism (thorfinn's diagnosis, accepted)
+
+- Cycle 1 (ep 1-8) compressed cosine → never converged (lowest val=67.7 at ep 7).
+- Each LR restart caused massive val regression: ep 8→9 spike +20.4, ep 16→17 spike +27.2.
+- Lookahead slow_weights cannot rescue restart damage because they only move slowly toward (now-perturbed) fast weights.
+
+### Conclusion for paper
+
+**At the 17-epoch budget (SENPAI_MAX_EPOCHS), single-cosine T_max=17 is OPTIMAL — multi-cycle scheduling is INFEASIBLE because no sub-cycle has time to converge.** Solid negative result for the budget regime; warm restarts validated in literature at 100+ epoch budgets.
+
+### Decision
+
+CLOSED. Thorfinn reassigned to **SWA on last 4 epochs (uniform mean of slow_weights at ep 14-17, #4546)** — different from fern's failed EMA: uniform weighting in already-converged regime, no temporal lag.
+
+---
+
+## 2026-05-17 18:00 — PR #4524: Lookahead α REVERSE COSINE 0.7 → 0.5 ← CLOSED (both schedule directions falsified)
+
+- Branch: `willowpai2i48h1-nezuko/alpha-reverse-07-05-k6-b2-995`
+- Student: willowpai2i48h1-nezuko
+- Hypothesis: symmetric mechanism check after alphonse #4496 (forward 0.5 → 0.7) falsified.
+
+### Results
+
+| Metric | Value | Δ vs #4402 | σ̂ multiple |
+|---|---|---|---|
+| val_avg/mae_surf_p | 46.7775 | +1.05 | ~1.14σ̂ |
+| test_avg/mae_surf_p | 45.1040 | +0.60 | ~0.66σ̂ |
+
+All 4 test splits regress uniformly. Schedule verification clean (α decayed 0.7 → 0.5 exactly as designed via cosine).
+
+### α-schedule mechanism table (BOTH DIRECTIONS NOW MAPPED)
+
+| direction | early α | late α | val | Δ vs static α=0.7 |
+|---|---|---|---|---|
+| static (#4402) | 0.7 | 0.7 | **45.73** | **0** |
+| forward (#4496) | 0.5 | 0.7 | 46.96 | +1.23 |
+| reverse (this PR) | 0.7 | 0.5 | 46.78 | +1.05 |
+
+Reverse is 0.18 better than forward (asymmetry consistent with "early-α-stable helps slightly"), but both ~1σ̂ worse than static. Visiting α=0.5 at ANY point during training weakens the slow-weight coupling enough that the model cannot fully recover within the 17-epoch budget.
+
+### Conclusion for paper
+
+**α=0.70 is a SHARP optimum at k=6+β2=0.995, robust against scheduling perturbations in either direction.** This is a paper-grade negative result on α scheduling. The slow-weight coupling at α=0.7 + β2=0.995's 138-step m-buffer is delicately tuned; any reduction in slow-weight pull intensity (even partial, time-limited) breaks the compound.
+
+### Decision
+
+CLOSED. α-axis FULLY RESOLVED (bowl {0.60, 0.65, 0.75} + schedules {forward, reverse} all regress). Nezuko reassigned to **Huber loss δ=1.0 at k=6+β2=0.995+α=0.7 (#4547)** — loss-curvature reformulation, different mechanism axis.
+
+---
+
+## 2026-05-17 17:30 — PR #4500: EMA on Lookahead slow_weights ← CLOSED CATASTROPHIC
+
+- Branch: `willowpai2i48h1-fern/ema-slow-weights-k6-b2-995`
+- Student: willowpai2i48h1-fern
+- Hypothesis: SWA-style EMA decay=0.999 on slow_weights from epoch 8 reduces sync-to-sync variance.
+
+### Results
+
+val=57.2883 (Δ +11.56), test=54.0037 (Δ +9.50). All 4 test splits regress 8-12 pts.
+
+### Mechanism diagnosis (fern's, accepted)
+
+EMA at decay=0.999 + warmup at epoch 8 = 562 updates. Effective averaging window ≈ 1/(1-0.999) = 1000 steps → never reached asymptotic regime. Weight on init snapshot (epoch-8 slow weights): 0.999^562 ≈ **0.57** → 57% of final EMA is epoch-8 weights, training is still descending fast at epoch 17, so EMA effectively tracks slow weights from epoch ~12 → **temporal lag, not variance reduction**.
+
+### Mechanism finding for paper
+
+**SWA/EMA does NOT compose with Lookahead at fixed-T_max training in this regime.** Lookahead's slow_weights are ALREADY a slow average at k=6; layering another EMA on top creates 2nd-order lag without basin-averaging benefit. The slow_weights ARE the variance-reduced parameters under Lookahead.
+
+### Decision
+
+CLOSED. Fern reassigned to **focal-loss-style per-node hardness weighting γ=1.0 (#4537)** — different bold mechanism (loss reformulation, not optimizer-state averaging).
+
+---
+
+## 2026-05-17 17:30 — PR #4497: cfg.lr=6e-4 + k=6 + β2=0.995 ← CLOSED (LR-bowl FULLY MAPPED)
+
+- Branch: `willowpai2i48h1-askeladd/lr6e4-k6-b2-995-a07`
+- Student: willowpai2i48h1-askeladd
+- Hypothesis: completes LR-bowl mapping after LEFT 4e-4 (+0.95) and RIGHT 7e-4 (+2.40) closed.
+
+### Results
+
+val=46.4923 (Δ +0.76, ~0.72σ̂), test=45.3004 (Δ +0.79, ~0.88σ̂). Mild regression in noise band.
+
+### LR-bowl at NEW compound (FULLY MAPPED)
+
+| cfg.lr | val | Δ vs winner | σ̂ multiple | Source |
+|---|---|---|---|---|
+| 4e-4 | 46.68 | +0.95 | 0.91 | closed #4455 (round-29) |
+| **5e-4** | **45.7284** | **0** | **floor** | **merged #4402 — winner** |
+| 6e-4 | 46.49 | +0.76 | 0.72 | closed #4497 (this PR) |
+| 7e-4 | 48.125 | +2.40 | 2.29 | closed #4432 (round-30) |
+
+**LR-bowl is ASYMMETRIC**: nearly flat within ±20% of 5e-4 on LEFT/MID (0.7-0.9σ̂), SHARP on RIGHT (+2.40). The damped-step regime (lr ≤ 6e-4) is the stable basin; 7e-4 destroys the compound. 5e-4 is the precise floor.
+
+### Decision
+
+CLOSED. LR axis FULLY RESOLVED. Askeladd reassigned to **Lookahead OUTER momentum β_outer=0.5 (#4536)** — PLATEAU PROTOCOL bold mechanism swing on the outer step.
+
+---
+
 ## 2026-05-17 17:00 — ⚠️ MAJOR FINDING: Lion WD is a fp32 NO-OP at wd ≤ 1e-4 (tanjiro PR #4456)
 
 Tanjiro's PR #4456 (probe at WD=5e-5, half-decay) returned val_avg/mae_surf_p=45.7283891090 and test_avg/mae_surf_p=44.5079125386 — **BIT-IDENTICAL to PR #4402 to 10 decimal places** across val and all 4 test splits.
