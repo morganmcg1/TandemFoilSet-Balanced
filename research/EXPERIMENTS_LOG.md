@@ -1,5 +1,36 @@
 # SENPAI Research Results
 
+## 2026-05-17 10:00 — PR #4345: Lookahead-Lion α=0.7 k=5 seed=2 (3-seed canonical) ← CLOSED (corrected canonical from missed converged run)
+
+- Branch: `willowpai2i48h1-nezuko/lookahead-lion-alpha07-seed2`
+- Student: willowpai2i48h1-nezuko
+- W&B: `qohoymnk` (CONVERGED canonical, missed by student); group `lookahead_lion_seed_scan_alpha07`
+- Hypothesis: 3-seed canonical seed=2 at OLD baseline (PR #4269 config: k=5, α=0.7, β2=0.99) for paper-facing variance.
+
+### Two finished runs — student reported the wrong one as canonical
+
+| W&B run | start (UTC) | state | best_ep | val_avg | test_avg | runtime | Notes |
+|---|---|---|---|---|---|---|---|
+| **`qohoymnk` (TRUE CANONICAL)** | **03:49** | **finished** | **17** | **48.6494** | **46.9130** | 31.5 min | Converged, full cosine schedule |
+| `9sbzb9mq` (student-reported) | later | finished | 14 | 51.9395 | 50.2990 | 30.7 min | Heartbeat-rerun, timeout-cut |
+
+Student honestly reported the timeout but missed the EARLIER converged run on their own pod. Future canonical assignments must instruct students to query the full W&B group for ALL finished runs and surface the earliest converged (best_ep=17) one.
+
+### Updated 3-seed canonical of OLD programme best (PR #4269 config, β2=0.99)
+
+| Seed | val_avg | test_avg | best_ep | W&B run |
+|---|---|---|---|---|
+| 0 | 47.5894 | 46.0098 | 17 | `oftlu9tn` (PR #4269 merged) |
+| 1 | 47.0830 | 46.5983 | 17 | `imywc4uu` (PR #4344 closed) |
+| **2 (CORRECTED)** | **48.6494** | **46.9130** | 17 | **`qohoymnk` (PR #4345 closed)** |
+| **3-seed mean ± σ̂** | **47.7740 ± 0.7990** | **46.5070 ± 0.4570** | — | — |
+
+Seed=2 at 48.65 is within 1.65σ of mean — normal seed-noise envelope. PR #4269's single-seed=0 (47.59) is well within 1σ of the 3-seed mean. Original baseline is seed-robust.
+
+### Decision
+
+**Closed** — does not beat current programme best (46.84, PR #4373). The 3-seed canonical of the OLD baseline (β2=0.99) is moot now that β2=0.995 is the merged baseline. New 3-seed canonical at β2=0.995 is in flight (tanjiro #4386 seed=1, thorfinn #4385 seed=2). Nezuko reassigned to **α=0.65 + β2=0.995 micro-probe (#4415)** — tests if α-bowl shifted leftward under stronger m-buffer smoothing.
+
 ## 2026-05-17 09:00 — PR #4371: Lookahead-Lion k=6 at α=0.7 ← CLOSED (BEATS old k=5 baseline; k-bowl SHIFTED under α=0.7)
 
 - Branch: `willowpai2i48h1-askeladd/lookahead-lion-k6-alpha07`
