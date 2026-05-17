@@ -473,6 +473,7 @@ class Config:
     lookahead_alpha: float = 0.5   # Lookahead interpolation weight (slow += alpha*(fast-slow)).
     grad_clip: float = 0.0  # PR #3497: max_norm for clip_grad_norm_; 0 disables (norm still logged)
     use_bf16: bool = False   # bfloat16 autocast for forward+loss; default off for reproducibility
+    dropout: float = 0.0     # Transolver dropout (PhysicsAttention + FFN); default 0.0 preserves canonical
 
 
 cfg = sp.parse(Config)
@@ -519,6 +520,7 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    dropout=cfg.dropout,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
