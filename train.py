@@ -138,9 +138,11 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 decoupled_heads=False, pressure_head_layers=2):
         super().__init__()
         self.last_layer = last_layer
+        self.decoupled_heads = decoupled_heads
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
@@ -151,16 +153,38 @@ class TransolverBlock(nn.Module):
                        n_layers=0, res=False, act=act)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
-            self.mlp2 = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
-                nn.Linear(hidden_dim, out_dim),
-            )
+            if decoupled_heads:
+                self.mlp2_vel = nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+                    nn.Linear(hidden_dim, 2),
+                )
+                if pressure_head_layers == 3:
+                    self.mlp2_p = nn.Sequential(
+                        nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+                        nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+                        nn.Linear(hidden_dim, 1),
+                    )
+                else:
+                    self.mlp2_p = nn.Sequential(
+                        nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+                        nn.Linear(hidden_dim, 1),
+                    )
+            else:
+                self.mlp2 = nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+                    nn.Linear(hidden_dim, out_dim),
+                )
 
     def forward(self, fx):
         fx = self.attn(self.ln_1(fx)) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            h = self.ln_3(fx)
+            if self.decoupled_heads:
+                vel = self.mlp2_vel(h)
+                p = self.mlp2_p(h)
+                return torch.cat([vel, p], dim=-1)
+            return self.mlp2(h)
         return fx
 
 
@@ -169,7 +193,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 decoupled_heads=False, pressure_head_layers=2):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -190,6 +215,8 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                decoupled_heads=decoupled_heads,
+                pressure_head_layers=pressure_head_layers,
             )
             for i in range(n_layers)
         ])
@@ -458,6 +485,8 @@ class Config:
     cosine_t_max_epochs: int = 80  # default unchanged from current behavior
     ema_decay: float = 0.999
     compile_mode: str = ""  # empty = no compile (baseline behavior)
+    decoupled_heads: bool = False  # split last-layer head into [Ux,Uy] + [p]
+    pressure_head_layers: int = 2  # 2 = same depth as vel head; 3 = deeper pressure head
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -502,6 +531,8 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    decoupled_heads=cfg.decoupled_heads,
+    pressure_head_layers=cfg.pressure_head_layers,
 )
 
 model = Transolver(**model_config).to(device)
