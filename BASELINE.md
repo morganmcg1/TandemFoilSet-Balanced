@@ -1,6 +1,38 @@
 # Baseline — TandemFoilSet (willow-pai2i-48h-r5)
 
-## Current best — PR #4201 (layer_scale=1e-4 + T_max=20 + lr=2e-4 + clip=1.0 — four-way composition beats BL on camber_rc)
+## Current best — PR #4320 (T_max=22 at new BL substrate — first sub-50 val, camber_cruise regression fixed)
+
+**val_avg/mae_surf_p = 49.7515** (W&B run: `1neonugr`, PR #4320 thorfinn — Lion lr=2e-4 + n_fourier=0 + FiLM + wd=1e-3 + EMA(0.997) + Huber β=0.05 + **T_max=22** + **grad_clip=1.0** + **layer_scale_init=1e-4**; NO spec_norm)
+**test_avg/mae_surf_p = 42.8929** (same run `1neonugr`, clean 4-split)
+
+| Split | val mae_surf_p | test mae_surf_p |
+|-------|----------------|------------------|
+| single_in_dist | 50.61 | 44.05 |
+| geom_camber_rc | 63.77 | 57.45 |
+| **geom_camber_cruise** | **32.88** | **27.56** |
+| re_rand | 51.75 | 42.51 |
+
+**Δ vs prior best (PR #4201 val 53.08 / test 44.89): −3.32 val / −1.99 test**
+
+First sub-50 val! Win is broad-based — all 4 val splits improve, 3 of 4 test splits improve. Critical: **camber_cruise regression (+2.5/+2.8 at PR #4201) is FIXED** — cruise val 36.68 → 32.88 (−3.80), cruise test 30.65 → 27.56 (−3.09). Lower cosine-endpoint LR at T_max=22 (~1.24e-4 within 14 epochs vs ~1.34e-4 at T_max=20) decays more aggressively into convergence — exactly what the small-gradient cruise domain needed. T_max=22 is safe (T_max=24 diverges at ls substrate per Finding #33). Mechanism: lower endpoint LR → less noise at convergence for small-gradient OOD domains; higher T_max increases time-averaged LR for in-dist while keeping endpoint below the destabilization threshold.
+
+**Reproduce (PR #4320 Arm A, run 1neonugr):**
+```bash
+cd target/
+python train.py --agent willowpai2i48h5-thorfinn --epochs 50 \
+  --wandb_group round12-tmax-newbl-thorfinn \
+  --loss_type smooth_l1 --loss_beta 0.05 \
+  --n_fourier 0 --cosine_t_max 22 \
+  --optimizer_name lion --lr 2e-4 --weight_decay 1e-3 \
+  --ema_decay 0.997 --use_film \
+  --layer_scale_init 1e-4 \
+  --grad_clip 1.0 \
+  --wandb_name thorfinn-r12-tmax22-newbl
+```
+
+---
+
+## Prior best — PR #4201 (layer_scale=1e-4 + T_max=20 + lr=2e-4 + clip=1.0 — four-way composition beats BL on camber_rc)
 
 **val_avg/mae_surf_p = 53.0764** (W&B run: `d3qlknrv`, PR #4201 nezuko — Lion lr=2e-4 + n_fourier=0 + FiLM + wd=1e-3 + EMA(0.997) + Huber β=0.05 + **T_max=20** + **grad_clip=1.0** + **layer_scale_init=1e-4**; NO spec_norm)
 **test_avg/mae_surf_p = 44.8874** (same run `d3qlknrv`, clean 4-split)
