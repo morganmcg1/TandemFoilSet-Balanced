@@ -748,3 +748,75 @@ python train.py \
 # surf_weight=10
 ```
 
+---
+
+## 2026-05-17 01:00 — PR #4157: SF-AdamW LR fine-tune — lr=3e-3 NEW BEST
+
+**val_avg/mae_surf_p: 52.258** (Δ **−4.59% vs baseline 54.769**; Δ −2.89% paired vs Arm B control)
+
+**Critical signal: A→B→C→D sweep is perfectly monotone — the true LR peak lies beyond 3e-3.** The coarse sweep (#4038) found 2e-3 > 5e-3 with a non-monotone structure, but the fine grid in [1.5e-3, 3e-3] reveals the gradient keeps improving all the way through. Peak is ≥3e-3. Best epoch = 17/17 for ALL arms (budget-truncated, all still descending) — further headroom exists at higher LR.
+
+| Arm | lr | val_avg/mae_surf_p | Δ vs B control | Δ vs baseline |
+|---|---:|---:|---:|---:|
+| A | 1.5e-3 | 55.902 | +3.88% (regression) | +2.07% |
+| **B (control)** | **2e-3** | **53.814** | — | −1.74% |
+| C | 2.5e-3 | 53.182 | −1.18% | −2.90% |
+| **D (winner)** | **3e-3** | **52.258** | **−2.89%** | **−4.59%** |
+
+### Val surface pressure MAE (lower is better)
+
+| Split | val/mae_surf_p |
+|---|---:|
+| `val_single_in_dist`      | 56.454 |
+| `val_geom_camber_rc`      | 66.039 |
+| `val_geom_camber_cruise`  | 33.763 |
+| `val_re_rand`             | 52.775 |
+| **val_avg**               | **52.258** |
+
+### Test surface pressure MAE (3 finite splits; cruise NaN pre-existing)
+
+| Split | test/mae_surf_p |
+|---|---:|
+| `test_single_in_dist`   | 48.731 |
+| `test_geom_camber_rc`   | 60.335 |
+| `test_re_rand`          | 44.552 |
+| `test_avg (3 finite)` | **51.206** |
+
+- **Best epoch:** 17/17 — budget-truncated; all arms still descending at cap
+- **Peak VRAM:** 38.97 GB
+- **Sec/epoch:** 110.1
+
+### Metric artifacts
+
+- Winner (lr=3e-3): `models/model-charliepai2i48h4-edward-sf-lr-fine-r1-armD-lr3e-3-20260516-222733-20260516-233714/metrics.jsonl`
+- Control (lr=2e-3): `models/model-charliepai2i48h4-edward-sf-lr-fine-r1-armB-lr2e-3-20260516-222733-20260516-222735/metrics.jsonl`
+- Arm C (lr=2.5e-3): `models/model-charliepai2i48h4-edward-sf-lr-fine-r1-armC-lr2.5e-3-20260516-222733-20260516-230225/metrics.jsonl`
+- Arm A (lr=1.5e-3): `models/model-charliepai2i48h4-edward-sf-lr-fine-r1-armA-lr1.5e-3-20260516-213655-20260516-213657/metrics.jsonl`
+
+### Reproduce
+
+```bash
+cd target/
+python train.py \
+  --amp_dtype bf16 \
+  --use_ema --ema_decay 0.999 \
+  --film_cond --two_shot_film \
+  --grad_clip_norm 1.0 \
+  --use_schedule_free --lr 3e-3
+```
+
+### Current best config (carry forward to all new experiments)
+
+```python
+# Loss: Huber (smooth_l1_loss, beta=1.0)
+# AMP: --amp_dtype bf16
+# Scheduler: NONE (--use_schedule_free replaces cosine)
+# EMA: --use_ema --ema_decay 0.999
+# FiLM: --film_cond --two_shot_film
+# Optimizer: SF-AdamW lr=3e-3, weight_decay=1e-4, warmup_steps=500, betas=(0.9,0.999)
+# Gradient clip: --grad_clip_norm 1.0
+# Model: n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2
+# surf_weight=10
+# NEXT: lr=3e-3 is still monotonically improving — explore {3e-3, 4e-3, 5e-3, 6e-3}
+```
+
