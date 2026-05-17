@@ -2170,3 +2170,32 @@ If either lands, all capacity probes (H86, H89) become retestable with a meaning
 | #4229 | edward | H97: LR fine-tune at β₂=0.997 (lr=2.5e-4, 3.5e-4) | --lr (probe ±17% around 3e-4 at new β₂ baseline) |
 
 **Rationale:** lr=3e-4 was calibrated at β₂=0.99 (H73). β₂=0.997 changes Lion's EMA dynamics (231-step half-life vs 70 steps). The optimal LR may shift: smoother momentum may tolerate higher peak LR, or may favor lower LR at the cosine tail. Quick 2-arm probe rules this out before accepting lr=3e-4 as the global optimum.
+
+---
+
+## 2026-05-17 00:35 — PR #4191: H91 surf_weight sweep under Lion (fern) — CLOSED, negative
+
+- Branch: `fern/hypothesis_h91_surf_weight_lion`
+- Hypothesis: surf_weight=10 locked under AdamW (H54); Lion's sign-update might shift optimal surface/volume loss balance.
+
+| Config | val_avg | Δ vs H88 baseline | test 3-split |
+|--------|--------:|------------------:|-------------:|
+| Baseline (sw=10, H88) | 41.2153 | — | 39.5337 |
+| Arm A (sw=5) | 42.6978 | +1.48 | 40.8528 |
+| Arm B (sw=20) | 42.5820 | +1.36 | 41.3041 |
+
+Per-split: Arm B (sw=20) marginally helps val_single_in_dist (42.81 vs 44.73) but hurts val_re_rand (44.70 vs 42.41) — tradeoff washes out in avg. Broad shallow basin around sw=10. Lion's sign-update makes combined gradient direction minimally sensitive to loss magnitude weighting.
+
+- Artifacts: `models/model-charliepai2i48h3-fern-h91-arm-a-sw5-20260516-225517/`, `models/model-h91-arm-b-sw20-20260516-233050/`
+
+**Status: CLOSED — surf_weight=10 confirmed locked under Lion. Orthogonal to optimizer choice.**
+
+---
+
+## 2026-05-17 00:38 — Round 5 Cycle 32: Assign H98 (fern, β₁ retune at β₂=0.997).
+
+| PR | Student | Hypothesis | Key Change |
+|----|---------|-----------|------------|
+| #4239 | fern | H98: β₁ retune at β₂=0.997 (β₁=0.85, β₁=0.95) | --beta1 (parallel to H90 at β₂=0.995; reveals β₁×β₂ interaction) |
+
+**Rationale:** H90 (askeladd) probes β₁ at old β₂=0.995 baseline. Now that β₂=0.997 is locked, β₁ optimum may shift — longer β₂ EMA means smoother momentum buffer; lower β₁ might compensate by admitting more current gradient into the sign decision.

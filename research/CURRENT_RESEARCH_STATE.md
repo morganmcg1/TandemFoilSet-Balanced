@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-17 00:00
+- **Date**: 2026-05-17 00:38
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
 - **Round**: 5 late-phase — **NEW BASELINE: H88 Arm B β₂=0.997 (val=41.22 / test=39.53, PR #4166 MERGED).** β₂ locked at 0.997. Active fronts: efficiency (H95 bf16, H96 torch.compile), LR retune (H97 edward), β₁ sweep (H90), surf_weight (H91), seeds (H92), WSD (H93), batch_size (H94).
 - **Most recent human research directive**: None received
@@ -74,15 +74,15 @@ The H67-H73 Lion compound batch revealed:
 | PR | Student | Hypothesis | Priority | Expected |
 |----|---------|------------|----------|---------|
 | **#4229** | edward | **H97: LR fine-tune at β₂=0.997 (lr=2.5e-4, lr=3.5e-4)** | MED (LR calibrated at β₂=0.99; may shift at 0.997) | ~40.5-42.5 |
-| **#4189** | askeladd | **H90: Lion β₁ sweep (β₁=0.85, β₁=0.95)** | HIGH (first β₁ retune at slice=96) | ~41-44 |
-| **#4191** | fern | **H91: surf_weight sweep under Lion (sw=5, sw=20)** | MED (H54 locked surf_weight=10 under AdamW) | ~40-44 |
+| **#4239** | fern | **H98: β₁ retune at β₂=0.997 (β₁=0.85, β₁=0.95)** | HIGH (complement to H90 at old β₂=0.995; reveals β₁×β₂ interaction) | ~40.5-42.5 |
+| **#4189** | askeladd | **H90: Lion β₁ sweep (β₁=0.85, β₁=0.95) at β₂=0.995** | HIGH (β₁ baseline at β₂=0.995; compare with H98 at 0.997) | ~41-44 |
 | **#4195** | frieren | **H92: Baseline variance — 2 seeds at H88 config** | HIGH (calibrate noise floor at new baseline) | ~42-44 |
 | **#4196** | nezuko | **H93: WSD schedule under Lion (vs cosine)** | MED (alternative schedule) | ~40-45 |
 | **#4197** | tanjiro | **H94: Batch size sweep BS=8 (no-scale and LR-scale)** | HIGH (orthogonal to capacity) | ~40-44 |
 | **#4215** | alphonse | **H95: bfloat16 mixed-precision training** | HIGH (efficiency unlock) | ~40-43 + 47% more epochs |
 | **#4217** | thorfinn | **H96: torch.compile baseline acceleration** | HIGH (efficiency unlock orthogonal to bf16) | ~40-43 + ~25% more epochs |
 
-**Closed this round:** H61, H62, H63, H64, H65, H72, H68/H69/H70/H71 (superseded), H58/H67 (superseded), **H74 (T_max extend)**, **H75 (LR U-shape)**, **H76 (warmup)**, **H77 (n_head=4)**, **H79 (wd)**, **H80 (schedule confound)**, **H81 (RMSNorm under Lion)**, **H82 (slice sweep)**, **H83 (n_layers)**, **H84 (T_max compression)**, **H85 (FFN activation)**, **H86 (n_hidden — wall-cut-bound)**, **H87 (eta_min > 0)**, **H89 (mlp_ratio — wall-cut-bound)**.
+**Closed this round:** H61, H62, H63, H64, H65, H72, H68/H69/H70/H71 (superseded), H58/H67 (superseded), **H74 (T_max extend)**, **H75 (LR U-shape)**, **H76 (warmup)**, **H77 (n_head=4)**, **H79 (wd)**, **H80 (schedule confound)**, **H81 (RMSNorm under Lion)**, **H82 (slice sweep)**, **H83 (n_layers)**, **H84 (T_max compression)**, **H85 (FFN activation)**, **H86 (n_hidden — wall-cut-bound)**, **H87 (eta_min > 0)**, **H89 (mlp_ratio — wall-cut-bound)**, **H91 (surf_weight — locked at 10, transfers from AdamW to Lion)**.
 
 **Merged this round:** H73 (val=42.98), H78 (val=42.30), **H88 (val=41.22 CURRENT BEST)**.
 
@@ -119,7 +119,7 @@ H73's T_max=15 + eta_min=0 + no warmup is locally optimal in all directions.
 | Mixed precision | 🔬 H95 active | fp32 (default) | Highest-ROI efficiency lever — 25-40% s/epoch reduction unlocks capacity probes |
 | torch.compile | 🔬 H96 active | off (default) | Orthogonal to bf16; 15-30% reduction typical |
 | clip_grad_norm | ✅ Locked at 1.0 | H20+H56 | — |
-| surf_weight | ✅ Locked at 10 | H54 | — |
+| surf_weight | ✅ Locked at 10 (H54 AdamW, H91 Lion) | 10 | H91 confirms sw=10 transfers to Lion; broad basin, sign-update insensitive to loss magnitude weighting |
 | Huber δ_p | ✅ Locked at 0.25 | H25/H64 | — |
 | DropPath | ❌ No effect | 0.0 (H63) | — |
 | Mixup | ❌ Wrong inductive bias | None (H55) | — |
