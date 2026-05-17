@@ -459,6 +459,7 @@ class Config:
     ema_decay: float = 0.999
     compile_mode: str = ""  # empty = no compile (baseline behavior)
     slice_num: int = 64
+    feature_noise_std: float = 0.0   # Gaussian noise σ on x_norm during training; 0=disabled
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -512,6 +513,7 @@ if cfg.compile_mode:
     model = torch.compile(model, mode=_mode, dynamic=True)
     print(f"Model compiled with mode={cfg.compile_mode!r}")
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+print(f"Feature-noise: σ={cfg.feature_noise_std:.3f} (applied to x_norm during training, NOT to is_surface idx 12)")
 
 optimizer = Lion(model.parameters(), lr=cfg.lr, betas=(0.9, 0.99), weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.cosine_t_max_epochs)
@@ -557,6 +559,11 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
+
+        if cfg.feature_noise_std > 0.0:
+            noise = torch.randn_like(x_norm) * cfg.feature_noise_std
+            noise[..., 12] = 0.0  # DO NOT perturb is_surface (binary mask)
+            x_norm = x_norm + noise
 
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             pred = model({"x": x_norm})["preds"]
