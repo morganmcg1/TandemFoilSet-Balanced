@@ -459,6 +459,8 @@ class Config:
     ema_decay: float = 0.999
     compile_mode: str = ""  # empty = no compile (baseline behavior)
     slice_num: int = 64
+    lr_attn_mult: float = 1.0    # LR multiplier for the attn parameter group
+    lr_other_mult: float = 1.0   # LR multiplier for the non-attn parameter group
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -513,7 +515,25 @@ if cfg.compile_mode:
     print(f"Model compiled with mode={cfg.compile_mode!r}")
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = Lion(model.parameters(), lr=cfg.lr, betas=(0.9, 0.99), weight_decay=cfg.weight_decay)
+attn_params, other_params = [], []
+for _pname, _p in model.named_parameters():
+    if not _p.requires_grad:
+        continue
+    if "attn" in _pname.lower():
+        attn_params.append(_p)
+    else:
+        other_params.append(_p)
+param_groups = [
+    {"params": attn_params, "lr": cfg.lr * cfg.lr_attn_mult},
+    {"params": other_params, "lr": cfg.lr * cfg.lr_other_mult},
+]
+optimizer = Lion(param_groups, lr=cfg.lr, betas=(0.9, 0.99), weight_decay=cfg.weight_decay)
+n_attn = sum(p.numel() for p in attn_params)
+n_other = sum(p.numel() for p in other_params)
+print(
+    f"Param split: attn={n_attn:,}  other={n_other:,}  "
+    f"lr_attn={cfg.lr * cfg.lr_attn_mult:.3e}  lr_other={cfg.lr * cfg.lr_other_mult:.3e}"
+)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.cosine_t_max_epochs)
 ema = EMA(model, decay=cfg.ema_decay)
 
@@ -588,9 +608,16 @@ for epoch in range(MAX_EPOCHS):
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    # Capture the LR that was actually used during this epoch (before stepping).
-    epoch_lr = optimizer.param_groups[0]["lr"]
+    # Capture per-group LRs that were actually used during this epoch (before stepping).
+    epoch_lr_attn = optimizer.param_groups[0]["lr"]
+    epoch_lr_other = optimizer.param_groups[1]["lr"]
+    epoch_lr = epoch_lr_attn  # backwards-compat scalar (attn group)
     scheduler.step()
+    if epoch == 0:
+        print(
+            f"  Epoch 1 LR sanity: "
+            f"lr_attn={epoch_lr_attn:.3e}  lr_other={epoch_lr_other:.3e}"
+        )
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
     gn_mean = epoch_gn_sum / max(n_batches, 1)
@@ -628,6 +655,8 @@ for epoch in range(MAX_EPOCHS):
         "seconds": dt,
         "peak_memory_gb": peak_gb,
         "train/lr": epoch_lr,
+        "train/lr_attn": epoch_lr_attn,
+        "train/lr_other": epoch_lr_other,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/grad_norm_preclip_mean": gn_mean,
