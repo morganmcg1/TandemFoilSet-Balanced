@@ -400,6 +400,7 @@ class Config:
     ema_decay: float = 0.997  # EMA decay for shadow model evaluated at val/test
     sf_warmup_steps: int = 200  # Schedule-Free linear LR warmup
     max_grad_norm: float = 1.0  # Gradient clipping max norm (set 0 to disable)
+    mlp_ratio: int = 2  # FFN inner-dim multiplier (uniform across all blocks)
 
 
 cfg = sp.parse(Config)
@@ -436,7 +437,7 @@ model_config = dict(
     n_layers=5,
     n_head=4,
     slice_num=8,
-    mlp_ratio=2,
+    mlp_ratio=cfg.mlp_ratio,
     dropout=0.1,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
