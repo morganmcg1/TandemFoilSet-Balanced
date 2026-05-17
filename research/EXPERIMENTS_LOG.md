@@ -5,6 +5,70 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-17 10:45 — PR #4396 (charliepai2i48h5-fern): n_freqs={8, 12} on n=10 base — CLOSED (arm-2 competitive but doesn't beat current best; n_freqs response is non-monotone at default lr)
+
+- branch: `charliepai2i48h5-fern/nfreqs-sweep`
+- hypothesis: n_freqs lever sensitivity on n=10 baseline (default lr/wd)
+- clean solo reruns at 22 epochs after parallel-GPU contention in initial runs
+
+| arm | n_freqs | val_avg | Δ vs current best (54.959) | test_avg | Δ vs current best (47.521) | best_ep |
+|-----|-----|---------|---------------------------|----------|----------------------------|---------|
+| arm-1 | 8 | 55.700 | +1.35% ✗ | 48.478 | +2.01% ✗ | 22/22 |
+| arm-2 | 12 | 55.077 | +0.21% ≈ | 47.586 | +0.14% ≈ | 22/22 |
+| baseline n=10 (#4221) | 10 | 56.124 | +2.12% | 49.696 | +4.58% | 22/22 |
+
+Per-split test arm-2 (n=12): single=51.30(-1.32% vs current best), rc=60.82(-1.75% ✓), cruise=31.66(-1.39% ✓), re_rand=46.56(-2.04% ✓) — beats current best on 3/4 splits but loses on single by 0.36.
+
+- metric artifacts: `models/model-charliepai2i48h5-fern-nfreqs8-solo-rerun-20260517-092730/metrics.jsonl`, `models/model-charliepai2i48h5-fern-nfreqs12-solo-rerun-20260517-100202/metrics.jsonl`
+
+**Analysis and conclusions:**
+
+At default lr=5e-4 on the n=10 base, n_freqs ordering is: n=12 (55.077) < n=8 (55.700) < n=10 (56.124). Non-monotonic with n=10 being WORST — student notes this is suspicious and likely indicates baseline n=10 seed-noise outlier.
+
+KEY FINDING: **n_freqs=12 is competitive with current best at default lr** — within seed noise on both val (+0.21%) and test (+0.14%), wins 3/4 test splits. Suggests n_freqs=12 has unexplored headroom that could compound with lr=7e-4 + slice=32 (our current best stack uses n=8). 
+
+The "more freq capacity helps" hypothesis is the most actionable follow-up: test n_freqs=12 on the current best stack (n=8+lr=7e-4+wd=0.0001+slice=32 → swap n=8 to n=12).
+
+**Assigned fern to**: n_freqs=12 ± lr=7e-4 compound on current best stack.
+
+---
+
+## 2026-05-17 10:45 — PR #4479 (charliepai2i48h5-askeladd): wd bracket {0.002, 0.0015} on n=8+lr=7e-4 stack — CLOSED (wd lever fully closed; default wd=0.0001 is optimum)
+
+- branch: `charliepai2i48h5-askeladd/wd-bracket-n8-stack`
+- hypothesis: wd=0.002 (n=10 local optimum from #4406) might be the n=8 local optimum; wd=0.0015 fills bracket
+
+| arm | wd | val_avg | Δ vs current best (54.959) | test_avg | best_ep |
+|-----|-----|---------|---------------------------|----------|---------|
+| arm-1 | 0.002 | 55.190 | +0.42% ✗ | 47.556 | 20/22 (non-timeout) |
+| arm-2 | 0.0015 | 57.130 | +3.95% ✗ | 48.450 | 22/22 |
+
+Combined wd characterization on n=8+lr=7e-4 stack:
+| wd | val_avg | source |
+|---|---|---|
+| **0.0001 (default)** | **54.959** | **#4425 — current best** |
+| 0.001 | 56.18 | #4425 arm-1 |
+| 0.0015 | 57.13 | #4479 arm-2 |
+| 0.002 | 55.190 | #4479 arm-1 |
+
+- metric artifacts: `models/model-charliepai2i48h5-askeladd-bf16-layerscale-bs2-n8-lr7e4-d010-slice32-wd002-20260517-082518/metrics.jsonl`, `models/model-bf16-layerscale-bs2-n8-lr7e4-d010-slice32-wd0015-20260517-092736/metrics.jsonl`
+
+**Analysis and conclusions:**
+
+Response is **non-monotonic** with default wd as the global optimum. wd=0.0015 anomalously regresses (worse than wd=0.001 AND wd=0.002) — likely seed-noise outlier rather than a true local maximum.
+
+arm-1 wd=0.002 achieves non-timeout-bound convergence (best_epoch=20/22, val plateau then tick-up at ep22) — same structural signature as #4448 lr=8e-4 result. clip_frac=0.956 confirms successful clip-escape.
+
+Per-split test arm-1 vs current best: single (+1.01%), rc (+2.27%), cruise (-5.73% ✓), re_rand (-3.42% ✓). The wd=0.002 stack is actually noticeably BETTER than current best on OOD splits (cruise, re_rand) but worse on in-dist single and rc. This is the inverse of #4425 arm-2 which improved single dramatically at the cost of OOD splits.
+
+**wd lever fully closed for n=8+lr=7e-4 lineage**: 4-point characterization complete. Default wd=0.0001 wins; wd=0.002 has potentially-real OOD signal but loses on val/in-dist.
+
+**Suggested follow-up direction**: wd=0.002 vs default on the test=47.946 stack (#4448 n=10) — already in-flight via alphonse #4513 arm-2. Or apply this OOD-favoring stack to a multi-seed analysis.
+
+**Assigned askeladd to**: slice_num bracket on current best stack (untested levers — slice=40, 48 on n=8+lr=7e-4).
+
+---
+
 ## 2026-05-17 10:30 — PR #4449 (charliepai2i48h5-nezuko): clip={0.20, 0.22} transfer test on n=8+lr=7e-4 stack — CLOSED (clip lever does not transfer; n=8 optimum at clip=0.25)
 
 - branch: `charliepai2i48h5-nezuko/clip-transfer-n8-stack`

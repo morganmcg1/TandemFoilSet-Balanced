@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 10:35
+- **Date:** 2026-05-17 11:00
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
@@ -34,13 +34,13 @@
 
 | Student | PR | Hypothesis | Stack |
 |---|---|---|---|
-| **alphonse** | **#4513** | **lr=9e-4+wd=0.001 vs lr=8e-4+wd=0.002 on n=10 stack** | n=10+lr=8e-4+wd=0.001+δ=0.10+slice=32 |
+| alphonse | #4513 | lr=9e-4+wd=0.001 vs lr=8e-4+wd=0.002 on n=10 stack | n=10+lr=8e-4+wd=0.001+δ=0.10+slice=32 |
 | tanjiro | #4424 | lr push {8e-4, 9e-4} on n=8 stack | n=8+lr=7e-4+δ=0.10+slice=32 |
-| **edward** | **#4543** | **lr=8e-4 cross-lineage transfer (n=8+lr=8e-4 ± wd=0.001)** | n=8+δ=0.10+slice=32 |
-| askeladd | #4479 | wd bracket {0.002, 0.0015} on n=8 stack | n=8+lr=7e-4+δ=0.10+slice=32 |
+| edward | #4543 | lr=8e-4 cross-lineage transfer (n=8+lr=8e-4 ± wd=0.001) | n=8+δ=0.10+slice=32 |
+| **askeladd** | **#4561** | **slice bracket {40, 48} on current best stack** | n=8+lr=7e-4+wd=0.0001+δ=0.10 |
 | frieren | #4484 | T_max bracket {18, 22} on n=8 stack | n=8+lr=7e-4+δ=0.10+slice=32 |
-| **nezuko** | **#4544** | **clip WIDER {0.30, 0.35} on n=8+lr=7e-4 stack** | n=8+lr=7e-4+δ=0.10+slice=32 |
-| fern | #4396 | n_freqs={8, 12} on n=10 stack | n=10+δ=0.10+slice=32 |
+| nezuko | #4544 | clip WIDER {0.30, 0.35} on n=8+lr=7e-4 stack | n=8+lr=7e-4+δ=0.10+slice=32 |
+| **fern** | **#4559** | **n_freqs={11, 12} on current best stack** | n=8+lr=7e-4+wd=0.0001+δ=0.10+slice=32 |
 | thorfinn | #4407 | T_max bracket {16, 18} on n=10+wd=0.001 stack | n=10+wd=0.001+slice=32 |
 
 ⚠️ **NOTE**: train.py Config default is still `slice_num=64`. All assignments must include explicit `--slice_num 32`.
@@ -58,7 +58,7 @@
 | δ on lineage B (n=10) | 0.10 | #4220 arm-2 |
 | clip × δ=0.10 | clip ≤ 0.25 only | #4222, #4223 |
 | **clip on n=8+lr=7e-4** | **clip=0.25 (default) — DO NOT tighten** | **#4449 — clip 0.20/0.22 regress; clip_frac re-saturates** |
-| **wd on n=8+lr=7e-4** | **wd=0.0001 (default) — DO NOT raise** | **#4425 — wd=0.001 regresses +2.14% val (replicated)** |
+| **wd on n=8+lr=7e-4** | **wd=0.0001 (default) — fully characterized (4-point bracket)** | **#4425 + #4479: wd=0.0001<0.002<0.001<0.0015 in val** |
 | EMA | dead on current stack | #4288 |
 | bs | 2 | #4147 |
 
@@ -76,9 +76,11 @@ The recent closures of wd (#4425) and clip (#4449) levers on n=8+lr=7e-4 mean we
 - **#4513 alphonse** — lr=9e-4+wd=0.001 vs lr=8e-4+wd=0.002 on n=10
 - **#4407 thorfinn** — T_max {16, 18} on n=10+wd=0.001
 
-### Priority 3: Cross-lineage and untapped-direction experiments (assigned this turn)
-- **#4543 edward** — lr=8e-4 cross-lineage transfer on n=8: arm-1 lr=8e-4+wd=default, arm-2 lr=8e-4+wd=0.001 (lineage B winner). Tests whether lr=8e-4 (which enabled non-timeout-bound on n=10) also helps n=8 stack.
-- **#4544 nezuko** — clip WIDER {0.30, 0.35} on n=8+lr=7e-4: tests un-saturated regime hypothesis. baseline clip_frac=0.953 → wider clip may let larger steps through. Direct test of mechanism that closed clip-tighter direction in #4449.
+### Priority 3: Cross-lineage and untapped-direction experiments
+- **#4543 edward** — lr=8e-4 cross-lineage transfer on n=8
+- **#4544 nezuko** — clip WIDER {0.30, 0.35} on n=8+lr=7e-4
+- **#4561 askeladd** (NEW this turn) — slice_num bracket {40, 48} on current best stack: untested lever for this lineage
+- **#4559 fern** (NEW this turn) — n_freqs={11, 12} on current best stack: tests if n_freqs=12 signal from #4396 compounds with lr=7e-4+slice=32
 
 ## Potential next research directions
 
