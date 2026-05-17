@@ -399,6 +399,7 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     ema_decay: float = 0.997  # EMA decay for shadow model evaluated at val/test
     sf_warmup_steps: int = 200  # Schedule-Free linear LR warmup
+    n_hidden: int = 128  # Transolver hidden dim (sweep axis)
 
 
 cfg = sp.parse(Config)
@@ -431,7 +432,7 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=cfg.n_hidden,
     n_layers=5,
     n_head=4,
     slice_num=8,
