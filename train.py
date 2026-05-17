@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -45,6 +46,48 @@ from data import (
     load_test_data,
     pad_collate,
 )
+
+# ---------------------------------------------------------------------------
+# Fourier feature positional encoding
+# ---------------------------------------------------------------------------
+
+
+class FourierFeatures(nn.Module):
+    """Prepend Fourier features of pos (first 2 channels of x).
+
+    Output layout: ``[pos_x, pos_y, sin(B·pos), cos(B·pos), x[..., 2:]]``.
+
+    Modes:
+      * ``nerf``: deterministic octave frequencies ``2^k * 2π`` for k=0..K-1,
+        separately on each pos dim (B is block-diagonal, shape [2K, 2]).
+        out_extra = 4K.
+      * ``rff``: K random Gaussian 2D frequencies with scale ``2π·σ``
+        (Tancik 2020). out_extra = 2K.
+    """
+
+    def __init__(self, K: int, mode: str = "nerf", sigma: float = 10.0):
+        super().__init__()
+        self.K = K
+        self.mode = mode
+        if mode == "nerf":
+            freqs = (2.0 ** torch.arange(K, dtype=torch.float32)) * 2 * math.pi
+            B = torch.zeros(2 * K, 2)
+            B[:K, 0] = freqs
+            B[K:, 1] = freqs
+            self.out_extra = 4 * K  # 2K projections * 2 (sin+cos)
+        elif mode == "rff":
+            B = torch.randn(K, 2) * (2 * math.pi * sigma)
+            self.out_extra = 2 * K  # K projections * 2 (sin+cos)
+        else:
+            raise ValueError(f"unknown fourier mode {mode}")
+        self.register_buffer("B", B)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        pos = x[..., :2]                          # (..., 2)
+        proj = pos @ self.B.t()                   # (..., out_extra//2)
+        feats = torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)  # (..., out_extra)
+        return torch.cat([pos, feats, x[..., 2:]], dim=-1)
+
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -249,7 +292,7 @@ def _safe_accumulate_batch(
     return int(surf_mask.sum().item()), int(vol_mask.sum().item())
 
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, fourier_enc=None) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -269,6 +312,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            if fourier_enc is not None:
+                x_norm = fourier_enc(x_norm)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
@@ -459,6 +504,10 @@ class Config:
     ema_decay: float = 0.999
     compile_mode: str = ""  # empty = no compile (baseline behavior)
     slice_num: int = 64
+    use_fourier_features: bool = False
+    fourier_mode: str = "nerf"  # "nerf" or "rff"
+    fourier_K: int = 8
+    fourier_sigma: float = 10.0
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -492,8 +541,21 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+fourier_enc = None
+ff_extra = 0
+if cfg.use_fourier_features:
+    fourier_enc = FourierFeatures(
+        K=cfg.fourier_K, mode=cfg.fourier_mode, sigma=cfg.fourier_sigma,
+    ).to(device)
+    ff_extra = fourier_enc.out_extra
+new_x_dim = X_DIM + ff_extra
+print(
+    f"Fourier features: enabled={cfg.use_fourier_features}, mode={cfg.fourier_mode!r}, "
+    f"K={cfg.fourier_K}, sigma={cfg.fourier_sigma}, x_dim {X_DIM} -> {new_x_dim} (+{ff_extra})"
+)
+
 model_config = dict(
-    space_dim=2,
+    space_dim=2 + ff_extra,
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=128,
@@ -556,6 +618,8 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
+        if fourier_enc is not None:
+            x_norm = fourier_enc(x_norm)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
 
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
@@ -600,7 +664,7 @@ for epoch in range(MAX_EPOCHS):
     model.eval()
     ema.apply_to(model)
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, fourier_enc=fourier_enc)
         for name, loader in val_loaders.items()
     }
     ema.restore(model)
@@ -666,7 +730,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, fourier_enc=fourier_enc)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
