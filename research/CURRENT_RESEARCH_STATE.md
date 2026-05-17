@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 02:40 UTC (Round 4 active on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-17 02:55 UTC (Round 4 active on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
 
@@ -31,6 +31,14 @@ bs=4 wins decisively. All larger batches regress 13-29%:
 - bs=6: +13.02%, bs=8: +23.05%, bs=9: +29.06% (bs=10/12 OOM)
 - Mechanism: gradient CV does drop with larger batches, but step-count loss dominates within the 30-min budget. Fixed 500-step SF warmup compounds the deficit. **bs=4 is a fixed point of this stack.**
 
+## Additional Closure: SF clip×EMA Factorial R2 (#4019 alphonse — closed 02:53 UTC)
+
+R2 re-test at lr=2e-3: Arm C (clip=1.0, EMA off) wins by paired Δ = −0.430% vs control A — below 0.5% merge threshold. Absolute 54.4385 regresses +4.18% vs canonical 52.258.
+
+Two real mechanism findings retained:
+1. **EMA-off direction is real but attenuates with LR.** R1 (lr=5e-4): 0.61% paired. R2 (lr=2e-3): 0.43%. Predicted lr=3e-3 extrapolation: ~0.35% — below close threshold.
+2. **Clip × LR is the surprise.** clip=0.25 went from neutral at lr=5e-4 (+0.35%) to consistently harmful at lr=2e-3 (+0.9%). Under SF + higher LR, the clip threshold is an *effective-LR knob*. Keep clip=1.0 in canonical.
+
 ## Current Canonical Stack
 
 ```bash
@@ -44,19 +52,19 @@ python train.py \
 
 **val_avg/mae_surf_p: 52.258** | test 3-split: 51.206
 
-## In-Flight Experiments (~02:40 UTC)
+## In-Flight Experiments (~02:55 UTC)
 
-**Note on stale-LR runs:** Tanjiro/fern/alphonse/askeladd ran at lr=2e-3 (not the new canonical 3e-3). Their paired Δ results are still valid directionally. Gate: >0.5% paired Δ win → likely holds; may re-test at lr=3e-3 if margin is thin.
+**Note on stale-LR runs:** Tanjiro/fern/askeladd ran at lr=2e-3 (not the new canonical 3e-3). Their paired Δ results are still valid directionally. Gate: >0.5% paired Δ win → likely holds; may re-test at lr=3e-3 if margin is thin.
 
 | Student | PR | Hypothesis | Stack | Priority |
 |---------|----|----|----|----|
 | ⭐ **edward** | **#4246** | **LR extension sweep: {3e-3, 4e-3, 5e-3, 7e-3}** | SF-AdamW lr=3e-3 + --seed 1 | **HIGHEST — peak is beyond 3e-3; monotone signal says more headroom exists** |
 | ⭐ **frieren** | **#4248** | **n_layers depth sweep: {3, 4, 5, 7}** | SF-AdamW lr=3e-3 + --seed 1 (requires Config edit) | **HIGH — primary architecture axis, never swept; complement to askeladd's n_hidden** |
 | ⭐ **thorfinn** | **#4303** | **slice_num sweep: {32, 64, 96, 128}** | SF-AdamW lr=3e-3 + --seed 1 (requires Config edit) | **HIGH — third primary Transolver architecture axis; PhysicsAttention slice count never swept** |
+| ⭐ **alphonse** | **#4317** | **SF-AdamW betas 2×2: (beta1, beta2) ∈ {0.9, 0.95}×{0.99, 0.999}** | SF-AdamW lr=3e-3 + --seed 1 (requires Config edit) | **MED-HIGH — optimizer-internal axis never swept; PyTorch defaults may not be optimal at higher LR** |
 | ⭐ **askeladd** | **#4225** | **Model width sweep: n_hidden ∈ {96, 128, 160, 192}** | SF-AdamW lr=2e-3 + --seed 1 | **HIGH — ran at lr=2e-3; apply paired Δ gate when done** |
 | ⭐ **tanjiro** | **#4207** | **surf_weight sweep: {5, 10, 15, 25}** | SF-AdamW lr=2e-3 + --seed 1 | **HIGH — direct loss-balance lever; ran at lr=2e-3** |
 | ⭐ **fern** | **#4208** | **Dropout sweep: {0.0, 0.05, 0.10, 0.15}** | SF-AdamW lr=2e-3 + --seed 1 | **HIGH — untouched regularization axis; ran at lr=2e-3** |
-| **alphonse** | **#4019** | SF clip×EMA factorial R2 (2×2) | SF-AdamW lr=2e-3 + --seed 1 | R2 arms almost done (Arm D finishing ~02:45 UTC); apply paired Δ gate |
 | **nezuko** | **#4081** | FiLM head width: film_mlp_hidden ∈ {128, 192, 256} | SF-AdamW lr=5e-4 (stale) | Results diagnostic; paired Δ gate: >3% → re-test at lr=3e-3 |
 
 ## Merged Winners (Chronological)
@@ -78,11 +86,11 @@ python train.py \
 
 ## Priority Watch (Next Results to Land)
 
-1. **alphonse R2 #4019** — clip×EMA at lr=2e-3; Arm D ETA ~02:45 UTC. If EMA-off wins by >0.5% paired AND beats 52.258 → merge; otherwise close (EMA may already be off in the canonical stack since lr went to 3e-3).
-2. **edward LR extension #4246** — if 4e-3 or 5e-3 wins by ≥0.5% paired AND beats 52.258 → update canonical LR again
-3. **frieren n_layers #4248** — depth axis; if 7-layer wins → scale test at n_layers=9
-4. **tanjiro surf_weight #4207** + **fern dropout #4208** + **askeladd n_hidden #4225** — stale LR; apply paired Δ gate
-5. **thorfinn slice_num #4303** — just assigned; Transolver physical-slice axis
+1. **edward LR extension #4246** — if 4e-3 or 5e-3 wins by ≥0.5% paired AND beats 52.258 → update canonical LR again
+2. **frieren n_layers #4248** — depth axis; if 7-layer wins → scale test at n_layers=9
+3. **tanjiro surf_weight #4207** + **fern dropout #4208** + **askeladd n_hidden #4225** — stale LR; apply paired Δ gate
+4. **thorfinn slice_num #4303** — Transolver physical-slice axis (just assigned)
+5. **alphonse SF betas #4317** — optimizer-internal 2×2 factorial at canonical (just assigned)
 6. **nezuko FiLM width #4081** — stale LR; apply >3% gate
 
 ## Falsified / Closed Hypotheses
@@ -97,3 +105,4 @@ python train.py \
 | #4149 | Lion LR sweep {7.5e-5, 1.5e-4, 3e-4, 6e-4} | Best Lion +11.64% behind SF | SF "4× LR" does not transfer to Lion+cosine |
 | **#4144** | **Lion+SF composition (3-way)** | **C1: +75.6% regression; C2: catastrophic divergence** | **Lion+SF mechanistically incompatible; Lion track fully exhausted** |
 | **#4114** | **Batch size sweep {4, 6, 8, 9}** | **bs=4 wins; larger batches +13-29% regression** | **Step-count loss dominates; gradient-CV benefit irrelevant within budget; bs=4 is fixed point** |
+| **#4019** | **SF clip×EMA factorial R2 (lr=2e-3)** | **EMA-off wins paired Δ 0.43% but absolute regresses +4.18% vs canonical** | **EMA-off direction attenuates with LR (0.61% → 0.43% → ~0.35% extrap); clip × LR is the real interaction; canonical retains EMA on + clip=1.0** |

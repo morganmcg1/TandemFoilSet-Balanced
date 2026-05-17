@@ -2640,3 +2640,42 @@ Hypothesis **decisively rejected**. bs=4 wins by 13-29% paired Δ across all spl
 ### Follow-up
 
 **thorfinn → new assignment #4303**: slice_num sweep {32, 64, 96, 128} at SF-AdamW lr=3e-3 + seed=1. Third primary Transolver architecture axis (alongside n_hidden and n_layers).
+
+---
+
+## 2026-05-17 02:53 — PR #4019 [CLOSED/NULL R2]: SF clip×EMA factorial — R2 re-test at lr=2e-3
+
+- **Student branch:** `charliepai2i48h4-alphonse/sf-adamw-clip-ema-compose`
+- **R1 result (closed earlier, sent back):** lr=5e-4, paired Δ for EMA-off (Arm C vs A) = −0.610%; below merge but consistent across 3/4 splits.
+- **R2 (this round) stack:** SF-AdamW lr=2e-3 + paired --seed 1, 2×2 over {clip=1.0, 0.25} × {EMA on, off}.
+
+### R2 Results
+
+| Arm | clip | EMA | val_avg/mae_surf_p | Δ vs A (paired) | Δ vs 52.258 (canonical) |
+|---|---:|:---:|---:|---:|---:|
+| A (control) | 1.0 | on | 54.6735 | — | +4.625% |
+| B | 0.25 | on | 55.1499 | +0.871% | +5.537% |
+| **C (winner)** | 1.0 | off | 54.4385 | **−0.430%** | +4.176% |
+| D | 0.25 | off | 54.9295 | +0.468% | +5.115% |
+
+### Two mechanism findings
+
+1. **EMA-off direction holds but attenuates.** R1 paired Δ at lr=5e-4: −0.610%. R2 paired Δ at lr=2e-3: −0.430%. Extrapolating to lr=3e-3: ~−0.35%. SF's Polyak averaging absorbs more of EMA's averaging role as LR scales up; external EMA(0.999) → less load-bearing.
+2. **Clip × LR interaction is the surprise.** clip=0.25 vs clip=1.0 swung from neutral at lr=5e-4 (+0.35%) to consistently harmful at lr=2e-3 (+0.9%). Under SF + higher LR, the clip threshold is an effective-LR knob, not a passive guard rail. Keep clip=1.0 in canonical.
+
+### Conclusions
+
+Closed without merge: Arm C (best) regresses +4.18% vs current canonical 52.258 (because the canonical moved from lr=2e-3 to lr=3e-3 after the send-back was authored). Paired Δ (0.43%) is below the 0.5% merge threshold. EMA-off direction is real but operationally below merge bar at any LR tested.
+
+**Canonical decision:** Keep `--use_ema --ema_decay 0.999` AND `--grad_clip_norm 1.0` in the canonical stack. EMA gain at lr=3e-3 (extrapolated ~0.35%) is below merge threshold; not worth a third round on the same axis.
+
+### Metric artifacts (committed)
+
+- Arm A: `models/model-charliepai2i48h4-alphonse-sf-r4-arma-clip1_ema-lr2e3-20260517-002510/metrics.jsonl`
+- Arm B: `models/model-charliepai2i48h4-alphonse-sf-r4-armb-clip0_25_ema-lr2e3-20260517-010040/metrics.jsonl`
+- Arm C: `models/model-charliepai2i48h4-alphonse-sf-r4-armc-clip1-noema-lr2e3-20260517-013531/metrics.jsonl`
+- Arm D: `models/model-charliepai2i48h4-alphonse-sf-r4-armd-clip0_25-noema-lr2e3-20260517-021025/metrics.jsonl`
+
+### Follow-up
+
+**alphonse → new assignment #4317**: SF-AdamW betas sweep at lr=3e-3, 2×2 over {beta1: 0.9, 0.95} × {beta2: 0.99, 0.999}. First optimizer-internal axis ever explored in this track. Requires `--sf_beta1`/`--sf_beta2` infra commit.
