@@ -1,5 +1,38 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-17 04:00 — PR #4321 CLOSED (d_head=22 fusion failure) + #4354 alphonse n_head=2 assigned
+
+### #4321 alphonse Lion + n_head=8 (d_head=22) — **ABORTED at ep4 (CLOSED)**
+
+- **Student:** willowpai2i48h4-alphonse (branch: `willowpai2i48h4-alphonse/lion-n-head-8`)
+- **Hypothesis:** Narrower attention heads (n_head=8 at nh=176 → d_head=22) might give the model more attention "subspaces" to specialize per test split.
+
+#### Why aborted
+
+| epoch | wall (s) | peak VRAM | val |
+|------:|---------:|----------:|----:|
+| 1 | 175 | 57.7 GB | 176.10 |
+| 2 | 172 | 57.7 GB | 128.79 |
+| 3 | 168 | 57.7 GB | 108.86 |
+| 4 | 171 | 57.7 GB | 89.97 |
+
+**Per-epoch wall: 171.5 s (vs 131 s baseline, +31%). Peak VRAM: 57.7 GB (vs 44.6 GB baseline, +29%).**
+
+Per PR's predetermined sanity check (`If per-epoch wall > 145 s, abort`), student correctly killed at ep4. Root cause: `d_head=22` is not aligned to CUDA SDPA/cuBLAS GEMM tile dims (8/16/32), forcing slower kernel paths.
+
+- **W&B run:** `5nn2sb4e` (4 epochs only — do not use)
+- **14-epoch budget projection:** 14 × 171.5 s = 40 min → would have exceeded 30-min cap
+
+#### Decision: CLOSE (hardware-bound, untestable at this config)
+
+The n_head=8 hypothesis is effectively un-testable at nh=176 on this hardware.
+
+#### Follow-up: #4354 alphonse Lion + n_head=2 (d_head=88, CUDA-aligned)
+
+Pivoting to the opposite direction. d_head=88 = 8×11 is perfectly aligned. Tests "fewer, wider heads" hypothesis. Single CLI flag.
+
+---
+
 ## 2026-05-17 03:30 — PR #4238 CLOSED (AdamW obsoleted by Lion) + #4324 askeladd Lion-wd sweep assigned
 
 ### #4238 askeladd AdamW beta1 sweep (0.85, 0.95) at nh=176+bf16+ep18 — **CLOSED**
