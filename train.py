@@ -135,7 +135,10 @@ class PhysicsAttention(nn.Module):
             .permute(0, 2, 1, 3)
             .contiguous()
         )
-        slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        logits = self.in_project_slice(x_mid) / self.temperature
+        if self.training and getattr(self, "slice_noise_std", 0.0) > 0.0:
+            logits = logits + torch.randn_like(logits) * self.slice_noise_std
+        slice_weights = self.softmax(logits)
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -487,6 +490,7 @@ class Config:
     slice_num: int = 64
     use_swiglu: bool = False
     swiglu_hidden_mult: float = 1.0  # 1.0 = full hidden; 0.6667 = param-matched
+    slice_routing_noise_std: float = 0.0  # std of Gaussian noise added to slice routing logits during training. 0 = off.
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -536,6 +540,13 @@ model_config = dict(
 )
 
 model = Transolver(**model_config).to(device)
+if cfg.slice_routing_noise_std > 0.0:
+    n_attn = 0
+    for module in model.modules():
+        if hasattr(module, "in_project_slice"):
+            module.slice_noise_std = cfg.slice_routing_noise_std
+            n_attn += 1
+    print(f"slice_routing_noise_std={cfg.slice_routing_noise_std} (set on {n_attn} PhysicsAttention layers)")
 n_params = sum(p.numel() for p in model.parameters())
 n_mlp_params = sum(
     p.numel()
