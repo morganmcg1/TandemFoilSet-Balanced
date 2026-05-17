@@ -1,5 +1,65 @@
 # SENPAI Research Results
 
+## 2026-05-17 ~02:50 UTC — Round 21: MERGE #4249 (Lookahead+β2=0.95) + 3 closures + 4 new assignments
+
+### MERGED: PR #4249 (nezuko) — Lookahead+β2=0.95 on slice=8 — NEW BASELINE val=52.944/test=52.752
+
+Run `5qg8ex1g`: val=52.9444 (−2.49% vs Lookahead-only baseline 54.30), test_3split=52.7523 (−0.24%). Both diagnostic thresholds cleared:
+- val_geom_camber_rc=64.6348 (−5.99% vs Lookahead-only 68.75; best ever on branch)
+- val_re_rand=50.6698 (−3.58% vs Lookahead-only 52.55)
+
+| Split | Lookahead+β2=0.95 | Lookahead-only | Δ |
+|---|---|---|---|
+| val_single_in_dist | 63.841 | 63.937 | −0.15% |
+| val_geom_camber_rc | **64.635** | 68.753 | **−5.99%** |
+| val_geom_camber_cruise | 32.631 | 31.954 | +2.12% |
+| val_re_rand | 50.670 | 52.552 | −3.58% |
+
+**Mechanism**: Lookahead (trajectory-averaging, k=5 α=0.5) and β2=0.95 (per-parameter step-size adaptation, 13-step half-life) operate at different abstraction levels — additively compound. β2=0.95 specifically restores AND extends the camber_rc improvement that Lookahead alone regressed. Val_geom_camber_rc is now 64.63 — below even the old alphonse baseline's 67.13, best on branch.
+
+### Closed: PR #4283 (askeladd) — Lookahead+slice=16+β2=0.95 triple compound
+
+Run `kf4wdndo`: val=55.006 (+1.30% vs new baseline), test=54.008 (+2.14%). Both FM1 and FM2 confirmed.
+
+**Key finding**: β2=0.95 ANTI-COMPOUNDS with slice=16 on camber_rc. Triple val_geom_camber_rc=67.54 is WORSE than Lookahead+slice=16 alone (66.52). The 4-way comparison reveals the mechanism:
+- slice=16 alone: camber_rc=66.52 (resolution mechanism)
+- β2=0.95 alone (on slice=16): camber_rc=67.13 (from alphonse)
+- Lookahead+β2+slice=16: camber_rc=67.54 → β2=0.95's fast-EMA destabilizes the steady state that slice=16's high-resolution partitioning requires
+
+**Paper finding**: axis orthogonality is per-mechanism, not per-hyperparameter. β2=0.95 is orthogonal to Lookahead on slice=8 (compounds), but interacts destructively with slice=16 on camber_rc.
+
+### Closed: PR #4267 (fern) — AoA rotation augmentation ±5°
+
+Run `xk9elxa8`: val=56.069 (+3.26%), test=56.605 (+7.04%). FM1 triggered (val>55). AoA rotation axis fully closed.
+- val_geom_camber_rc improved only −1.04% (from 68.75 → 68.04) — too small
+- val_geom_camber_cruise REGRESSED +17.77% — the targeted camber challenge is geometric shape diversity (not AoA diversity)
+- Augmentation was mechanically correct (identity check passed, θ bounded in ±5°)
+- Mechanism failure: AoA augmentation is the wrong instrument for camber_rc extrapolation
+
+AoA rotation axis closure: ±15° (#4163, physics inconsistent) + ±5° (#4267, cruise regression) → fully closed. Camber_rc extrapolation requires GEOMETRIC not AoA diversity.
+
+### Closed: PR #4204 (frieren) — per-sample peak-|p| reweight α=1.0
+
+Runs `0m6vvt6g`, `uxeu5aty`: val=64.40 (+14.1%), all 4 splits regressed, camber_rc specifically +7.08 (second largest regression). Both seeds robust.
+
+**Mechanism diagnosis (student's analysis, paper-quality)**: per-batch w_max/w_min = 19.7× median, 338× maximum. α=1.0 silences ~80% of training samples rather than gently up-weighting extremes. Backbone starvation: model loses the representational base that even extreme-camber samples depend on. The failure: using TARGET output (peak-|p|) as reweighting feature creates circular feedback — amplifies gradient on samples we haven't learned yet while starving samples that build the representation needed to learn them.
+
+**Generalization**: per-sample loss reweighting by output-distribution features is unstable at α≥1.0 and likely fragile at any α>0 due to feedback circularity. Per-sample reweighting axis closed.
+
+### New assignments — Round 21 on Lookahead+β2=0.95 baseline
+
+| PR | Student | Hypothesis | Mechanism |
+|----|---------|-----------|-----------|
+| **#4307** | **nezuko** | Lookahead α-bracket (α=0.3, α=0.7) | Characterizes Lookahead α on new baseline; complements alphonse's k-bracket |
+| **#4309** | **askeladd** | n_head=4 architecture sweep | First architecture test on new optimizer stack; richer attention subspaces |
+| **#4311** | **fern** | Camber-stratified sampler (3× oversample) | Frequency-based targeting (not loss-magnitude); avoids backbone starvation of #4204 |
+| **#4313** | **frieren** | n_hidden=192 model capacity | Tests if 0.70M model is capacity-limited post-optimizer; backbone-starvation finding motivated this |
+
+### GPU utilization
+8/8 students assigned, 0 idle as of 02:50 UTC.
+
+---
+
 ## 2026-05-17 ~02:00 UTC — Round 20: 2 closures (#4250 slice=16, #4219 β1=0.95), 1 send-back (#4151), 2 new assignments (#4283, #4284)
 
 ### Closed: PR #4250 (askeladd) — Lookahead + slice=16 (β2=0.999)
