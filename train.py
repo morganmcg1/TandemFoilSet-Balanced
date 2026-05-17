@@ -138,7 +138,8 @@ class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
     def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64,
-                 use_qk_norm=False):
+                 use_qk_norm=False, use_rope_2d=False, rope_d_dim=32,
+                 rope_learnable_freq=False):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
@@ -160,13 +161,73 @@ class PhysicsAttention(nn.Module):
             self.k_norm = nn.LayerNorm(dim_head)
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
 
+        # 2D RoPE on slice-token Q/K. Slice tokens are weighted averages of node
+        # features; their "position" is the slice-weight centroid of node coords.
+        # Apply rotation on first rope_d_dim head dims (half x-axis, half z-axis).
+        self.use_rope_2d = use_rope_2d
+        if use_rope_2d:
+            assert rope_d_dim % 4 == 0, f"rope_d_dim must be divisible by 4, got {rope_d_dim}"
+            assert rope_d_dim <= dim_head, f"rope_d_dim ({rope_d_dim}) must be <= dim_head ({dim_head})"
+            self.rope_d_dim = rope_d_dim
+            n_freqs = rope_d_dim // 4  # freq pairs per axis; total dims = 2 axes * 2 dims/pair * n_freqs
+            base_freqs = 10.0 ** (-torch.arange(n_freqs).float() * 2.0 / n_freqs)
+            if rope_learnable_freq:
+                self.rope_freq_x = nn.Parameter(base_freqs.clone())
+                self.rope_freq_z = nn.Parameter(base_freqs.clone())
+            else:
+                self.register_buffer("rope_freq_x", base_freqs.clone(), persistent=False)
+                self.register_buffer("rope_freq_z", base_freqs.clone(), persistent=False)
+
         # Set _log_diag=True before a forward to capture per-vector L2-norm
         # diagnostics into self._diag (mean over [B, heads, slice_num]). The
         # flag is consumed (reset) inside the forward to avoid stale reads.
         self._log_diag: bool = False
         self._diag: dict[str, float] = {}
 
-    def forward(self, x):
+    def _apply_rope_2d(self, q, k, slice_weights, coords, mask):
+        """Rotate first rope_d_dim head dims of Q/K by slice-centroid (x, z).
+
+        Slice centroid is the slice-weight-weighted mean of node coords, computed
+        per head (slice weights vary by head). Padding nodes are masked out.
+        Rotation is computed in fp32 for numerical stability.
+        """
+        B, heads, S, _ = q.shape
+        d = self.rope_d_dim
+        d_per_axis = d // 2  # dims for x-rope; same for z-rope
+
+        # Centroid: mask padding nodes from slice-weight aggregation.
+        mw = slice_weights * mask[:, None, :, None].to(slice_weights.dtype)
+        norm_m = mw.sum(2)  # (B, heads, S)
+        # (B, heads, S, 2): per-(batch, head, slice) centroid in [0, 1] coord space.
+        slice_coords = torch.einsum("bhng,bnc->bhgc", mw, coords) / (norm_m.unsqueeze(-1) + 1e-5)
+
+        # Phases (fp32). theta has shape (B, heads, S, n_freqs).
+        sc = slice_coords.float()
+        fx = self.rope_freq_x.float()
+        fz = self.rope_freq_z.float()
+        theta_x = sc[..., 0:1] * fx
+        theta_z = sc[..., 1:2] * fz
+        cos_x, sin_x = torch.cos(theta_x), torch.sin(theta_x)
+        cos_z, sin_z = torch.cos(theta_z), torch.sin(theta_z)
+
+        def rotate(t, cos, sin):
+            # t: (B, heads, S, d_per_axis); pair adjacent dims, rotate by (cos, sin).
+            dt = t.dtype
+            tf = t.float().reshape(B, heads, S, d_per_axis // 2, 2)
+            a = tf[..., 0]
+            b = tf[..., 1]
+            out = torch.stack([a * cos - b * sin, a * sin + b * cos], dim=-1)
+            return out.reshape(B, heads, S, d_per_axis).to(dt)
+
+        q_x = rotate(q[..., :d_per_axis], cos_x, sin_x)
+        q_z = rotate(q[..., d_per_axis:d], cos_z, sin_z)
+        k_x = rotate(k[..., :d_per_axis], cos_x, sin_x)
+        k_z = rotate(k[..., d_per_axis:d], cos_z, sin_z)
+        q_rot = torch.cat([q_x, q_z, q[..., d:]], dim=-1)
+        k_rot = torch.cat([k_x, k_z, k[..., d:]], dim=-1)
+        return q_rot, k_rot
+
+    def forward(self, x, coords=None, mask=None):
         B, N, _ = x.shape
 
         fx_mid = (
@@ -206,6 +267,26 @@ class PhysicsAttention(nn.Module):
             self._diag["q_norm_post"] = q.detach().float().norm(dim=-1).mean().item()
             self._diag["k_norm_post"] = k.detach().float().norm(dim=-1).mean().item()
 
+        if self.use_rope_2d:
+            # Capture pre-rotation attention-logit stats for the entropy/magnitude diag.
+            if log_diag:
+                with torch.no_grad():
+                    qk_pre = torch.einsum("bhgd,bhfd->bhgf", q.float(), k.float()) / math.sqrt(self.dim_head)
+                    self._diag["logits_pre_mean"] = qk_pre.mean().item()
+                    self._diag["logits_pre_std"] = qk_pre.std().item()
+                    attn_pre = F.softmax(qk_pre, dim=-1)
+                    self._diag["entropy_pre"] = -(attn_pre * (attn_pre + 1e-12).log()).sum(-1).mean().item()
+            q, k = self._apply_rope_2d(q, k, slice_weights, coords, mask)
+            if log_diag:
+                with torch.no_grad():
+                    qk_post = torch.einsum("bhgd,bhfd->bhgf", q.float(), k.float()) / math.sqrt(self.dim_head)
+                    self._diag["logits_post_mean"] = qk_post.mean().item()
+                    self._diag["logits_post_std"] = qk_post.std().item()
+                    attn_post = F.softmax(qk_post, dim=-1)
+                    self._diag["entropy_post"] = -(attn_post * (attn_post + 1e-12).log()).sum(-1).mean().item()
+                    self._diag["q_norm_post_rope"] = q.detach().float().norm(dim=-1).mean().item()
+                    self._diag["k_norm_post_rope"] = k.detach().float().norm(dim=-1).mean().item()
+
         out_slice = F.scaled_dot_product_attention(
             q, k, v,
             dropout_p=self.dropout.p if self.training else 0.0,
@@ -220,13 +301,16 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 use_qk_norm=False):
+                 use_qk_norm=False, use_rope_2d=False, rope_d_dim=32,
+                 rope_learnable_freq=False):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num, use_qk_norm=use_qk_norm,
+            use_rope_2d=use_rope_2d, rope_d_dim=rope_d_dim,
+            rope_learnable_freq=rope_learnable_freq,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = SwiGLUFFN(hidden_dim, hidden_dim * mlp_ratio, hidden_dim)
@@ -237,8 +321,8 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
+    def forward(self, fx, coords=None, mask=None):
+        fx = self.attn(self.ln_1(fx), coords=coords, mask=mask) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
@@ -251,7 +335,8 @@ class Transolver(nn.Module):
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
-                 use_qk_norm=False):
+                 use_qk_norm=False, use_rope_2d=False, rope_d_dim=32,
+                 rope_learnable_freq=False, coord_range=None):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -267,12 +352,27 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        self.use_rope_2d = use_rope_2d
+        if use_rope_2d:
+            assert coord_range is not None, "use_rope_2d requires coord_range = (x_min, x_max, z_min, z_max)"
+            # coord_lo / coord_hi map z-scored input coords to [0, 1] for RoPE.
+            self.register_buffer(
+                "coord_lo",
+                torch.tensor([coord_range[0], coord_range[2]], dtype=torch.float32),
+                persistent=True,
+            )
+            self.register_buffer(
+                "coord_hi",
+                torch.tensor([coord_range[1], coord_range[3]], dtype=torch.float32),
+                persistent=True,
+            )
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
-                use_qk_norm=use_qk_norm,
+                use_qk_norm=use_qk_norm, use_rope_2d=use_rope_2d,
+                rope_d_dim=rope_d_dim, rope_learnable_freq=rope_learnable_freq,
             )
             for i in range(n_layers)
         ])
@@ -291,8 +391,16 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
+        coords = mask = None
+        if self.use_rope_2d:
+            # data["coords"]: (B, N, 2) z-scored. Map to [0, 1] via cached range,
+            # then clamp so out-of-distribution test meshes don't blow past the box.
+            coords_raw = data["coords"]
+            denom = (self.coord_hi - self.coord_lo).clamp(min=1e-8)
+            coords = ((coords_raw - self.coord_lo) / denom).clamp(0.0, 1.0)
+            mask = data["mask"]
         for block in self.blocks:
-            fx = block(fx)
+            fx = block(fx, coords=coords, mask=mask)
         return {"preds": fx}
 
 
@@ -338,8 +446,12 @@ def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_typ
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             x_enc = encode_inputs(x_norm, num_freq)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            model_input = {"x": x_enc}
+            if getattr(model, "use_rope_2d", False):
+                model_input["coords"] = x_norm[..., :2]
+                model_input["mask"] = mask
             with amp_ctx:
-                pred = model({"x": x_enc})["preds"]
+                pred = model(model_input)["preds"]
             # Cast model output back to fp32 for metrics/loss numerical comparability
             pred = pred.float()
 
@@ -566,6 +678,10 @@ class Config:
     lion_lr: float = 1e-4  # Lion lr; canonical: AdamW_lr / 3..10
     lion_wd: float = 1e-3  # Lion wd; canonical: AdamW_wd * 3..10
     use_qk_norm: bool = False  # ViT-22B-style LayerNorm(head_dim) on Q and K before SDPA
+    use_rope_2d: bool = False  # 2D RoPE on Q/K from slice-centroid (x, z) coords
+    rope_d_dim: int = 32  # number of head dims rotated by RoPE (must be /4; half x, half z)
+    rope_learnable_freq: bool = False  # if True, RoPE frequencies are learnable parameters
+    rope_coord_sample: int = 200  # # train samples scanned to estimate coord min/max (RoPE only)
 
 
 cfg = sp.parse(Config)
@@ -576,6 +692,41 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
+
+
+def compute_coord_range(train_ds, x_mean: torch.Tensor, x_std: torch.Tensor,
+                        n_samples: int) -> tuple[float, float, float, float]:
+    """Scan a sample of train files to estimate (x_min, x_max, z_min, z_max) of
+    z-scored coords. RoPE-2D maps these to [0, 1] before computing phases.
+    Sampling (vs full scan) cuts startup cost from minutes to seconds; the min/max
+    is stable across samples because every mesh covers a similar bounding box.
+    """
+    files = train_ds.files
+    if n_samples > 0 and n_samples < len(files):
+        # Deterministic stride sample so reruns give identical model buffers.
+        step = max(1, len(files) // n_samples)
+        files = files[::step][:n_samples]
+    xm = x_mean[:2].cpu()
+    xs = x_std[:2].cpu()
+    lo = torch.full((2,), float("inf"))
+    hi = torch.full((2,), float("-inf"))
+    for f in files:
+        s = torch.load(f, weights_only=True)
+        c = (s["x"][:, :2] - xm) / xs
+        lo = torch.minimum(lo, c.min(dim=0).values)
+        hi = torch.maximum(hi, c.max(dim=0).values)
+    return lo[0].item(), hi[0].item(), lo[1].item(), hi[1].item()
+
+
+coord_range: tuple[float, float, float, float] | None = None
+if cfg.use_rope_2d:
+    t0 = time.time()
+    coord_range = compute_coord_range(train_ds, stats["x_mean"], stats["x_std"], cfg.rope_coord_sample)
+    print(
+        f"Coord range (z-scored, sampled {cfg.rope_coord_sample} files in {time.time()-t0:.1f}s): "
+        f"x=[{coord_range[0]:.3f}, {coord_range[1]:.3f}]  z=[{coord_range[2]:.3f}, {coord_range[3]:.3f}]"
+    )
+
 stats = {k: v.to(device) for k, v in stats.items()}
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
@@ -605,11 +756,14 @@ model_config = dict(
     slice_num=64,
     mlp_ratio=cfg.mlp_ratio,
     use_qk_norm=cfg.use_qk_norm,
+    use_rope_2d=cfg.use_rope_2d,
+    rope_d_dim=cfg.rope_d_dim,
+    rope_learnable_freq=cfg.rope_learnable_freq,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
 
-model = Transolver(**model_config).to(device)
+model = Transolver(coord_range=coord_range, **model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 ffn_inner = next(m.inner for m in model.modules() if isinstance(m, SwiGLUFFN))
 print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN=SwiGLU inner={ffn_inner})")
@@ -704,6 +858,10 @@ for epoch in range(MAX_EPOCHS):
             x_norm[..., :2] = x_norm[..., :2] + noise
         x_enc = encode_inputs(x_norm, cfg.num_freq)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        model_input = {"x": x_enc}
+        if cfg.use_rope_2d:
+            model_input["coords"] = x_norm[..., :2]
+            model_input["mask"] = mask
 
         # Capture Q/K norm diagnostics on the first batch of each epoch.
         # Cheap: one extra .item() sync per attention layer, only on this batch.
@@ -713,7 +871,7 @@ for epoch in range(MAX_EPOCHS):
                 blk.attn._log_diag = True
 
         with train_amp_ctx():
-            pred = model({"x": x_enc})["preds"]
+            pred = model(model_input)["preds"]
         # Cast model output back to fp32 so loss/metric arithmetic stays in fp32
         pred = pred.float()
         err = _pointwise_loss(pred, y_norm, cfg.loss_type)
