@@ -1,5 +1,66 @@
 # SENPAI Research Results
 
+## 2026-05-17 ~05:55 UTC — Round 26: Close #4347 (mixup null) + #4251 (lr=1e-3) + #4151 (LLRD) + 3 new assignments
+
+### Closed: PR #4347 (fern) — Camber-bridging feature-space mixup (Beta(0.4,0.4), prob=0.5)
+
+Run `2o1yxie6`: val=58.0465, test=58.2574. **+13.1% val WORSE, +12.3% test WORSE vs new k=3 baseline (51.31/51.89).**
+
+| Metric | Mixup (this) | k=3 baseline | Δ |
+|---|---|---|---|
+| val_avg | 58.047 | 51.307 | +13.1% WORSE |
+| test_3split | 58.257 | 51.886 | +12.3% WORSE |
+| val_geom_camber_rc | 69.18 | 63.85 | +8.3% WORSE |
+| test_geom_camber_rc | 65.11 | 60.07 | +8.4% WORSE |
+
+**Mechanism (precision diagnostic):**
+- Beta(0.4,0.4) U-shape verified (mean 0.502, std 0.373) — implementation correct
+- Only **16.5% of mixes land in held-out [6,7,8] range** — because racecar_tandem distribution is M∈{0,4,5}-heavy; 83.5% of mixes interpolate within the training distribution
+- Train loss HIGHER (regularization correctly active) — not an implementation bug
+- Final-4-epoch slopes identical (baseline: −6.94/epoch, mixup: −6.78/epoch) → **steady-state regression, NOT undertraining**
+- ALL splits regress 4-7 pts (broad-spectrum regularization harm), not selectively
+
+**Paper-appendix finding (paper-quality null result):**
+- #4311 (frequency reweighting): val improved target, test regressed → overfit to oversampled M=9
+- #4347 (feature-space mixup): val AND test both regressed broadly → not even improving on val
+- **DATA-SIDE AXIS CLOSED**: bridging held-out M∈{6,7,8} is NOT solvable via data-side interventions on existing M∈{0,...,5,9} training distribution. Points firmly toward architectural conditioning (FiLM on M, camber-aware attention).
+
+### Closed: PR #4251 (edward) — Lookahead+lr=1e-3 (high LR under Lookahead stability)
+
+4 seeds: val∈[55.15, 57.40], test=55.43 (primary). ALL vs OLD Lookahead-only baseline (54.30/52.88); vs NEW k=3 baseline (51.31/51.89) → +7.5% val WORSE (best seed), +6.8% test WORSE.
+
+| Run | val | Δ vs OLD baseline | Δ vs NEW baseline |
+|---|---|---|---|
+| best of 4 seeds | 55.15 | +0.85 WORSE | +7.5% WORSE |
+| mean of 4 seeds | 55.96 | +1.66 WORSE | +9.1% WORSE |
+
+**Mechanism:**
+- No early divergence (good) — Lookahead's divergence-prevention property confirmed (Zhang et al. 2019)
+- 7× seed-to-seed variance vs lr=5e-4 baseline (spread=2.25 vs 0.30) — Lookahead's stabilization is PARTIAL at lr=1e-3
+- Converges to **qualitatively worse minimum**, not a divergent one
+- Hard OOD splits most affected (val_single_in_dist +3.1, camber_rc +2.0, cruise +2.1); re_rand flat
+
+**Axis closed:** 'Lookahead unlocks robustness at high lr, not accuracy.' Default lr=5e-4 stays optimal under Lookahead.
+
+### Closed: PR #4151 (thorfinn) — LLRD=0.85/0.95 on Lookahead stack
+
+Best compound result was LLRD=0.85+Lookahead k=5 (run `fiwtqoos`): val=53.98 (−0.59% vs old k=5 baseline), but test=53.34 (+0.88% REGRESSION). Cannot beat new k=3 baseline (51.31) — expected val ~52.5-53.5 on a LLRD=0.95 retest, still 2-4% worse.
+
+**Key mechanism finding (thorfinn's grad-norm analysis, paper-quality):**
+- LLRD throttles input encoder in all 3 stack variants tested (slice=8, slice=16+β2=0.95, Lookahead k=5)
+- Under Lookahead, depth-0 mean grad norm increases 15.44 vs 9.00 in plain AdamW → Lookahead's slow-weight anchoring amplifies fast-weight gradient magnitudes at the input encoder; LLRD's 0.52× throttle becomes MORE redundant, not less
+- LLRD compounds cleanly with slice/β2 but is **substitutive with Lookahead** on test (sub-linear compounding on val, regression on test)
+
+**Axis closed:** LLRD is a useful auxiliary technique for non-Lookahead stacks (paper appendix material) but does not compound additively with Lookahead k=3.
+
+### New assignments: 3 experiments targeting untested axes on k=3 baseline
+
+- **PR #4400 (fern)**: Cosine LR eta_min floor (5e-5, 1e-5) — every run is still descending at 30-min cutoff; keeping LR>0 at end prevents near-zero late steps
+- **PR #4401 (edward)**: AdamW eps bracket (1e-7, 1e-9) — numerical stability denominator, never tested on any Lookahead variant; interaction with k=3's faster trajectory updates is unexplored
+- **PR #4404 (thorfinn)**: MLP ratio bracket (1.0, 1.667) — smaller FFN = faster epochs, more iterations in 30-min budget; n_hidden was budget-bound (#4313) but mlp_ratio=1.0 gives only ~15% param reduction vs 123% there
+
+---
+
 ## 2026-05-17 ~05:30 UTC — Round 25: Close #4313 (n_hidden=192 regression) + 1 new assignment (#4387 frieren slice_num bracket on k=3)
 
 ### Closed: PR #4313 (frieren) — n_hidden=192 model capacity on Lookahead+β2=0.95

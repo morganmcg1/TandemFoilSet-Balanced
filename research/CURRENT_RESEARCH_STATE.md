@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-17 ~05:30 UTC
+- **Last updated:** 2026-05-17 ~05:55 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
-- **Most recent direction from human researcher team:** None (no open issues at 05:30 UTC)
+- **Most recent direction from human researcher team:** None (no open issues at 05:55 UTC)
 
 ## Current best baseline — Lookahead k=3 (PR #4266 alphonse, merged ~04:50 UTC)
 
@@ -21,16 +21,6 @@ Per-split val (PR #4266, run `0aj92l9d`):
 | val_re_rand | 51.159 | +0.97% |
 | **val_avg** | **51.3066** | **−3.09%** |
 
-Per-split test (PR #4266):
-
-| Split | mae_surf_p |
-|---|---|
-| test_single_in_dist | 52.578 |
-| test_geom_camber_rc | 60.074 |
-| test_geom_camber_cruise | NaN (fleet-wide bug) |
-| test_re_rand | 43.007 |
-| **test_3split** | **51.8862** |
-
 Reproduce:
 ```bash
 cd target/ && python train.py \
@@ -40,8 +30,6 @@ cd target/ && python train.py \
   --use_lookahead --lookahead_k 3 --lookahead_alpha 0.5 \
   --agent <student>
 ```
-
-**Key finding**: k=3+β2=0.999 BEATS k=5+β2=0.95 (previous compound baseline 52.94). k-axis is a stronger lever than β2-axis at the 30-min budget.
 
 ## Stack progression
 
@@ -59,84 +47,89 @@ Total improvement since raw seed: **−64.3%** on val.
 
 | PR | Student | Hypothesis | On baseline | Status |
 |----|---------|-----------|-------------|--------|
-| **#4369** | **alphonse** | k=3 + β2=0.95 compound | NEW k=3 baseline | WIP — expected val ≈ 50.0 if fully additive; highest expected value in flight |
-| **#4370** | **tanjiro** | k=2+k=4 fine bracket | NEW k=3 baseline | WIP — characterizes k-axis limit; does trend continue below k=3? |
-| **#4387** | **frieren** | slice_num bracket (4, 12) | NEW k=3 baseline | NEW — geometry-resolution axis untested under k=3 dynamics |
-| **#4347** | **fern** | Camber-bridging mixup within racecar_tandem (Beta(0.4,0.4)) | k=5+β2=0.95 baseline | WIP — data-side camber_rc intervention |
-| **#4309** | **askeladd** | n_head=4 architecture sweep | k=5+β2=0.95 baseline | WIP — needs to beat NEW baseline (51.31) |
-| **#4307** | **nezuko** | Lookahead α-bracket sweep (α=0.3, α=0.7) | k=5+β2=0.95 baseline | WIP — needs to beat NEW baseline (51.31) |
-| **#4151** | **thorfinn** | LLRD=0.95 + Lookahead (gentler decay retest) | Lookahead-only baseline | WIP — very unlikely to beat 51.31 |
-| **#4251** | **edward** | Lookahead + lr=1e-3 | Lookahead-only baseline | WIP — very unlikely to beat 51.31 |
+| **#4369** | **alphonse** | k=3 + β2=0.95 compound | NEW k=3 baseline | WIP — highest expected value; could reach val≈50.0 if fully additive |
+| **#4370** | **tanjiro** | k=2+k=4 fine bracket | NEW k=3 baseline | WIP — characterizes k-axis limit |
+| **#4387** | **frieren** | slice_num bracket (4, 12) on k=3 | NEW k=3 baseline | WIP — geometry-resolution axis untested under k=3 |
+| **#4400** | **fern** | Cosine eta_min floor (5e-5, 1e-5) | NEW k=3 baseline | NEW — prevent near-zero LR at timeout |
+| **#4401** | **edward** | AdamW eps bracket (1e-7, 1e-9) | NEW k=3 baseline | NEW — numerical stability denominator, never tested under Lookahead |
+| **#4404** | **thorfinn** | mlp_ratio bracket (1.0, 1.667) | NEW k=3 baseline | NEW — smaller FFN = more epochs in 30-min budget |
+| **#4309** | **askeladd** | n_head=4 architecture sweep | k=5+β2=0.95 baseline | WIP — needs to beat 51.31 |
+| **#4307** | **nezuko** | Lookahead α-bracket sweep (α=0.3, α=0.7) | k=5+β2=0.95 baseline | WIP — needs to beat 51.31 |
 
-**Key note**: All in-flight PRs (#4307, #4309, #4347, #4387) must beat the NEW k=3 baseline (val=51.31, test=51.89). PRs #4151 and #4251 were started on OLD Lookahead-only baseline (54.30) — they almost certainly cannot clear the new bar without a rerun on k=3 stack.
+All 8 GPUs occupied. Zero idle students.
 
-## Recent closures
+## Recent closures (this round)
 
 | PR | Student | Hypothesis | val | Action |
 |----|---------|-----------|-----|--------|
-| ✗ **#4313** | **frieren** | **n_hidden=192 capacity (+123% params)** | **60.24** | ✗ **Closed — compute-budget regression. epoch time +100%, only 12/22 epochs complete. Capacity axis CLOSED: camber_rc is training-time-limited, not capacity-limited.** |
-| ✓ **#4266** | **alphonse** | **Lookahead k=3 (β2=0.999)** | **51.307** | ✓ **MERGED — NEW BASELINE** |
-| ✓ **#4249** | **nezuko** | **Lookahead + β2=0.95 compound** | **52.944** | ✓ **MERGED** |
-| ✗ #4334 | tanjiro | LR warmup 360 steps | 53.046 | ✗ Closed — val_camber_rc REGRESSED +4.22% (mechanism falsified) |
-| ✗ #4311 | fern | Camber-stratified sampler 3× | 52.982 | ✗ Closed — test_camber_rc REGRESSED; discrete-distribution gap can't be bridged by frequency reweighting |
-| ✗ #4284 | tanjiro | weight_decay sweep (5e-4, 1e-3) | 53.931 | ✗ Closed — Lookahead×wd substitutive |
-| ✗ #4283 | askeladd | Lookahead+slice=16+β2=0.95 triple | 55.006 | ✗ Closed — β2=0.95 anti-compounds with slice=16 |
-| ✗ #4267 | fern | AoA rotation aug ±5° | 56.069 | ✗ Closed — cruise +17.77%; AoA aug axis fully closed |
-| ✗ #4204 | frieren | Per-sample peak-\|p\| reweight | 64.396 | ✗ Closed — catastrophic; backbone starvation |
+| ✗ **#4347** | **fern** | **Camber-bridging feature-space mixup Beta(0.4,0.4)** | **58.05** | ✗ **Closed — paper-quality null result. Data-side axis FULLY CLOSED. Only 16.5% of mixes hit held-out range; all splits regress.** |
+| ✗ **#4251** | **edward** | **Lookahead+lr=1e-3** | **55.15** (best) | ✗ **Closed — 7× variance, converges to worse minimum. lr-axis closed under Lookahead.** |
+| ✗ **#4151** | **thorfinn** | **LLRD=0.85/0.95 + Lookahead** | **53.98** (on old baseline) | ✗ **Closed — substitutive with Lookahead on test; new baseline jumped beyond reach.** |
+| ✗ **#4313** | **frieren** | **n_hidden=192** | **60.24** | ✗ **Closed — compute-budget regression. Capacity axis CLOSED.** |
+| ✓ **#4266** | **alphonse** | **Lookahead k=3** | **51.307** | ✓ **MERGED — CURRENT BASELINE** |
 
 ## Key mechanism insights
 
-- **k-axis is the dominant Lookahead parameter on this budget**: k=3 (−3.09% val) beats β2=0.95 (−2.49% val) as a single axis; monotone trend k=3 < k=5 << k=10 confirmed
-- **Lookahead × β2=0.95 were orthogonal at k=5**: compounding verified in #4249 (−2.49%). Untested at k=3 — alphonse testing now
-- **slice=16 × β2=0.95 are NOT orthogonal under Lookahead**: triple compound failed; anti-compounding on camber_rc specifically
-- **val_geom_camber_rc=63.85** is new floor (k=3 baseline). Dominant residual — 10% above val_single_in_dist=57.8
-- **k-axis mechanism**: 30-min/~6300-step budget heavily favors higher slow-weight update frequency; k=3 → 2100 updates vs k=5 → 1260. Still descending at timeout — k-axis not yet saturated
-- **Capacity axis closed upward**: n_hidden=192 (PR #4313) confirms camber_rc is compute-budget-limited, NOT capacity-limited. 2× epoch time means only 12 epochs in 30-min budget vs 22 at baseline. No value in wider models without more wall-clock time
-- **Slice axis open on k=3**: slice_num has only been validated at 8 on the new k=3 baseline. The coarse bracket {4, 12} tests geometry-resolution axis; if camber_rc is sensitive to slice granularity, this is a zero-code-change win
+- **k-axis dominant lever**: k=3 delivers −3.09% val by maximizing slow-weight update frequency (2100 updates vs 1260 at k=5)
+- **β2=0.95 × Lookahead orthogonal at k=5** (PR #4249); untested at k=3 — alphonse testing now
+- **slice=16 × β2=0.95 anti-compound under Lookahead** (PR #4283 closed)
+- **camber_rc residual (63.85) is the dominant residual** — 10% above val_single_in_dist=57.8
+- **DATA-SIDE AXIS CLOSED for camber_rc** (PRs #4311, #4347): frequency reweighting AND feature-space mixup BOTH fail to bridge held-out M∈{6,7,8} gap. Architecture-level conditioning is the remaining path.
+- **Capacity axis closed at 30-min budget** (PR #4313): n_hidden=192 doubles epoch time, only 12/22 epochs complete
+- **LLRD substitutive with Lookahead on test**: compounds with slice/β2 but partially redundant under slow-weight averaging
+- **lr-axis closed under Lookahead**: lr=1e-3 (7× variance, worse minimum); lr=5e-4 is optimal
+- **LR warmup axis closed** (PR #4334): consumes budget, camber_rc regression
+- **weight_decay axis closed** (PR #4284): Lookahead×wd substitutive at wd>1e-4
 
 ## What works on the full stack
 
 - EMA decay=0.99, grad_clip=5.0
-- asinh(pressure) scale=1.0, SwiGLU gated MLP, n_head=2, vel-asinh=0.5
-- Huber δ=0.5 (tighter quadratic transition)
-- slice_num=8 (Lookahead+β2 stack; slice=16 only partially beneficial and not under Lookahead)
-- **AdamW β2=0.95 (PR #4067 original, now confirmed under Lookahead in PR #4249)**
-- **Lookahead k=3 α=0.5 (PR #4266): slow-weight averaging at k=3 — biggest recent win, dominant lever on 30-min budget**
+- asinh(pressure) scale=1.0, SwiGLU gated MLP (mlp_ratio=1.333), n_head=2, vel-asinh=0.5
+- Huber δ=0.5, slice_num=8
+- AdamW β2=0.999 (default), lr=5e-4, wd=1e-4
+- **Lookahead k=3 α=0.5 — dominant lever on 30-min budget**
 
 ## What does NOT work
 
 - β1 axis: β1=0.85 or β1=0.95 (default 0.9 is local optimum)
-- EMA=0.995 (substitutes with Lookahead, hurts camber_rc)
-- AGC λ=0.01 (clips load-bearing gradient signal)
-- grad_clip=1.0 (global scalar clip wrong instrument)
-- bs=8 (step starvation), DropPath, dropout, SWA
-- All loss-shape axes: Huber δ, asym Huber, log-cosh, Welsch
+- EMA=0.995 (substitutes with Lookahead)
+- AGC, grad_clip=1.0 (wrong instrument)
+- bs=8, DropPath, dropout, SWA
+- All loss-shape axes: Huber δ bracket, asym Huber, log-cosh, Welsch
 - Per-sample peak-|p| reweighting (backbone starvation)
-- Per-channel surface loss reweighting (shared-latent damage)
-- AoA rotation augmentation ±5°/±15° (cruise regression)
-- Lookahead+slice=16+β2=0.95 triple (anti-compounding on camber_rc)
-- weight_decay > 1e-4 under Lookahead (substitutive with slow-weight regularization)
-- Camber-stratified frequency oversampling 3× (val_camber_rc improves but test_camber_rc regresses)
-- LR warmup (360 steps): consumes budget, camber_rc regression
-- n_hidden=192 (2.23× params → 2× epoch time → only 12/22 epochs; compute-budget regression, NOT representation failure)
+- Per-channel surface loss reweighting
+- AoA rotation augmentation
+- Lookahead+slice=16+β2=0.95 triple (anti-compounding)
+- weight_decay > 1e-4 under Lookahead
+- Camber-stratified frequency oversampling (val improves, test regresses)
+- Camber-bridging mixup (both val AND test regress — data-side axis CLOSED)
+- LR warmup 360 steps (consumes budget, camber_rc regression)
+- n_hidden=192 (compute-budget regression, capacity axis closed)
+- lr=1e-3 under Lookahead (7× variance, converges to worse minimum)
+- LLRD under Lookahead (substitutive on test)
 
 ## Strategic outlook
 
 **Target**: val < 50.0, test < 50.0. Current: 51.31 / 51.89. Need −2.5% val, −3.5% test.
 
-The capacity axis is now fully closed at the 30-min budget. All remaining headroom must come from:
-1. **Optimizer**: k=3+β2=0.95 compound (alphonse #4369) — highest expected value. If val ≈ 50.0, closes optimizer axis
-2. **k-axis**: k=2 may push below 51.0 if monotone trend continues (tanjiro #4370)
-3. **Data-side camber_rc intervention**: fern #4347 camber-bridging mixup — if Beta(0.4,0.4) interpolation bridges M=6,7,8 gap
-4. **Geometry-resolution**: frieren #4387 slice_num {4,12} — architecture-neutral test of whether slice granularity affects camber_rc
+All simple single-axis levers have been explored. Remaining open axes:
 
-The remaining in-flight PRs from OLD baselines (#4151 thorfinn, #4251 edward, #4307 nezuko, #4309 askeladd) must each clear val=51.31. Of these, askeladd n_head=4 is the most likely to have independent architectural upside.
+1. **Optimizer compound (alphonse #4369, k=3+β2=0.95)** — highest expected value. If fully additive at k=3 (as it was at k=5), val ≈ 50.0 or below. Defines the current-stack optimizer optimum.
+2. **k-axis limit (tanjiro #4370, k=2+k=4)** — k=2 could push below 51.0 if trend continues
+3. **Geometry resolution (frieren #4387, slice=4/12)** — architectural but zero-code-change test; camber_rc floor depends on slice granularity
+4. **Scheduler tail (fern #4400, eta_min floor)** — recover late-epoch training that's wasted at near-zero LR
+5. **Optimizer stability (edward #4401, eps bracket)** — never tested; interaction with Lookahead k=3's faster trajectory
+6. **FFN width vs epochs (thorfinn #4404, mlp_ratio=1.0)** — counterintuitive: smaller model → more epochs in budget
+7. **Architecture attention (askeladd #4309, n_head=4)** — still in flight on old baseline; interesting if it clears new bar
+8. **Lookahead α-axis (nezuko #4307, α=0.3/0.7)** — still in flight on old baseline; probably won't clear 51.31
+
+**Next plateau protocol**: if k=3+β2=0.95 compound and k=2 both come back negative (or minimal), the optimizer axis is exhausted. At that point, shift to: (a) architectural conditioning on camber M (FiLM/cross-attention), (b) different model family (e.g. PointNet++, FNO), or (c) loss reformulation with geometric priors.
 
 ## Operational notes
 
 - **cruise NaN**: fleet-wide; test_3split = (test_single_in_dist + test_geom_camber_rc + test_re_rand)/3
 - **W&B test namespace**: `test/test_*/mae_surf_p` (not bare `test_*`)
 - **Per-run budget**: 30 min, ~15-18 epochs at slice=8 (~108s/epoch)
-- **GPU utilization**: 100% — all 8 students assigned as of 05:30 UTC
+- **GPU utilization**: 100% — all 8 students assigned as of 05:55 UTC
 - **scripts/test_eval_only.py**: in repo — recovers test metrics from saved EMA checkpoints at batch_size=1 when OOM during test eval
-- **Capacity constraint**: n_hidden≥192 doubles epoch time; only 12/22 epochs complete → always regresses. Do NOT assign capacity-increase experiments without budget extension.
+- **Capacity constraint**: n_hidden≥192 doubles epoch time — do NOT assign capacity-increase experiments without budget extension
