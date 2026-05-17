@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 02:55 UTC (Round 4 active on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-17 03:32 UTC (Round 4 active on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
 
@@ -63,7 +63,7 @@ python train.py \
 | ⭐ **thorfinn** | **#4303** | **slice_num sweep: {32, 64, 96, 128}** | SF-AdamW lr=3e-3 + --seed 1 (requires Config edit) | **HIGH — third primary Transolver architecture axis; PhysicsAttention slice count never swept** |
 | ⭐ **alphonse** | **#4317** | **SF-AdamW betas 2×2: (beta1, beta2) ∈ {0.9, 0.95}×{0.99, 0.999}** | SF-AdamW lr=3e-3 + --seed 1 (requires Config edit) | **MED-HIGH — optimizer-internal axis never swept; PyTorch defaults may not be optimal at higher LR** |
 | ⭐ **askeladd** | **#4225** | **Model width sweep: n_hidden ∈ {96, 128, 160, 192}** | SF-AdamW lr=2e-3 + --seed 1 | **HIGH — ran at lr=2e-3; apply paired Δ gate when done** |
-| ⭐ **tanjiro** | **#4207** | **surf_weight sweep: {5, 10, 15, 25}** | SF-AdamW lr=2e-3 + --seed 1 | **HIGH — direct loss-balance lever; ran at lr=2e-3** |
+| ⭐ **tanjiro** | **#4207** | **surf_weight R2 (sent back from R1): {5, 8, 10, 15}** | SF-AdamW lr=3e-3 + --seed 1 | **HIGH — R1 paired Δ ≥1.86% but absolute regressed; non-monotone landscape (cam_cruise prefers low w, cam_rc prefers high w); R2 at canonical resolves direction** |
 | ⭐ **fern** | **#4208** | **Dropout sweep: {0.0, 0.05, 0.10, 0.15}** | SF-AdamW lr=2e-3 + --seed 1 | **HIGH — untouched regularization axis; ran at lr=2e-3** |
 | **nezuko** | **#4081** | FiLM head width: film_mlp_hidden ∈ {128, 192, 256} | SF-AdamW lr=5e-4 (stale) | Results diagnostic; paired Δ gate: >3% → re-test at lr=3e-3 |
 

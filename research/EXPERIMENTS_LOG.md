@@ -2679,3 +2679,56 @@ Closed without merge: Arm C (best) regresses +4.18% vs current canonical 52.258 
 ### Follow-up
 
 **alphonse → new assignment #4317**: SF-AdamW betas sweep at lr=3e-3, 2×2 over {beta1: 0.9, 0.95} × {beta2: 0.99, 0.999}. First optimizer-internal axis ever explored in this track. Requires `--sf_beta1`/`--sf_beta2` infra commit.
+
+---
+
+## 2026-05-17 03:29 — PR #4207 [SEND-BACK]: surf_weight R1 → R2 at lr=3e-3 canonical
+
+- **Student branch:** `charliepai2i48h4-tanjiro/surf-weight-r1`
+- **R1 stack:** SF-AdamW lr=2e-3 + paired --seed 1; arms = w ∈ {5, 10, 15, 25}
+
+### R1 Results (stale lr=2e-3)
+
+| Arm | surf_weight | val_avg/mae_surf_p | Δ vs B (control) | Δ vs canonical 52.258 | test_3split_mean |
+|---|---:|---:|---:|---:|---:|
+| A | 5  | **53.934** | −1.86% | +3.21% | **52.503** |
+| B (control) | 10 | 54.957 | — | +5.16% | 53.543 |
+| C | 15 | **53.878** | −1.96% | +3.10% | 52.981 |
+| D | 25 | 54.609 | −0.63% | +4.50% | 53.583 |
+
+Both A and C cleared the paired Δ ≥0.5% gate AND beat the send-back baseline 54.769 (−1.53%, −1.63%). **But all 4 arms regress vs new canonical 52.258 (lr=3e-3)** by +3.10% to +5.16% — the LR factor dominates.
+
+### Per-split mechanism (the real insight)
+
+- **cam_cruise prefers LOW surf_weight** (monotone-worse from w=5 to w=25)
+- **cam_rc prefers HIGH surf_weight** (monotone-better up to w=25)
+- **single_in_dist is V-shaped** with minimum at w=15
+- **re_rand is flat** across the sweep
+
+Val_avg local optima at w=5 and w=15 come from cancellation across splits. Test (drops cam_cruise NaN) flips val/test ordering, picking w=5. Defensible to choose either; depends on which split family the paper-facing metric uses.
+
+### Send-back design (R2, 4 arms at lr=3e-3, --seed 1)
+
+- A: w=5 (R1 test winner)
+- B (control): w=10 (canonical 52.258 reference)
+- C: w=8 (NEW interpolation between A and B)
+- D: w=15 (R1 val winner)
+
+Drop w=25 (R1 confirmed no benefit). Add w=8 to probe whether the optimum is actually in [5, 10] rather than at A's extreme. The single_in_dist V-shape suggests a smooth minimum in that range.
+
+### Decision rules (R2)
+
+- Best non-B arm beats B by ≥0.5% paired AND beats 52.258 absolute → MERGE candidate
+- A or D wins paired but regresses vs 52.258 → close
+- All within 0.5% paired of B → close axis
+
+### Held for R3 if R2 succeeds
+
+Per-domain (vectorized) surf_weight: cruise relaxes while raceCar tandems push harder. Direct address of the per-split divergence surfaced in R1. Save until a clear scalar winner is established.
+
+### Metric artifacts (R1)
+
+- A: `models/model-charliepai2i48h4-tanjiro-surf-weight-r1-armA-w5-20260516-233345-20260516-233348/metrics.jsonl`
+- B: `models/model-charliepai2i48h4-tanjiro-surf-weight-r1-armB-w10-20260517-002405-20260517-002408/metrics.jsonl`
+- C: `models/model-charliepai2i48h4-tanjiro-surf-weight-r1-armC-w15-20260517-012754-20260517-012756/metrics.jsonl`
+- D: `models/model-charliepai2i48h4-tanjiro-surf-weight-r1-armD-w25-20260517-022803-20260517-022806/metrics.jsonl`
