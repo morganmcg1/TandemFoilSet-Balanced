@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-17 12:15 UTC (R36 — 3 closures (warmup/batch_size/cosine all confirmed obsolete vs new n_layers=4 baseline); 3 new R36 assignments targeting new compute budget: n_hidden=144 retest, long warmup + higher peak LR, slice_num=16)
+- **Updated:** 2026-05-17 12:25 UTC (R37 — GH API rate-limit cascade incident: 4 R32/R33-era WIP PRs (#4515 frieren, #4519 nezuko, #4522 alphonse, #4542 thorfinn) trained successfully but got trapped in `No assigned PRs` loop for 30+ heartbeats due to JSON-decode failures in poll-for-work; kick comments posted asking students to commit local artifacts and submit OR re-run missing arms)
 - **Track:** Charlie local-metrics arm (`charlie-pai2i-48h-r1`)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-48h-r1`
 - **Target base:** `icml-appendix-charlie`
@@ -48,18 +48,32 @@ Per-split val: single=33.389, rc=45.420, cruise=17.257, re_rand=35.371.
 | EMA | decay=0.997 |
 | Compute | **~40s/epoch, 45 epochs**, peak VRAM **18.6 GB**, **798,515 params** |
 
-## Currently in flight (8 WIP — all students active)
+## Currently in flight (8 WIP — all students active, 4 in rate-limit recovery)
 
 | PR | Student | Hypothesis | Theme | Status |
 |----|---------|------------|-------|--------|
-| #4515 | frieren | 3-seed noise calibration of lr=6e-4 baseline (n_layers=5) | calibration | WIP — R32 (baseline changed; partial info on old config) |
-| #4519 | nezuko | n_head sweep {2, 8} on lr=6e-4 (n_layers=5) | architecture | WIP — R32 (baseline changed) |
-| #4522 | alphonse | weight_decay sweep {5e-5, 2e-4} on lr=6e-4 (n_layers=5) | optim/reg | WIP — R32 (baseline changed) |
-| #4578 | tanjiro | n_layers=3 depth probe | architecture | WIP — R35 fresh |
-| #4542 | thorfinn | LR fine sweep {5.5e-4, 6.5e-4} on n_layers=5 | optim | WIP — R33 (baseline changed) |
-| **#4591** | **fern** | **n_hidden=144 retest on n_layers=4 — capacity-for-depth** | **architecture** | **WIP — R36 fresh** |
-| **#4592** | **edward** | **warmup=1500 + lr=7.5e-4 on n_layers=4 — long warmup unlock higher peak LR?** | **optim** | **WIP — R36 fresh** |
-| **#4593** | **askeladd** | **slice_num=16 on n_layers=4 — break rc-split structural bottleneck** | **architecture** | **WIP — R36 fresh** |
+| #4515 | frieren | 3-seed noise calibration of lr=6e-4 baseline (n_layers=5) | calibration | **STALE_WIP** — trained earlier, kick comment posted 12:25 UTC |
+| #4519 | nezuko | n_head sweep {2, 8} on lr=6e-4 (n_layers=5) | architecture | **STALE_WIP** — trained earlier, kick comment posted 12:25 UTC |
+| #4522 | alphonse | weight_decay sweep {5e-5, 2e-4} on lr=6e-4 (n_layers=5) | optim/reg | **STALE_WIP** — trained earlier, kick comment posted 12:25 UTC |
+| #4542 | thorfinn | LR fine sweep {5.5e-4, 6.5e-4} on n_layers=5 | optim | **STALE_WIP** — trained earlier, kick comment posted 12:25 UTC |
+| #4578 | tanjiro | n_layers=3 depth probe | architecture | WIP — R35; trained briefly, then idle, monitor |
+| **#4591** | **fern** | **n_hidden=144 retest on n_layers=4 — capacity-for-depth** | **architecture** | **WIP — R36, ACTIVELY TRAINING (99% GPU)** |
+| **#4592** | **edward** | **warmup=1500 + lr=7.5e-4 on n_layers=4 — long warmup unlock higher peak LR?** | **optim** | **WIP — R36, model loaded (38GB)** |
+| **#4593** | **askeladd** | **slice_num=16 on n_layers=4 — break rc-split structural bottleneck** | **architecture** | **WIP — R36 fresh, just polled assignment** |
+
+## R37 incident — GH API rate-limit cascade (2026-05-17 ~11:50-12:20 UTC)
+
+**Symptom:** 4 R32/R33-era WIP PRs (#4515, #4519, #4522, #4542) were flagged `stale_wip` by the harness. Pod logs show GPU was active at 90-99% earlier (training ran), then dropped to 0% several hours ago. No metrics committed, no SENPAI-RESULT posted.
+
+**Root cause:** GitHub REST API rate limit hit 0/5000 around ~11:50 UTC. The student `poll-for-work` script issues `gh` calls and parses JSON output. When `gh` returned the rate-limit HTML error page instead of JSON, the Python decoder raised `JSONDecodeError`. The orchestrator caught this as "No assigned PRs or issues" and put students to sleep for 300s. This loop repeated 30+ times across all affected students.
+
+**Recovery:** Rate limit reset around 12:20 UTC. Students immediately re-acquired their assignments. Kick comments posted on #4515/#4519/#4522/#4542 at 12:25 UTC instructing each student to:
+1. Check local pod working directory for completed metrics JSONL artifacts from prior training.
+2. If complete: commit, push, post SENPAI-RESULT, swap label to status:review.
+3. If partial: re-run missing arm(s) only.
+4. Compare against OLD baseline (val_avg=33.353), since these runs used the pre-merge n_layers=5 stack.
+
+**Lesson:** When advisor runs many `senpai:survey-prs` + assignment cycles in quick succession, GH REST budget can be exhausted for the entire org. Students share the same token. Future mitigation: throttle advisor REST traffic, or switch student poll-for-work to use GraphQL with fallback retry on rate-limit error code (HTTP 403 with `X-RateLimit-Remaining=0`).
 
 ## Fully closed axes (updated for lr=6e-4 + grad_clip baseline)
 
