@@ -2639,3 +2639,49 @@ val=287.75 vs baseline 35.92 (8× worse). Fundamental flaw: per-sample normaliza
 | #4452 | alphonse | **H124: EMA weight averaging τ=0.999, τ=0.9995 at H120 K=1 baseline** | HIGH (zero-compute orthogonal mechanism) |
 
 **Cycle summary:** H120 K=1 merged (new best val=35.67, test=33.40). H104 closed (catastrophic). Stale H116/H117 drafts closed. 8 WIP, 0 idle.
+
+---
+
+## 2026-05-17 — PR #4395: H121 SWA ep18, ep15 at H106 baseline (frieren) — CLOSED, schedule incompat
+
+| Arm | swa_start | non-SWA val | SWA val | Δ SWA vs non-SWA |
+|-----|-----------|-------------|---------|------------------|
+| A | ep18 | 36.4252 | 36.7228 | +0.30 (worse) |
+| B | ep15 | 36.8332 | 37.0957 | +0.26 (worse) |
+
+Both non-SWA arms also underperform H106 baseline 35.92 by 0.5-0.9 pts (within noise, but seed variance is meaningful). Failure mechanism: cosine T_max=21 + eta_min=0 → LR ≈ 0 in averaging window → averaging near-identical weights is no-op. Izmailov's recipe requires cyclical/high LR; we have neither. SWA lever closed.
+
+---
+
+## 2026-05-17 — PR #4357: H115 Arm C slice_num=80 + Fourier K=4 compound (edward) — CLOSED, anti-compound
+
+val=36.9618 vs H106 35.9159 (Δ+1.05 ABOVE noise floor). Damage concentrated on val_single_in_dist +5.02 → mechanisms overlap on spatial encoding axis, not orthogonal. Test 3-split 34.78 (Δ-0.34 vs H106) but Δ+1.38 vs current K=1 baseline 33.40 — no longer competitive. slice_num=80 alone (Arm A val=35.92 on H99 base) reaches similar accuracy via different per-split path, but doesn't compound. slice_num=80+Fourier lever closed.
+
+---
+
+## 2026-05-17 — PR #4422: H122 Lookahead(Lion) k=5 α=0.5 at H106 (nezuko) — CLOSED, schedule incompat
+
+val=38.5045 (Δ+2.59 ABOVE noise), test 3-split 36.6239 (Δ+1.50 ABOVE noise). Failure mechanism: Lookahead's slow-weight pullback (α=0.5 every k=5 steps) halves per-cycle net displacement. With cosine→0 in final 7 epochs, bare Lion uses tiny precision-polish steps for ~3 pts of late-epoch gain; Lookahead prevents this. Trajectory shows Lookahead tracks H106 through ep14, then stagnates. Lookahead lever closed for this schedule.
+
+---
+
+## 2026-05-17 — PR #4390 H118 (thorfinn) — CLOSED, stale, no commits
+
+H118 (compile + Fourier K=4) went stale before completing. Reassigning thorfinn to fresh H128 (compile + K=1 baseline + T_max=24) which incorporates the new baseline.
+
+---
+
+## 2026-05-17 — Cycle 44 Assignments (PLATEAU PROTOCOL ENGAGED — 8 consecutive negatives since H120 merge)
+
+All assignments motivated by H120 K=1 finding: model overfits training-set spatial detail → anti-overfitting attack is highest-prior.
+
+| PR | Student | Hypothesis | Mechanism |
+|----|---------|-----------|----------|
+| #4459 | edward | **H125: wd sweep {5e-3, 1e-2} at K=1** | Direct anti-overfitting via L2 regularization (never moved off wd=1e-3) |
+| #4460 | frieren | **H126: FFN dropout {0.1, 0.2} at K=1** | Probabilistic anti-overfitting (no dropout currently) |
+| #4462 | nezuko | **H127: smaller n_hidden {96, 112} at K=1** | Reduce capacity → less overfitting headroom (never tested smaller direction) |
+| #4463 | thorfinn | **H128: compile + K=1 + T_max=24** | Efficiency → more polished cosine tail (compile + extended schedule) |
+| #4465 | fern | **H129: Mixup α={0.2, 0.5} sample interpolation** | Sample-space regularization (distinct from H112's cond jitter) |
+| #4466 | tanjiro | **H130: AdamW vs Lion revalidation** | Optimizer sanity check at val<36 regime (Lion locked at val=42) |
+
+**Cycle summary:** H121/H115C/H122 closed (all schedule/mechanism-incompatible). H118 stale-closed. Researcher-agent spawned in background for cycle 45+ ideas. 8 WIP, 0 idle.
