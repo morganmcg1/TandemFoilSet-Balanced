@@ -1584,3 +1584,21 @@ Note: both #4186 and #4155 were trained on the **old pre-SF baseline** since the
 - **Decision:** CLOSED per the PR decision rule (val > 39.0 threshold).
 - **Key finding:** All 4 val splits regressed uniformly — most striking is val_single_in_dist +9.7% (the in-distribution split, easiest case). This rules out an OOD-specific explanation: three Transolver blocks just cannot fit the surface-pressure structure at n_hidden=128. +8 epochs of compute could not close the gap at 0.12 pt/epoch descent rate (~22 more epochs needed). 
 - **Programme implication:** Depth floor confirmed at n_hidden=128/mlp_ratio=1. n_layers=5 is at or above the depth knee; edward's parallel n_layers=4 result will localize the knee. If n_layers=4 also regresses, depth=5 is the floor at this configuration.
+
+## 2026-05-17 01:40 — PR #4259 — n_head 4→8 (dim_head=16, neutral params) (CLOSED — regression)
+
+- **Branch:** `charliepai2i48h1-alphonse/n-head-8-same-inner-dim-on-compile-stack`
+- **Hypothesis:** Split 128-dim attention into 8 heads of dim_head=16 (vs 4 heads × 32). Zero param overhead.
+- **Results:** val=38.81 (+4.05% vs 37.31), test=33.85 (+3.16%). All 4 splits regressed uniformly. sec/epoch 45.75 (+8%), 40 epochs (-2).
+- **Metrics path:** `models/model-charliepai2i48h1-alphonse-n-head-8-same-inner-dim-on-compile-stack-20260517-005835/metrics.jsonl`
+- **Decision:** CLOSED. dim_head=16 too thin (below standard transformer guidance of dim_head≥32 for to_q/to_k/to_v).
+- **Programme implication:** n_head=4 × dim_head=32 is optimal at n_hidden=128. Revisit only if n_hidden expands to ≥256.
+
+## 2026-05-17 01:40 — PR #4177 — EMA decay 0.995 retest on compile stack (CLOSED — saturated)
+
+- **Branch:** `charliepai2i48h1-fern/ema-decay-sweep-on-sf`
+- **Hypothesis:** Tighter EMA (0.995 vs 0.997) tracks the SF iterate better; won on SF-only stack by -1.00 in original arms.
+- **Results (retest on compile stack):** val=38.26 (+0.95 vs 37.31), test=32.92 (+0.11). Within ±2 pt noise band on val; virtually tied on test. test_single_in_dist actually -1.61 (better).
+- **Metrics path:** `models/model-charliepai2i48h1-fern-ema-0995-on-compile-stack-20260517-005547/metrics.jsonl`
+- **Decision:** CLOSED. EMA axis saturated on current stack.
+- **Cross-experiment insight (fern's analysis):** *EMA decay optimum is coupled to per-step iterate displacement, not optimizer choice.* Compile doubling the epoch budget (23→42 epochs) shifted the optimum back upward. Re-tune only if a future PR materially changes epoch count.
