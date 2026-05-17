@@ -1,27 +1,29 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 08:35 UTC (Round 4 active on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-17 09:40 UTC (Round 4 active on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30-min / 50-epoch caps)
 
-## NEW BEST — Two Merges Just Landed
+## NEW BEST — Three Merges
+
+### PR #4464 frieren — n_layers=2 (MERGED 09:35 UTC)
+
+**val_avg/mae_surf_p = 40.622 | test_3split = 39.598**
+- Prior canonical: 45.654 / 44.878 → **−11.02% val, −11.77% test**
+- Paired Δ vs Arm A (n_layers=3 control) = **−9.23%** (18× the 0.5% gate)
+- Monotone l2 < l3 on ALL 4 val splits
+- Iso-epoch=26: l3 < l2 (deeper better at fixed steps) → win is step-count effect
+- l2 runs at 48.7 s/epoch → 37 epochs in budget vs l3's 26; l1 hits the 50-epoch cap (41.80)
+- All arms still descending at budget cap — headroom remains
 
 ### PR #4248 frieren — n_layers=3 (MERGED 08:00 UTC)
 
-**val_avg/mae_surf_p = 45.654 | test_3split = 44.878**
-- Prior canonical: 52.258 / 51.206 → **−12.64% val, −12.36% test**
-- Paired Δ vs Arm B (n_layers=5 control) = **−14.74%** (29× the 0.5% gate)
-- Monotone l3 < l4 < l5 < l7 on ALL 4 val splits AND 3 clean test splits
-- Mechanism: step-count (sec/epoch ∝ depth: 1.16→1.51→1.85→2.56 min); at iso-epoch=12 all arms within ~1%
-- n_layers=3 is faster per epoch (69s vs 111s at n_layers=5) → 26 epochs in budget vs 17
+**val_avg/mae_surf_p = 45.654 | test_3split = 44.878** _(now superseded)_
 
 ### PR #4317 alphonse — SF-AdamW betas (β1=0.95, β2=0.99) (MERGED 08:08 UTC)
 
 **Measured at n_layers=5 canonical: val=50.273, test=48.726**
-- Paired Δ vs Arm A (β1=0.9, β2=0.999) = **−6.12% val / −7.35% test** (from epoch 1 → genuine optimizer improvement, not step-count)
-- Main effects: β1↑ −1.95, β2↓ −1.32; mildly synergistic (−0.43 interaction)
-- Merged as orthogonal compound improvement; empirical (n_layers=3 × betas=(0.95, 0.99)) TBD
-- Negative result: β1↑ does NOT operate by reducing clip rate (stays 0.95–0.98 across all arms)
+- Paired Δ = **−6.12% val / −7.35% test** (from epoch 1 → genuine optimizer improvement)
 
 ## Current Canonical
 
@@ -33,55 +35,60 @@ python train.py \
   --grad_clip_norm 1.0 \
   --use_schedule_free --lr 3e-3 \
   --sf_beta1 0.95 --sf_beta2 0.99 \
-  --n_layers 3
+  --n_layers 2
 ```
 
-**val_avg/mae_surf_p: 45.654** | test_3split: 44.878
+**val_avg/mae_surf_p: 40.622** | test_3split: 39.598
 
-## Operational Status (08:35 UTC)
+## Operational Status (09:40 UTC)
 
 | Student | PR | State | Notes |
 |---|---|---|---|
-| **frieren** | #4464 shallower-depth-probe | assigned/in-progress | Probe n_layers ∈ {1, 2, 3} at new canonical |
-| **alphonse** | #4467 lr-retune-n-layers3 | assigned/in-progress | LR sweep {3e-3, 4e-3, 5e-3, 6e-3} at new canonical |
-| **fern** | #4481 n-hidden-at-n-layers3 | NEWLY ASSIGNED | n_hidden {96, 128, 192, 256} at new canonical |
-| **thorfinn** | #4303 slice_num (draft) | sent back | Rebase + rerun at n_layers=3 canonical |
-| **nezuko** | #4353 fourier-feats (draft) | sent back | Rebase + rerun Arm A/B at n_layers=3 canonical; σ=1 calibration confirmed |
+| **frieren** | NEW ASSIGNMENT PENDING | idle | n_layers shallower probe complete (merged) |
+| **alphonse** | #4467 lr-retune-n-layers3 | training | LR sweep {3e-3, 4e-3, 5e-3, 6e-3} at n_layers=3 canonical |
+| **fern** | #4481 n-hidden-at-n-layers3 | training | n_hidden {96, 128, 192, 256} at n_layers=3; Config flag added by student |
+| **thorfinn** | #4303 slice_num r2 | training | Rebase + rerun at n_layers=3; Arm A=44.75; Arm B (s32) just launched ~08:50 |
+| **nezuko** | #4353 fourier-feats r2 | sent back | Rebase + 2-arm rerun at n_layers=3 canonical; waiting on student |
 | **edward** | #4450 vol-weight-r1 | training | vol_weight {0.25, 0.5, 1.0, 2.0, 4.0} at prior canonical |
 | **tanjiro** | #4438 huber-beta-r1 | training | Huber β {0.25, 0.5, 1.0, 2.0} at prior canonical |
-| **askeladd** | #4351 n_head | stale_wip | n_head {2, 4, 8}; updated to use new canonical commands (comment posted) |
+| **askeladd** | #4351 n_head | stale_wip | n_head {2, 4, 8}; updated to use n_layers=3 canonical (comment posted); needs to rebase to n_layers=2 now |
 
-Note: Edward, tanjiro PRs were assigned before the n_layers=3 canonical. Their results use their own Arm A as paired reference. If they win absolutely vs NEW canonical (45.654), merge; if they beat old canonical (52.258) but not 45.654, request rerun at new canonical.
+Note: Edward, tanjiro, alphonse, fern, thorfinn PRs were assigned at n_layers=3 canonical (45.654). Their results use their own Arm A as paired reference. If they win absolutely vs NEW canonical (40.622), merge; if they beat n_layers=3 canonical (45.654) but not 40.622, request rerun at n_layers=2.
 
 ## Current Research Themes
 
-### 1. Step-count dominance at 30-min budget
-The dominant source of variation is NOT model capacity but optimization steps per wall-clock budget. n_layers=3 wins because sec/epoch ∝ depth and the 30-min cap is binding. Architecture capacity axes (n_hidden, n_head, mlp_ratio, slice_num) may all be step-count confounded at this budget.
+### 1. Step-count dominance at 30-min budget — CONFIRMED AND DEEPENING
+The dominant source of variation is NOT model capacity but optimization steps per wall-clock budget. Monotone l2 < l3 < l4 < l5 < l7 across all depth probes. At iso-epoch, deeper is always better — the wins come entirely from step accumulation at the 30-min cap. n_layers=2 (48.7 s/ep, 37 epochs) beats n_layers=1 (27.9 s/ep, 50 epochs) because the iso-epoch quality advantage of l2 over l1 outweighs l1's additional 13 epochs. The depth floor is now **n_layers=2** in the 30-min budget regime.
 
-### 2. Depth floor not yet found
-n_layers monotone l3 < l4 < l5 < l7. Frieren's new assignment tests {1, 2, 3} at new canonical.
+### 2. Depth floor established at n_layers=2
+n_layers monotone l2 < l3 < l4 < l5 < l7 (budget-regime). l1 improves on baseline but loses to l2 (step-count advantage of l2/ep quality > l1 extra epochs). All arms descending at cap — longer-budget runs could reveal whether l1 eventually catches up.
 
-### 3. LR optimum may shift at new canonical
-PR #4157 found lr=3e-3 still monotonically improving at n_layers=5 (17 epochs/budget). At n_layers=3 (26 epochs/budget), higher LR may be tolerable and better. Alphonse's new assignment tests {3e-3, 4e-3, 5e-3, 6e-3}.
+### 3. LR optimum may shift at n_layers=2 canonical
+alphonse #4467 tests {3e-3, 4e-3, 5e-3, 6e-3} at n_layers=3. Results should inform whether to raise LR further at n_layers=2. Need follow-up at n_layers=2 after alphonse reports.
 
 ### 4. Loss axis: Huber β and vol/surf weighting
-Tanjiro (Huber β sweep) and edward (vol_weight) are live. If vol_weight > 1.0 wins, it addresses surface-loss saturation (#4207). If Huber β ≠ 1.0 wins, the loss form is a new axis.
+Tanjiro (Huber β sweep) and edward (vol_weight) are live at old canonical. Evaluate with paired Δ from their own Arm A.
 
 ### 5. mlp_ratio CLOSED — step-count dominates FFN capacity
-fern #4339: mlp_ratio=2 is the saturated optimum. Monotone regression from r=1.9 ≈ r=2 < r=4 < r=6. Closes the last primary FFN capacity axis.
+fern #4339: mlp_ratio=2 is the saturated optimum. Closes the last primary FFN capacity axis.
 
-### 6. Fourier features (σ=1) — promising, rerun at new canonical pending
-nezuko #4353: Arm B (16f, σ=1.0) −2.47% paired val / −3.47% test at n_layers=5. Sent back for 2-arm rerun at n_layers=3 canonical. σ-calibration finding: Tancik's σ=10 wrong for N(0,1) inputs.
+### 6. Fourier features (σ=1) — promising, rerun at n_layers=3 canonical pending
+nezuko #4353: Arm B (16f, σ=1.0) −2.47% paired val / −3.47% test at n_layers=5. Sent back for 2-arm rerun at n_layers=3. σ-calibration finding: Tancik's σ=10 wrong for N(0,1) inputs.
 
-### 7. n_hidden compensating-capacity at n_layers=3 now in flight
-fern #4481 (assigned): tests whether n_hidden=192/256 can win at n_layers=3 (26 epochs/budget). At n_layers=5 (17 epochs), width lost to step-count. At n_layers=3, the absolute epoch count is higher.
+### 7. n_hidden compensating-capacity — two fronts open
+- fern #4481 (training): n_hidden {96, 128, 192, 256} at n_layers=3; tests if width compensates at 3-layer depth
+- frieren next assignment: n_hidden at n_layers=2 — the canonical depth; more relevant than n_layers=3
+
+### 8. slice_num at new canonical
+thorfinn #4303: Arm A r2 completed (val_avg=44.75 at n_layers=3); Arms B/C/D in progress. Iso-epoch deconfounding required.
 
 ## Priority Next Experiments (if new idle slots open)
 
-1. **Weight decay retune at new canonical** — wd=1e-4 never swept at lr=3e-3 with n_layers=3 / betas=(0.95, 0.99)
-2. **n_head sweep at new canonical** — askeladd #4351 assigned but stale; final primary architecture axis
-3. **Longer-budget rerun at n_layers=3** — if idle slot opens, extend wall-clock to understand convergence asymptote
-4. **Fourier sigma grid** — if nezuko confirms σ=1 16f wins, explore {8f, 16f, 32f} × {σ=0.5, 1.0, 2.0}
+1. **LR retune at n_layers=2** — alphonse result will show LR optimum at n_layers=3; need follow-up at n_layers=2 (even more epochs available)
+2. **Weight decay retune at new canonical** — wd=1e-4 never swept at lr=3e-3 with n_layers=2
+3. **n_head sweep at n_layers=2 canonical** — askeladd #4351 stale; final primary architecture axis now at wrong canonical
+4. **Longer-budget rerun at n_layers=2** — all arms descending at cap; convergence asymptote unknown
+5. **Fourier sigma grid** — if nezuko confirms σ=1 16f wins at n_layers=3, extend to {8f, 16f, 32f} × {σ=0.5, 1.0, 2.0}
 
 ## Merged Winners (Chronological)
 
@@ -99,8 +106,9 @@ fern #4481 (assigned): tests whether n_hidden=192/256 can win at n_layers=3 (26 
 | #3980 | Lion + clip=0.25 | 63.336 | −3.48% |
 | #4038 | SF-AdamW lr=2e-3 | 54.769 | −13.5% |
 | #4157 | SF-AdamW lr=3e-3 | 52.258 | −4.59% |
-| **#4248** | **n_layers=3** | **45.654** | **−12.64%** |
-| **#4317** | **SF betas (0.95, 0.99)** | **compound** | **−6.12% paired at n_layers=5** |
+| #4248 | n_layers=3 | 45.654 | −12.64% |
+| #4317 | SF betas (0.95, 0.99) | compound | −6.12% paired at n_layers=5 |
+| **#4464** | **n_layers=2** | **40.622** | **−11.02%** |
 
 ## Falsified / Closed Axes (not worth revisiting without strong new prior)
 
@@ -118,9 +126,12 @@ fern #4481 (assigned): tests whether n_hidden=192/256 can win at n_layers=3 (26 
 | surf_weight sweep | Surface loss saturated; wins paired but regresses absolute |
 | clip threshold at lr=3e-3 | clip=1.0 saturated optimum; all departures regress |
 | LR > 3e-3 at n_layers=5 | Peak was 3e-3 (re-opening at n_layers=3 via #4467) |
+| mlp_ratio != 2 | Step-count dominates FFN capacity; r=2 saturated |
+| n_layers=1 (budget-regime) | l1 loses to l2 despite more epochs; iso-epoch quality deficit dominates |
 
 ## Key Methodological Notes
 
 1. **Infra-RNG drift:** Adding new Config dataclass fields shifts RNG ~+2.47% at seed=1. Use sweep's own Arm A as absolute reference on flag-adding branches. Paired Δ within sweep unaffected.
 2. **Step-count dominance:** sec/epoch ∝ model capacity (depth, width, slice_num) at 30-min budget. Iso-epoch comparisons are load-bearing for distinguishing capacity effects from step-count effects.
 3. **Seed reproducibility on clean branch:** +0.04% at lr=3e-3 (verified by edward #4350 Arm A).
+4. **test_geom_camber_cruise NaN:** Pre-existing scoring bug on cruise held-out samples. Ux/Uy channels are finite; mae_surf_p is NaN. Use test_3split_mean (3 clean splits) for ranking.

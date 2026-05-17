@@ -3126,3 +3126,21 @@ Test_3split=50.763 beats prior canonical 51.206. But absolute 52.228 >> new cano
 
 - **Student branch:** `charliepai2i48h4-fern/n-hidden-at-n-layers3`
 - **Hypothesis:** n_hidden was closed at n_layers=5 (#4225, stale lr=2e-3) due to step-count. At n_layers=3 (26 epochs/budget vs 17), the capacity-step trade-off shifts: per-epoch cost of wider models is smaller relative to total budget. Tests whether capacity headroom is unlocked at new canonical. Arms: {96, 128, 192, 256}.
+
+## 2026-05-17 09:35 — PR #4464: n_layers shallower probe {1, 2, 3} [MERGED]
+- charliepai2i48h4-frieren/shallower-depth-probe
+- **Hypothesis:** With step-count dominating at 30-min budget, shallower models (n_layers=1 and 2) may achieve more optimization steps and beat the n_layers=3 canonical. Test n_layers ∈ {1, 2, 3} at new canonical (sf_betas=(0.95, 0.99)).
+- **Results:**
+
+| Arm | n_layers | epochs | sec/ep | val_avg/mae_surf_p | Δ vs A (paired) | Δ vs baseline 45.654 |
+|---|---:|---:|---:|---:|---:|---:|
+| A (control) | 3 | 26 | 69.4s | 44.752 | — | −1.98% |
+| **B (winner)** | **2** | **37** | **48.7s** | **40.622** | **−9.23%** | **−11.02%** |
+| C | 1 | 50 | 27.9s | 41.800 | −6.60% | −8.44% |
+
+test_3split_mean: Arm B = 39.598 (−11.77% vs baseline 44.878). Arm B strictly dominates all 4 val splits.
+Iso-epoch=26: l3 (44.75) < l2 (46.23) < l1 (50.49) — deeper is better at fixed step count.
+
+- **Metric artifacts:**
+  - `models/model-charliepai2i48h4-frieren-shallower-depth-probe-r1-armB-l2-20260517-082017-20260517-082020/metrics.jsonl`
+- **Analysis:** Win is a step-count effect — l2 completes 37 epochs at 48.7 s/ep vs l3's 26 epochs at 69 s/ep. l1 hits the 50-epoch cap and still loses to l2 because the per-step quality disadvantage (iso-epoch) of l1 outweighs the extra ~13 epochs. All arms still descending at cap → convergence asymptote unknown. Depth floor established at n_layers=2 for the 30-min budget regime. **MERGED as new canonical (val=40.622, test=39.598).**
