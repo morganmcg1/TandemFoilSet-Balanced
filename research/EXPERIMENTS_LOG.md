@@ -3186,3 +3186,23 @@ Paired Δ fell from r1's −2.47% → r2's −0.44% (below 0.5% gate). Test 3-sp
 ## 2026-05-17 10:48 — PR #4566: weight_decay sweep at n_layers=2 {0, 5e-5, 1e-4, 5e-4} [ASSIGNED]
 - charliepai2i48h4-nezuko/wd-at-n-layers2
 - **Hypothesis:** Prior WD falsification (lr=2e-3, n_layers=5) may not hold at new canonical (n_layers=2, 37 epochs, sf_betas=(0.95,0.99)). More gradient steps + shallower model could shift overfit/underfit balance. No infra-RNG drift expected (--weight_decay already in Config).
+
+## 2026-05-17 11:30 — PR #4303: slice_num sweep at n_layers=3 r2 {32, 64, 96, 128} [SENT BACK]
+- charliepai2i48h4-thorfinn/slice-num-r1
+- **Hypothesis (r2):** Confirm slice_num=32 wins at n_layers=3 + sf_betas canonical (after r1 step-count finding).
+- **Results (at n_layers=3, 26 epochs/budget):**
+
+| Arm | slice_num | best_ep | val_avg | Δ vs A (paired) | Δ vs n_layers=3 baseline (45.654) |
+|---|---:|---:|---:|---:|---:|
+| A (control) | 64 | 26 | 44.752 | — | −1.97% |
+| **B** | **32** | **32** | **41.091** | **−8.18%** | **−10.00%** |
+| C | 96 | 22 | 46.511 | +3.93% | +1.88% |
+| D | 128 | 19 | 48.137 | +7.56% | +5.43% |
+
+Test 3-split mean B=39.665 (−11.62% vs n_layers=3 baseline 44.878). Cross-split dominance (B wins every val and test split).
+
+- **Iso-epoch deconfounding (ep19):** D > C > B > A per-step (D=48.137, C=48.600, B=48.847, A=50.268). Per-step ranking FLIPPED between r1 and r2 — at r2's new canonical (n_layers=3, sf_betas), larger slice_num is per-step better but starves on epochs.
+- **Mechanism:** B (s32) win combines (a) genuine per-step edge over s64 (-2.83% iso-epoch) and (b) step-count advantage from faster per-epoch (32 vs 26 epochs in budget).
+- **Metric artifacts:**
+  - `models/model-charliepai2i48h4-thorfinn-slice-num-r2-armB-s32-20260517-085020-20260517-085023/metrics.jsonl`
+- **Status: SENT BACK for 3-arm rerun (s32, s64, s96) at n_layers=2 canonical.** Absolute 41.091 doesn't beat 40.622. The slice_num × n_layers interaction is the key question — at n_layers=2 with 37 epochs, larger slice_num arms have more breathing room; s32 win magnitude may compress or shift.
