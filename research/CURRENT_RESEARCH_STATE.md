@@ -1,10 +1,26 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 16:00
-- **Launch:** willow-pai2i-48h-r1 (round 30 — Lookahead-Lion era; **⚠️ PLATEAU PROTOCOL ACTIVE**; **PROGRAMME ALL-TIME BEST val=45.7284 / test=44.5079 SEED=0** (PR #4402); **4-seed canonical 46.77±0.52 SEM val / 45.34±0.48 SEM test (PAPER-READY)**; **12 closures since merge, ZERO improvements**; LR-bowl fully bracketed (ASYMMETRIC: +2.40 at 7e-4 RIGHT vs +0.95 at 4e-4 LEFT, sharp at 5e-4 floor); **bold mechanism swings in flight: α schedule, EMA on slow weights, k=7 joint shift**)
+- **Date:** 2026-05-17 17:00
+- **Launch:** willow-pai2i-48h-r1 (round 31 — Lookahead-Lion era; **⚠️ PLATEAU PROTOCOL ACTIVE**; **PROGRAMME ALL-TIME BEST val=45.7284 / test=44.5079 SEED=0** (PR #4402); **5-seed canonical val=46.83±0.41 SEM / test=45.49±0.40 SEM (PAPER-READY)**; **⚠️ MAJOR FINDING: Lion WD has been an fp32 NO-OP at wd ≤ 1e-4 for the ENTIRE programme** (tanjiro #4456 bit-identical proof); **18 closures since merge, ZERO improvements**; **3 active-WD probes + reverse α schedule + cosine warm restarts dispatched as bold swings**)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN)
 - **Latest direction from human team:** None (no open issues scoped to this launch)
+
+## ⚠️ MAJOR FINDING — round 31 (tanjiro PR #4456): Lion WD is fp32 NO-OP at wd ≤ 1e-4
+
+Tanjiro's WD=5e-5 probe returned **BIT-IDENTICAL** to #4402 across val and all 4 test splits to 10 decimal places. Diagnosis: Lion's WD step `p.data.mul_(1.0 - lr * wd)` at `lr_lion = cfg.lr/3 = 1.667e-4` and `wd = 1e-4` gives `lr*wd ≈ 1.67e-8`, which is BELOW fp32's half-ulp threshold (~2.98e-8) at 1.0 — so `(1.0 - lr*wd) → 1.0` in fp32 and the update is a no-op.
+
+**Every Lion+Lookahead winner in BASELINE.md (#4123, #4269, #4373, #4402) has been running with effective wd=0.** The single-seed headline test=44.5079 was achieved WITHOUT weight decay. Implicit regularization (Lookahead averaging + β2=0.995 m-buffer + cosine LR) is doing all the work.
+
+| nominal wd | lr*wd | vs fp32 half-ulp 2.98e-8 | effective? |
+|---|---|---|---|
+| 1e-5 → 1e-4 | 1.67e-9 → 1.67e-8 | <1× | NO (no-op) |
+| 2e-4 | 3.33e-8 | 1.12× | barely (confirmed #4482 +0.07 within noise) |
+| 1e-3 | 1.67e-7 | 5.6× | active (tanjiro #4518) |
+| 3e-3 | 5.00e-7 | 16.8× | active (alphonse #4521) |
+| 1e-2 | 1.67e-6 | 56× | active (frieren #4523) |
+
+**Paper implication:** Lookahead-Lion-β2=0.995-k=6 result must be reported as "without explicit weight decay" — the result is intrinsic to the smoothing compound, not WD-aided.
 
 ## Research contract
 
@@ -18,7 +34,7 @@ Beat the Transolver baseline on `val_avg/mae_surf_p` (lower is better). Paper-fa
 
 Win threshold: **val < 45.7284**. Prior best: val=46.8383 (PR #4373, k=5).
 
-### 4-seed canonical of NEW programme best (COMPLETE — round-28; PAPER-READY)
+### 5-seed canonical of NEW programme best (COMPLETE — round-31; PAPER-READY)
 
 | Seed | val_avg | test_avg | W&B | best_ep | Source |
 |---|---|---|---|---|---|
@@ -26,19 +42,22 @@ Win threshold: **val < 45.7284**. Prior best: val=46.8383 (PR #4373, k=5).
 | 1 | 48.1367 | 46.3894 | `yqdvl3nr` | 17 | PR #4428 closed (round-26) |
 | 2 | 46.9893 | 45.9393 | `0sqdsm53` | 17 | PR #4429 closed (round-26) |
 | 3 | 46.2238 | 44.5338 | `gklk517h` | 17 | PR #4457 closed (round-28) |
-| **mean** | **46.7696** | **45.3426** | — | — | |
-| **σ̂_sample (ddof=1)** | **1.0487** | **0.9666** | — | — | |
-| **σ̂_mean (SEM)** | **0.5244** | **0.4833** | — | — | |
+| 4 | 47.0672 | 46.0682 | (frieren) | 17 | PR #4498 closed (round-31) |
+| **mean** | **46.8291** | **45.4877** | — | — | |
+| **σ̂_sample (ddof=1)** | **0.9176** | **0.8979** | — | — | |
+| **σ̂_mean (SEM)** | **0.4105** | **0.4015** | — | — | |
 
-### ⚠️ CRITICAL paper-facing finding (round-28)
+### ⚠️ CRITICAL paper-facing finding (round-28 finalized round-31)
 
-**PR #4402's headline test=44.5079 is at −0.83σ_sample of the 4-seed test distribution** (44.51 vs μ=45.34, σ̂_sample=0.97). The population-level test claim is **45.34 ± 0.48 (SEM)**, not the single-seed merged baseline. The single-seed headline is a lucky-draw of seed=0.
+**PR #4402's headline test=44.5079 is at −1.09σ_sample of the 5-seed test distribution** (44.51 vs μ=45.49, σ̂_sample=0.90). The population-level test claim is **45.49 ± 0.40 (SEM)**, not the single-seed merged baseline. The single-seed headline is a lucky-draw of seed=0.
 
 **For the paper, report BOTH:**
 1. Single-seed merged baseline: val 45.7284 / test 44.5079 (PR #4402, seed=0)
-2. n=4 canonical: val 46.77 ± 0.52 SEM / test 45.34 ± 0.48 SEM
+2. n=5 canonical: val 46.83 ± 0.41 SEM / test 45.49 ± 0.40 SEM
 
 The single-seed merge stands per single-seed merge rule, but reviewers will want the population claim. The single-seed result reflects what's possible with this compound; the canonical reflects expected performance.
+
+**Future winner candidates must beat 45.49 test mean with ≥0.9pt margin (≥1σ̂_sample)**, not just the seed=0 best of 44.51.
 
 ### Variance comparison: NEW best vs OLD best
 
@@ -68,19 +87,25 @@ Val σ̂=0.46 is tighter than OLD baseline σ̂=0.80 — β2=0.995 reduces per-s
 
 **Super-additivity at k=6:** k alone gave −0.45 val at β2=0.99; combined with β2=0.995 gives −1.11 (additive would predict −0.45 → combined −0.75+0.45=0.75 = predicted −0.45, actual −1.11 = super-additive by 0.66). Mechanism: β2=0.995 m-buffer lets inner trajectory settle coherently before k=6's longer outer step — the two mechanisms amplify each other at complementary timescales.
 
-## α-frontier — fully mapped at k=5 across β2 ∈ {0.99, 0.995}; mapping at k=6+β2=0.995
+## α-frontier — FULLY MAPPED at k=6+β2=0.995 (round-31; α=0.70 RESOLVED optimal)
 
 | α | k | β2 | val | Status |
 |---|---|---|---|---|
 | 0.5 | 5 | 0.99 | 47.97 | superseded |
 | **0.7** | **5** | **0.99** | **47.59** | merged #4269 |
-| **0.65** | **5** | **0.995** | **46.6514** | closed #4415 (round-27; α-LEFT shift confirmed, not new best) |
+| **0.65** | **5** | **0.995** | **46.6514** | closed #4415 (round-27; α-LEFT shift at k=5, not new best) |
 | **0.7** | **5** | **0.995** | **46.84** | merged #4373 |
+| **0.60** | **6** | **0.995** | **46.36** | closed #4475 (round-31) — α-LEFT confirmed regress at k=6 |
+| **0.65** | **6** | **0.995** | **46.93** | closed #4472 (round-27) — α-LEFT does NOT carry from k=5 |
 | **0.7** | **6** | **0.995** | **45.73** | **merged #4402 — CURRENT BEST** |
 | **0.75** | **6** | **0.995** | **45.8003** | closed #4430 (round-27; α-RIGHT bowl flat) |
 | 0.8 | 5 | 0.99 | 48.25 | closed #4343 |
-| **0.60** | **6** | **0.995** | **TBD** | **nezuko #4475 in flight (round 27)** |
-| **0.65** | **6** | **0.995** | **TBD** | **alphonse #4472 in flight (round 27)** — KEY winner candidate
+
+**α-bowl at k=6+β2=0.995 is FULLY RESOLVED.** Shallow bowl with slight RIGHT-tilt; α=0.70 optimal. α-LEFT shift discovered at k=5 (nezuko #4415) does NOT generalize to k=6 — at k=6 the inner-step pre-smoothing already coherent enough that less slow-weight pull is over-damped.
+
+### α-schedule mechanism — FALSIFIED forward direction (round-31, alphonse #4496)
+
+α COSINE SCHEDULE 0.5 → 0.7 lands within population at val=46.96 / test=45.97. Reaches α=0.7 exactly at LR-cosine endpoint (step 6375 ≈ epoch 17) — by then inner Lion takes near-zero-LR steps and both schedules converge. Mid-training, the schedule-run has WORSE val at every checkpoint than static α=0.7 — early-α=0.5 *reduces* slow-weight pull rather than improving exploration. Mechanism story FALSIFIED for forward direction. **Reverse direction (0.7 → 0.5) assigned to nezuko #4524 as symmetric mechanism check.**
 
 ## β2-frontier — FULLY MAPPED at k=5; re-mapping at k=6
 
@@ -123,20 +148,34 @@ At β2=0.995, α=0.7:
 
 **k-bowl bounded:** k=6 is the unique optimum at α=0.7 + β2=0.995. The super-additivity is LOCAL to k=6, not a broad "longer sync interval works under longer m-buffer" claim.
 
-## Active WIP experiments (round 30)
+## Lion ACTIVE WD bowl — currently UNMAPPED (all prior probes were fp32 no-ops; round-31 dispatch begins mapping)
+
+Per tanjiro's #4456 finding, every Lion WD probe at wd ≤ 1e-4 in this programme was a fp32 no-op — the WD bowl has NEVER been mapped at meaningful regularization strength. Round-31 dispatches 3 parallel ACTIVE probes:
+
+| wd | lr*wd | activity factor | PR | Student | Predicted |
+|---|---|---|---|---|---|
+| 1e-3 | 1.67e-7 | 5.6× half-ulp | **#4518** | tanjiro | Mild active reg — may help generalization |
+| 3e-3 | 5.00e-7 | 16.8× half-ulp | **#4521** | alphonse | Mid; classic transformer default |
+| 1e-2 | 1.67e-6 | 56× half-ulp | **#4523** | frieren | High; tests if over-reg regresses |
+| 2e-4 | 3.33e-8 | 1.12× half-ulp | #4482 closed | thorfinn (was) | +0.07 within noise (barely active) |
+| ≤ 1e-4 | ≤ 1.67e-8 | ≤ 0.56× | #4123–#4402 | all winners | NO-OP (effective wd=0) |
+
+If any of {1e-3, 3e-3, 1e-2} beats #4402, the entire programme has a new compound. If all regress, the smoothing compound genuinely doesn't want explicit WD — that itself is a paper-grade finding.
+
+## Active WIP experiments (round 31)
 
 | PR | Student | Hypothesis | Status | Priority |
 |----|---------|-----------|--------|----------|
-| #4506 | edward | **(k=7, β2=0.9957, α=0.7) JOINT shift** — k×(1−β2)≈0.03 invariant probe | NEW (round 30) | **Bold joint-shift mechanism** |
-| #4496 | alphonse | Lookahead α COSINE SCHEDULE 0.5 → 0.7 (PLATEAU PROTOCOL bold) | Running (round 29) | **Bold mechanism swing** |
-| #4500 | fern | EMA on Lookahead slow_weights (PLATEAU PROTOCOL bold) | Running (round 29) | **Bold variance-reduction** |
-| #4497 | askeladd | cfg.lr=6e-4 + k=6 + β2=0.995 (LR MID bracket) | Running (round 29) | LR bowl mapping |
-| #4498 | frieren | seed=4 of canonical (n=5 paper SEM tightening) | Running (round 29) | Paper canonical |
-| #4482 | thorfinn | --lion_wd 2e-4 + k=6 + β2=0.995 (WD RIGHT bracket) | Running (round 28) | WD-bowl RIGHT |
-| #4475 | nezuko | α=0.60 + k=6 + β2=0.995 (α-bowl LEFT-EDGE) | Running (round 27) | likely regression per alphonse extrapolation |
-| #4456 | tanjiro | --lion_wd 5e-5 + k=6 + β2=0.995 (WD LEFT micro-probe) | Running (round 26) | WD-bowl LEFT |
+| #4525 | thorfinn | **Cosine warm restarts (2 cycles: T_max=8 + T_max=9)** — PLATEAU PROTOCOL bold swing | NEW (round 31) | **Bold mechanism swing** |
+| #4524 | nezuko | **Lookahead α REVERSE COSINE SCHEDULE 0.7 → 0.5** — symmetric mechanism check (alphonse #4496 forward FALSIFIED) | NEW (round 31) | Mechanism check |
+| #4523 | frieren | **--weight_decay 1e-2** — Lion ACTIVE WD probe HIGH | NEW (round 31) | **First proper WD-bowl mapping** |
+| #4521 | alphonse | **--weight_decay 3e-3** — Lion ACTIVE WD probe MID | NEW (round 31) | **First proper WD-bowl mapping** |
+| #4518 | tanjiro | **--weight_decay 1e-3** — Lion ACTIVE WD probe LOW (their own finding) | NEW (round 31) | **First proper WD-bowl mapping** |
+| #4506 | edward | (k=7, β2=0.9957, α=0.7) JOINT shift — k×(1−β2)≈0.03 invariant | Running (round 30) | Bold joint-shift mechanism |
+| #4500 | fern | EMA on Lookahead slow_weights (PLATEAU PROTOCOL bold) | status:review (round 29) | Bold variance-reduction |
+| #4497 | askeladd | cfg.lr=6e-4 + k=6 + β2=0.995 (LR MID bracket) | status:review (round 29) | LR bowl mapping |
 
-**All 8 students active. Zero idle. Single-arm policy in force.**
+**All 8 students active. Zero idle. Single-arm policy in force. #4500 and #4497 awaiting review.**
 
 ### ⚠️ Round-29 strategic theme: PLATEAU PROTOCOL activated
 
@@ -150,6 +189,14 @@ At β2=0.995, α=0.7:
 - **seed=4 canonical (frieren #4498):** strengthens paper SEM from n=4 (0.48 test) to n=5 (~0.43 test). Low-risk paper-strengthening.
 
 If alphonse or fern wins, multi-seed it immediately. If both regress, escalate to: (1) per-region loss weighting, (2) Tiger/ScheduleFree optimizers, (3) cosine warm restarts, (4) data augmentation.
+
+## Round-31 closures (5 closures — including MAJOR FINDING)
+
+- **#4456 tanjiro (--weight_decay 5e-5)** CLOSED with full credit: val/test BIT-IDENTICAL to #4402 to 10 decimals. **MAJOR FINDING: Lion WD is fp32 NO-OP at wd ≤ 1e-4 — entire programme has been running with effective wd=0.** Tanjiro reassigned to wd=1e-3 (1st active WD probe, #4518).
+- **#4496 alphonse (α COSINE SCHEDULE 0.5 → 0.7)** CLOSED: val=46.96 (+1.23), test=45.97 (+1.46). Lands within population. α-schedule FORWARD direction FALSIFIED — converges to same fixed point at LR endpoint, worse mid-training. Alphonse reassigned to wd=3e-3 (Lion active WD MID, #4521).
+- **#4498 frieren (seed=4 canonical)** CLOSED: val=47.07, test=46.07. n=5 canonical PAPER-READY: **val 46.83 ± 0.41 SEM / test 45.49 ± 0.40 SEM**. Frieren reassigned to wd=1e-2 (Lion active WD RIGHT edge, #4523).
+- **#4475 nezuko (α=0.60 + k=6 + β2=0.995)** CLOSED: val=46.36 (+0.63, within 0.53σ̂), test=45.38 (+0.87, within 0.90σ̂). α-bowl at k=6+β2=0.995 FULLY MAPPED — α=0.70 optimum. Nezuko reassigned to REVERSE α COSINE SCHEDULE 0.7 → 0.5 (#4524).
+- **#4482 thorfinn (--lion_wd 2e-4)** CLOSED: val=45.80 (+0.07, within 0.07σ̂), test=45.01 (+0.50). FIRST barely-active WD value (lr*wd 1.12× half-ulp); cumulative ~2.1e-4 fractional drift over 6375 steps. Thorfinn reassigned to COSINE WARM RESTARTS (2 cycles T_max=8 + T_max=9, #4525).
 
 ## Round-30 closures (1 closure)
 

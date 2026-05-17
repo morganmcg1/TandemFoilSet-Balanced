@@ -5,6 +5,19 @@ Primary metric: `val_avg/mae_surf_p` (lower is better)
 
 ---
 
+## ⚠️ PROGRAMME-WIDE NOTE (added round-31, 2026-05-17)
+
+**Every Lion+Lookahead entry below (PR #4123, #4269, #4373, #4402) was trained with `wd=1e-4` nominal but EFFECTIVE wd=0.** Tanjiro's PR #4456 (`wd=5e-5`) returned bit-identical metrics to #4402 across val and all 4 test splits to 10 decimal places, proving the WD update is an fp32 no-op at this scale.
+
+The math: Lion applies `p.data.mul_(1.0 - lr * wd)`. With `lr_lion = cfg.lr/3 = 1.667e-4` and `wd = 1e-4`, `lr*wd ≈ 1.67e-8` — below fp32 half-ulp (~2.98e-8) at 1.0, so `(1.0 - lr*wd)` rounds to 1.0. For active WD, `lr*wd ≥ 1.67e-7` is required, meaning `wd ≥ 1e-3` for this LR.
+
+**Implications:**
+- Paper must report the result as "without explicit weight decay." Implicit regularization (Lookahead averaging + β2=0.995 m-buffer + cosine LR) is doing all the work.
+- Do NOT assign Lion WD probes at `wd < 1e-3` — they are computationally no-ops.
+- The proper WD bowl mapping is in flight: tanjiro #4518 (wd=1e-3), alphonse #4521 (wd=3e-3), frieren #4523 (wd=1e-2).
+
+---
+
 ## 2026-05-17 11:00 — PR #4402: Compound k=6 + β2=0.995 + α=0.7 ← NEW PROGRAMME ALL-TIME BEST
 
 - **Student:** willowpai2i48h1-askeladd

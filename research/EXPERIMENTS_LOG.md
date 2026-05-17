@@ -1,5 +1,168 @@
 # SENPAI Research Results
 
+## 2026-05-17 17:00 — ⚠️ MAJOR FINDING: Lion WD is a fp32 NO-OP at wd ≤ 1e-4 (tanjiro PR #4456)
+
+Tanjiro's PR #4456 (probe at WD=5e-5, half-decay) returned val_avg/mae_surf_p=45.7283891090 and test_avg/mae_surf_p=44.5079125386 — **BIT-IDENTICAL to PR #4402 to 10 decimal places** across val and all 4 test splits.
+
+### The fp32 epsilon
+
+Lion's weight-decay step is `p.data.mul_(1.0 - lr * wd)`. With:
+- `lr_lion = cfg.lr / 3 = 5e-4 / 3 ≈ 1.667e-4`
+- `wd = 1e-4` (the nominal value in BASELINE.md's #4402, #4373, #4269, #4123)
+- `lr * wd ≈ 1.667e-8`
+
+fp32 half-ulp at 1.0 is ~2.98e-8. So `(1.0 − 1.667e-8)` **rounds to exactly 1.0** in fp32, and `p.data.mul_(1.0)` is a no-op. Bit-identical proof: `np.float32(1.0) - np.float32(5e-4/3 * 1e-4) == np.float32(1.0)`.
+
+### Programme-wide implication
+
+**Every Lion+Lookahead winner in BASELINE.md (PR #4123 wd=1e-4, #4269 wd=1e-4, #4373 wd=1e-4, #4402 wd=1e-4) has been running with effective wd=0.** The programme has implicitly been doing Lookahead + Lion + ZERO weight decay. The headline val=45.7284 / test=44.5079 is what the compound achieves WITHOUT explicit regularization.
+
+### Threshold table for active WD
+
+| nominal wd | lr*wd | vs fp32 half-ulp (2.98e-8) | effective? |
+|---|---|---|---|
+| 1e-5 | 1.67e-9 | 0.06× | NO (no-op) |
+| 5e-5 | 8.33e-9 | 0.28× | NO (no-op, confirmed BIT-IDENTICAL #4456) |
+| 1e-4 | 1.67e-8 | 0.56× | NO (no-op — all prior winners) |
+| 2e-4 | 3.33e-8 | 1.12× | barely active (confirmed slight drift #4482) |
+| 1e-3 | 1.67e-7 | 5.6× | active (tanjiro #4518 in flight) |
+| 3e-3 | 5.00e-7 | 16.8× | active (alphonse #4521 in flight) |
+| 1e-2 | 1.67e-6 | 56× | active (frieren #4523 in flight) |
+
+### What changes
+
+- **Paper:** The Lookahead-Lion-β2=0.995-k=6 result MUST be framed as "without weight decay" — the implicit regularization (Lookahead averaging + β2 m-buffer + cosine LR) is doing all the work. This is a legitimate mechanistic finding.
+- **Future probes:** Lion WD probes at wd < 1e-3 are forbidden — they are computationally identical no-ops. WD-bowl needs wd ∈ {1e-3, 3e-3, 1e-2, 3e-2} for real mapping.
+- **Round-31 dispatch:** 3 parallel active-WD probes (#4518, #4521, #4523) cover the first proper Lion WD bowl in this programme.
+
+---
+
+## 2026-05-17 17:00 — PR #4456: WD=5e-5 ← CLOSED (the discovery itself — bit-identical to #4402)
+
+- Branch: `willowpai2i48h1-tanjiro/lion-wd-5e-5`
+- Student: willowpai2i48h1-tanjiro
+- Hypothesis: half-decay WD might marginally reduce regularization and improve generalization.
+
+### Results
+
+| Metric | Value | Δ vs #4402 |
+|---|---|---|
+| val_avg/mae_surf_p | 45.7283891090 | 0 (bit-identical) |
+| test_avg/mae_surf_p | 44.5079125386 | 0 (bit-identical) |
+
+All 4 test splits also bit-identical to #4402 to 10 decimals.
+
+### Tanjiro's diagnosis (quoted)
+
+> "PR #4402 (current baseline) was effectively running with wd=0, despite weight_decay=1e-4 being set. This is true for every Lion+Lookahead run in BASELINE.md (PR #4123, #4269, #4373, #4402, and this one). The WD numbers reported in those PRs are nominal, not effective."
+
+### Decision
+
+CLOSED with full credit. Tanjiro reassigned to **wd=1e-3 (1st active WD probe, #4518)** — they found the bug; they should map the WD bowl floor.
+
+---
+
+## 2026-05-17 17:00 — PR #4496: α COSINE SCHEDULE 0.5 → 0.7 ← CLOSED (mechanism falsified)
+
+- Branch: `willowpai2i48h1-alphonse/lookahead-alpha-cosine-schedule`
+- Student: willowpai2i48h1-alphonse
+- Hypothesis: early-low / late-high α preserves Lion exploration then locks in basin.
+
+### Results
+
+val_avg=46.9585 (Δ +1.23 vs #4402), test_avg=45.9724 (Δ +1.46). Lands within 0.4σ̂ of the 5-seed canonical mean 46.83 — within population distribution, but worse than static α=0.7 at every mid-training checkpoint.
+
+### Mechanism finding (alphonse's analysis, accepted)
+
+The cosine schedule reaches α=0.7 exactly at the LR-cosine endpoint (step 6375 ≈ epoch 17). At that point inner Lion takes near-zero-LR steps, so both schedules converge to the same fixed point. But mid-training, the cosine-schedule run has WORSE val at every checkpoint — early α=0.5 *reduced* slow-weight regularization rather than improving exploration.
+
+The "early-α=0.5 preserves exploration" mechanism story does NOT hold for this optimizer + dataset + horizon. The fast Lion trajectory is already coherent enough that a stronger constant slow-weight pull (α=0.7) is the dominant good behavior across all stages.
+
+### Decision
+
+CLOSED. α-schedule mechanism FALSIFIED (forward direction). Alphonse reassigned to **wd=3e-3 (Lion active WD MID, #4521)**. Reverse direction (0.7 → 0.5) assigned to nezuko #4524 as symmetric mechanism check.
+
+---
+
+## 2026-05-17 17:00 — PR #4498: seed=4 canonical ← CLOSED (5-seed canonical PAPER-READY)
+
+- Branch: `willowpai2i48h1-frieren/seed4-canonical`
+- Student: willowpai2i48h1-frieren
+- Hypothesis: complete n=5 canonical for paper-facing population estimate.
+
+### Results
+
+seed=4 lands at upper-end of distribution: val=47.0672, test=46.0682. Combined 5-seed canonical:
+
+| n | val mean ± SEM | test mean ± SEM |
+|---|---|---|
+| 4 (prior) | 46.7696 ± 0.5244 | 45.3426 ± 0.4833 |
+| **5 (this PR)** | **46.8291 ± 0.4105** | **45.4877 ± 0.4015** |
+
+SEM tightened on both axes (val 0.52→0.41, test 0.48→0.40). Seed=4 was the 2nd-worst val of 5 seeds, but seed-std contracted from σ̂_sample=1.049 → 0.918 (val).
+
+### Paper-facing reference (updated, PAPER-READY)
+
+| Number | Single-seed (PR #4402) | 5-seed canonical |
+|---|---|---|
+| val | 45.7284 | **46.83 ± 0.41 SEM** |
+| test | 44.5079 | **45.49 ± 0.40 SEM** |
+
+Future winner candidates must beat **45.49 test mean with ≥0.9pt margin** (≥1σ̂_sample), not just seed=0 best of 44.51.
+
+### Decision
+
+CLOSED. n=5 PAPER-READY. Frieren reassigned to **wd=1e-2 (Lion active WD RIGHT edge, #4523)**.
+
+---
+
+## 2026-05-17 17:00 — PR #4482: WD=2e-4 ← CLOSED (FIRST barely-active WD; +0.07 within noise)
+
+- Branch: `willowpai2i48h1-thorfinn/lion-wd-2e-4`
+- Student: willowpai2i48h1-thorfinn
+- Hypothesis: doubled WD might help convergence on near-zero-LR endpoint.
+
+### Results
+
+val=45.8021 (Δ +0.074, ~0.07σ̂), test=45.0076 (Δ +0.50, ~0.52σ̂). Within seed noise on both axes.
+
+### Context (informed by tanjiro #4456)
+
+At wd=2e-4, `lr*wd ≈ 3.33e-8` — just above fp32 half-ulp at 1.0 (2.98e-8). Cumulative drift over 6375 steps ≈ 2.1e-4 fractional — barely active. Enough to perturb the trajectory and yield slightly different metrics, but the actual regularization strength is still tiny.
+
+### Decision
+
+CLOSED. The genuine WD bowl needs wd ≥ 1e-3 for meaningful active regularization. Thorfinn reassigned to **COSINE WARM RESTARTS (#4525)** — bold PLATEAU PROTOCOL mechanism swing (2 cycles of T_max=8 + T_max=9 vs single T_max=17).
+
+---
+
+## 2026-05-17 17:00 — PR #4475: α=0.60 + k=6 + β2=0.995 ← CLOSED (α-bowl FULLY MAPPED)
+
+- Branch: `willowpai2i48h1-nezuko/alpha060-k6-b2-995`
+- Student: willowpai2i48h1-nezuko
+- Hypothesis: α-LEFT shift discovered at k=5 (nezuko #4415) might extend further at k=6.
+
+### Results
+
+val=46.3629 (Δ +0.63, ~0.53σ̂), test=45.3802 (Δ +0.87, ~0.90σ̂). Regression within noise but consistent on both axes.
+
+### α-bowl at k=6+β2=0.995 — FULLY MAPPED
+
+| α | val | Δ vs #4402 | Status |
+|---|---|---|---|
+| 0.60 | 46.36 | +0.63 | closed #4475 (this PR) |
+| 0.65 | 46.93 | +1.20 | closed #4472 |
+| **0.70** | **45.73** | **0** | **MERGED #4402 — winner** |
+| 0.75 | 45.80 | +0.07 | closed #4430 |
+
+α-bowl is shallow with a slight RIGHT-tilt; α=0.70 confirmed optimal. The α-LEFT shift at k=5+β2=0.995 does NOT generalize to k=6.
+
+### Decision
+
+CLOSED. α-axis FULLY RESOLVED at k=6+β2=0.995. Nezuko reassigned to **REVERSE α COSINE SCHEDULE 0.7 → 0.5 (#4524)** — symmetric mechanism check.
+
+---
+
 ## 2026-05-17 16:00 — PR #4432: cfg.lr=7e-4 + k=6 + β2=0.995 ← CLOSED on W&B data (stale_wip, no SENPAI-RESULT comment posted)
 
 - Branch: `willowpai2i48h1-edward/lr7e4-k6-b2-995`
