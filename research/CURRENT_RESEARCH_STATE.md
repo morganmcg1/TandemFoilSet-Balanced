@@ -1,12 +1,12 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 (updated 04:45 — #4305 fern CLOSED (mlp_ratio {3,4} both regress val on primary metric; bf16+grad_clip crash unblock confirmed; val/test divergence on test_re_rand noted); #4359 fern assigned (warmup_epochs sweep {1, 5} on T_max=25))
+- **Date:** 2026-05-17 (updated 05:35 — #4336 tanjiro MERGED (lr=2e-3, 15th win, −6.33% val); #4388 tanjiro assigned (LR push {2.5e-3, 3e-3}); all 7 WIP students notified of new canonical lr=2e-3)
 - **Branch:** `icml-appendix-willow-pai2i-48h-r3`
 - **Most recent human researcher directive:** None this launch.
-- **Canonical baseline (merged):** `val_avg/mae_surf_p = 37.9354`, `test_avg/mae_surf_p (excl cruise) = 39.0519`
-  - Achieved via: Huber loss (PR #3155) + LR warmup 1e-3 (PR #3147) + **SOAP (PR #3283)** + SOAP precond_freq=5 (PR #3495) + **EMA(0.999) (PR #3430)** + EMA decay=0.99 (PR #3591) + Huber beta=0.5 (PR #3316) + Cauchy c=1.0 (PR #3612) + Huber beta=0.1 (PR #3868) + **Lookahead k=5 (PR #3947)** + **grad_clip=1.0 (PR #3497)** + **Huber beta=0.01 (PR #4037)** + **bfloat16 autocast (PR #3975)** + **cosine T_max=25 (PR #4263)**
-  - Full stack: SOAP **precondition_frequency=5**, lr=1e-3, warmup_epochs=3, ema_decay=0.99, **huber_beta=0.01**, **use_lookahead=True, lookahead_k=5, lookahead_alpha=0.5**, **grad_clip=1.0**, **use_bf16=True**, **cosine_t_max=25**
-  - **best_epoch=17**; epoch_time ~107s; Peak VRAM 33.0 GB
+- **Canonical baseline (merged):** `val_avg/mae_surf_p = 35.5322`, `test_avg/mae_surf_p (excl cruise) = 37.1052`
+  - Achieved via: Huber loss (PR #3155) + LR warmup 1e-3 (PR #3147) + **SOAP (PR #3283)** + SOAP precond_freq=5 (PR #3495) + **EMA(0.999) (PR #3430)** + EMA decay=0.99 (PR #3591) + Huber beta=0.5 (PR #3316) + Cauchy c=1.0 (PR #3612) + Huber beta=0.1 (PR #3868) + **Lookahead k=5 (PR #3947)** + **grad_clip=1.0 (PR #3497)** + **Huber beta=0.01 (PR #4037)** + **bfloat16 autocast (PR #3975)** + **cosine T_max=25 (PR #4263)** + **lr=2e-3 (PR #4336)**
+  - Full stack: SOAP **precondition_frequency=5**, **lr=2e-3**, warmup_epochs=3, ema_decay=0.99, **huber_beta=0.01**, **use_lookahead=True, lookahead_k=5, lookahead_alpha=0.5**, **grad_clip=1.0**, **use_bf16=True**, **cosine_t_max=25**
+  - **best_epoch=17**; epoch_time ~107s; Peak VRAM ~33.0 GB
 
 ## Tracked infrastructure issue: cruise-test NaN
 
@@ -38,8 +38,9 @@
 | #4037 | fern | Huber beta=0.01 (near-L1 regime) | **−2.51%** | 45.9199 |
 | **#3975** | **askeladd** | **bfloat16 autocast (+3 epochs in 30-min cap)** | **−9.74%** | **41.4446** |
 | **#4263** | **tanjiro** | **cosine T_max=25 (schedule aligned to bf16 budget)** | **−8.47%** | **37.9354** |
+| **#4336** | **tanjiro** | **lr=2e-3 on T_max=25 canonical (monotone LR ceiling unlocked)** | **−6.33%** | **35.5322** |
 
-Old launch baseline: 135.30. Total gain: **−72.0%** over 14 compounding improvements.
+Old launch baseline: 135.30. Total gain: **−73.7%** over 15 compounding improvements.
 
 ## Closed hypotheses (complete)
 
@@ -69,19 +70,18 @@ Old launch baseline: 135.30. Total gain: **−72.0%** over 14 compounding improv
 | #4200 | tanjiro | Lookahead k sweep {3, 5, 10} | k=5 exactly reproduces canonical; k=3 nearly tied (+0.94%); k=10 catastrophic (+4.88%) — k/precond_freq=5 resonance confirmed |
 | #4305 | fern | mlp_ratio revisit {3, 4} on bf16 canonical | Both regress val: mlp=3 +0.75%, mlp=4 +2.59% (matched-stack); crash unblocked confirmed (no OOM, no NaN); interesting val/test divergence: mlp=3 better test_re_rand (−8.6%), test_geom_camber_rc (−5.4%) — under-trained wider FFN helps OOD but hurts val. mlp_ratio=2 stays canonical. |
 
-## Active WIP experiments (target: val < 41.4446, full canonical stack with --use_bf16)
+## Active WIP experiments (target: val < 35.5322, full canonical stack with --use_bf16 --lr 2e-3 --cosine_t_max 25)
 
 | PR | Student | Hypothesis | Family | Status |
 |---|---|---|---|---|
-| **#3415** | **frieren** | **Log-Re sinusoidal (freqs=4) on full canonical** | **Inputs** | **WIP — training; bf16 canonical notified.** |
-| **#3952** | **edward** | **Log-pressure aux loss (logp_weight=0.1)** | **Loss tuning** | **WIP — training; bf16 canonical notified.** |
-| **#4234** | **askeladd** | **Batch size sweep {4, 6, 8} on bf16 canonical** | **Throughput** | **WIP — training.** |
-| **#4244** | **alphonse** | **Wider Transolver n_hidden=192 on bf16 canonical** | **Architecture** | **WIP — training.** |
-| **#4245** | **nezuko** | **Weight decay sweep {1e-4, 1e-3, 1e-2} on bf16 canonical** | **Regularization** | **WIP — training.** |
-| **#4296** | **thorfinn** | **Transolver slice_num sweep {32, 96} on bf16 canonical** | **Architecture** | **WIP — rebase in progress (conflict from #4263 train.py change).** |
-| **#4348** | **alphonse** | **Attention head sweep {2, 8} on 14-winner canonical** | **Architecture** | **WIP — just assigned.** |
-| **#4336** | **tanjiro** | **LR re-tune on T_max=25 canonical: {1.5e-3, 2e-3}** | **Optimization** | **WIP — training.** |
-| **#4359** | **fern** | **Warmup epochs re-tune on T_max=25 canonical: {1, 5}** | **Optimization** | **WIP — just assigned.** |
+| **#3415** | **frieren** | **Log-Re sinusoidal (freqs=4) on full canonical** | **Inputs** | **WIP — training; new canonical notified.** |
+| **#3952** | **edward** | **Log-pressure aux loss (logp_weight=0.1)** | **Loss tuning** | **WIP — rebased; new canonical notified.** |
+| **#4234** | **askeladd** | **Batch size sweep {4, 6, 8} on bf16 canonical** | **Throughput** | **WIP — training; new canonical notified.** |
+| **#4245** | **nezuko** | **Weight decay sweep {1e-4, 1e-3, 1e-2} on bf16 canonical** | **Regularization** | **WIP — training; new canonical notified.** |
+| **#4296** | **thorfinn** | **Transolver slice_num sweep {32, 96} on bf16 canonical** | **Architecture** | **WIP — rebased; new canonical notified.** |
+| **#4348** | **alphonse** | **Attention head sweep {2, 8} on 14-winner canonical** | **Architecture** | **WIP — training; new canonical notified.** |
+| **#4359** | **fern** | **Warmup epochs re-tune on T_max=25 canonical: {1, 5}** | **Optimization** | **WIP — training; new canonical notified.** |
+| **#4388** | **tanjiro** | **LR push above 2e-3: {2.5e-3, 3e-3} on 15-winner canonical** | **Optimization** | **WIP — just assigned.** |
 
 Zero idle students.
 
@@ -97,7 +97,7 @@ Zero idle students.
 8. **Wider Transolver (n_hidden=192) now viable.** Previously rejected due to wall-clock penalty; bf16 VRAM budget (33 GB used / 96 GB available) removes that constraint.
 9. **Batch size sweep now viable.** 33 GB used → headroom for bs=6 or bs=8; should increase throughput further.
 10. **Cosine T_max=25 — 14th win, −8.47% val.** T_max=50 with 17-epoch bf16 budget meant cosine cooldown was silently disabled (LR at epoch 17 = 80% of peak). T_max=25 gives 22-epoch cosine window; at epoch 17 LR ≈ 29% of peak. T_max=17 (full match) is slightly too aggressive (LR→0 wastes last epochs). **All future experiments must use `--cosine_t_max 25`.**
-11. **LR=1e-3 sweep was confounded by broken T_max=50.** The val/test divergence observed (lr=2e-3 better test but worse val) may resolve on the corrected schedule. Re-sweep on T_max=25 in progress (#4336).
+11. **LR=2e-3 — 15th win, −6.33% val.** T_max=25 unlocked the LR ceiling: monotone improvement 1e-3 → 1.5e-3 → 2e-3 (val 37.94 → 36.44 → 35.53). No saturation signal at 2e-3. Cosine cooldown provides variance reduction that makes high-LR exploration safe. **New canonical lr=2e-3. LR push to {2.5e-3, 3e-3} in progress (#4388).**
 
 ## Next directions (priority order)
 
@@ -115,15 +115,15 @@ Zero idle students.
 - **grad_clip=1.0 is sweet spot.** Lower bounds (0.5, 0.1) and AGC-style all worse.
 - **surf_weight=10 locked in** on Huber β=0.01 L1-dominant stack.
 - **β family closed** — non-monotone below 0.01; pure L1 test-metric wrong-signed.
-- **lr=1e-3 confirmed optimal for val.** Sweep {5e-4, 1e-3, 2e-3, 3e-3} — monotone worse above 1e-3 on val. 2e-3 shows interesting test improvement (−1.13% OOD) but val regression (+0.99%) prevents merge.
+- **lr=2e-3 is new canonical (PR #4336).** Previous sweep was confounded by broken T_max=50; with T_max=25, 1.5e-3 and 2e-3 both beat 1e-3. Monotone: 1e-3 > 1.5e-3 > 2e-3. No saturation at 2e-3 — push to {2.5e-3, 3e-3} in progress (#4388).
 - **Depth (n_layers=6) closed** under 30-min cap — schedule/LR bottleneck, not capacity; even at matched epoch lags canonical.
 
 ### Post-current-round stack
-1. **Log-Re sinusoidal (frieren #3415):** if it wins → merge; orthogonal to architecture changes.
-2. **LR re-tune on T_max=25 (#4336 tanjiro):** high-EV — corrects confounded fern sweep; if lr=1.5e-3 or 2e-3 wins → another compound gain.
-3. **Warmup epochs re-tune (#4359 fern):** {1, 5} on T_max=25 — schedule-interaction sweep; 2 epoch swing in high-LR phase.
-4. **T_max finer sweep {20, 22}:** after LR re-tune settles; may squeeze another 0.2-0.5 val points.
-5. **n_head sweep {2, 8}:** not yet swept on this stack; in-flight (#4348).
-6. **LR re-tune on merged architecture** (batch/width/FFN winner): SOAP step size will shift.
-7. **Dropout sweep {0.05, 0.1}:** never tested on SOAP+L1 stack; could regularize against in-dist overfit (val 37.93 vs test_single_in_dist 40.71 = 7% gap).
-8. **mlp_ratio=3 on T_max=25 stack:** student-flagged follow-up — val regressed on old stack but test improved on OOD splits; might resolve on corrected schedule. Deprioritized vs other ideas.
+1. **Log-Re sinusoidal (frieren #3415):** if it wins → merge; orthogonal to all optimization changes.
+2. **LR push above 2e-3 (#4388 tanjiro):** {2.5e-3, 3e-3} — in-flight; no saturation signal at 2e-3.
+3. **Warmup epochs re-tune (#4359 fern):** {1, 5} on T_max=25 — interaction of warmup with higher peak LR. With lr=2e-3, warmup=3 gives 0.67e-3/epoch ramp; {1, 5} brackets the safe zone.
+4. **Architecture results (#4234 batch, #4245 weight-decay, #4296 slice_num, #4348 n_head):** any winner → merge, update canonical stack.
+5. **T_max finer sweep {20, 22}:** after LR push settles; may squeeze 0.2-0.5 val with adjusted cooldown for lr=2e-3.
+6. **Dropout sweep {0.05, 0.1}:** never tested on SOAP+L1+bf16 stack; test_single_in_dist (38.15) vs val (35.53) = 7.3% gap suggests mild regularization could help generalization.
+7. **LR re-tune on merged architecture winner:** SOAP step size sensitive to model capacity.
+8. **mlp_ratio=3 on T_max=25+lr=2e-3 stack:** deprioritized — original val regression may hold even with correct schedule. Try after architecture sweeps settle.

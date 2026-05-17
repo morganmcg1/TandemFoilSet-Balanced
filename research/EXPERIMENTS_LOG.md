@@ -1495,3 +1495,32 @@ Per-split test (arm 3 / T_max=25):
 - Branch: `willowpai2i48h3-fern/warmup-epochs-retune-cosine-t25`
 - Hypothesis: warmup_epochs=3 was chosen on the old T_max=50 schedule. With T_max=25 now binding the cooldown, the warmup fraction shifts. Shortening warmup (=1) gives 2 more epochs at peak LR; lengthening (=5) gives SOAP eigendecomposition more time to stabilize before peak. Previous sweep (#3319) found "flat region" but was on pre-SOAP, pre-bf16, T_max=50 stack — completely different landscape.
 - 2 arms: warmup_epochs ∈ {1, 5}, both with cosine_t_max=25.
+
+## 2026-05-17 05:33 — PR #4336 (tanjiro): LR re-tune on T_max=25 canonical — **MERGED (15th winner)**
+
+- Branch: `willowpai2i48h3-tanjiro/lr-retune-cosine-t25`
+- W&B runs: `5zt6p00l` (arm1 lr=1.5e-3), `myusvvzs` (arm2 lr=2e-3) — **WINNER**
+- Hypothesis: LR=1e-3 was optimal on T_max=50 (broken schedule). With T_max=25 restoring genuine cosine cooldown, higher peak LR is safe — cooldown's variance reduction compensates for higher exploration noise.
+
+**Result (vs canonical val=37.9354):**
+
+| Arm | lr | val_avg/mae_surf_p | Δ val | test_excl_cruise | Δ test | best_epoch | end LR |
+|---|---|---|---|---|---|---|---|
+| canonical (ref) | 1e-3 | 37.9354 | — | 39.0519 | — | 17 | ~2.9e-4 |
+| 1 | 1.5e-3 | 36.4363 | **−3.95%** | 37.9215 | **−2.89%** | 17 | 4.4e-4 |
+| 2 (W) | 2e-3 | **35.5322** | **−6.33%** | **37.1052** | **−4.98%** | 17 | 5.8e-4 |
+
+Per-split test (arm2 winner):
+- test_single_in_dist: 38.1541 (−6.28%)
+- test_geom_camber_rc: 44.1434 (−2.20%)
+- test_re_rand: 29.0182 (−7.32%)
+
+**Analysis:** Monotone improvement 1e-3 → 1.5e-3 → 2e-3 on val and test simultaneously — no val/test divergence that plagued the T_max=50 sweep. Stack stable at 2× canonical LR (no NaN, no grad_norm spikes). Best_epoch=17 unchanged — wall-clock cap still binding. Mechanism: cosine cooldown's variance reduction makes higher exploration LR safe; the final 0-to-29%-of-peak annealing phase extracts the benefit without instability.
+
+**New canonical:** val=35.5322, test=37.1052. LR updated to **2e-3** in BASELINE.md. **MERGED.**
+
+## 2026-05-17 05:35 — Assignment: #4388 tanjiro lr-push-cosine-t25
+
+- Branch: `willowpai2i48h3-tanjiro/lr-push-cosine-t25`
+- Hypothesis: No saturation at lr=2e-3 — push to {2.5e-3, 3e-3} to find the LR ceiling.
+- 2 arms: lr ∈ {2.5e-3, 3e-3}, both with cosine_t_max=25 on 15-winner canonical.
