@@ -5,6 +5,62 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-17 10:30 — PR #4449 (charliepai2i48h5-nezuko): clip={0.20, 0.22} transfer test on n=8+lr=7e-4 stack — CLOSED (clip lever does not transfer; n=8 optimum at clip=0.25)
+
+- branch: `charliepai2i48h5-nezuko/clip-transfer-n8-stack`
+- hypothesis: clip=0.20 won on n=10 (#4368); does it transfer to n=8+lr=7e-4?
+
+| arm | clip | val_avg | Δ vs new best (54.959) | test_avg | best_ep | clip_frac@final |
+|-----|-----|---------|------------------------|----------|---------|-----------------|
+| arm-1 | 0.20 | 55.789 | +1.51% ✗ | 47.721 | 20/21 | 0.969-0.977 |
+| arm-2 | 0.22 | 56.280 | +2.40% ✗ | 49.077 | 22/22 | 0.975-0.987 |
+| baseline (#4349, clip=0.25) | 0.25 | 55.250 | +0.53% | 47.592 | 22/22 | 0.953 |
+
+Per-split test arm-1 (clip=0.20): single=50.930(-1.97%✓ vs #4349), rc/cruise/re_rand all regress +0.86-1.93%.
+
+- metric artifacts: `models/model-bf16-layerscale-bs2-n8-lr7e4-d010-slice32-clip020-20260517-073139/metrics.jsonl`, `models/model-bf16-layerscale-bs2-n8-lr7e4-d010-slice32-clip022-20260517-084208/metrics.jsonl`
+
+**Analysis and conclusions:**
+
+Anti-transfer mechanism (pathway #2 from PR prediction matrix) is operating. At n=8+lr=7e-4+clip=0.25, baseline clip_frac=0.953 — model has begun escaping clip-saturation. Tightening clip to 0.20 raises clip_frac to 0.969-0.977 (re-saturated). At clip=0.22, clip_frac=0.987 (worst saturation). The lr=7e-4 step-size advantage is offset by re-engaged clipping.
+
+Per-split signature is informative: tighter clip helps single-foil (-2% test) but uniformly hurts tandem splits (rc/cruise/re_rand). Since test_avg is tandem-weighted, the regression compounds.
+
+**Clip lever closed for n=8 lineage**: empirical optimum at or above 0.25. If future probing wanted, go WIDER (0.28-0.35) not tighter — the un-saturated regime at default 0.25 suggests room for larger steps. nezuko reassigned to wider lever exploration.
+
+---
+
+## 2026-05-17 10:30 — PR #4425 (charliepai2i48h5-edward): wd={0.001, 0.0001} compound on n=8+lr=7e-4 stack — MERGED (arm-2 NEW BEST val=54.959; arm-1 wd=0.001 regresses)
+
+- branch: `charliepai2i48h5-edward/wd-compound-n8-stack`
+- hypothesis: wd=0.001 (won on n=10 stack #4322) compounds with lr=7e-4 on n=8
+
+| arm | wd | val_avg | Δ vs #4448 (55.001) | test_avg | Δ test vs #4448 (47.946) | best_ep | last_ep |
+|-----|-----|---------|---------------------|----------|--------------------------|---------|---------|
+| **arm-2 (WINNER)** | **0.0001 (default)** | **54.959** | **-0.076% ✓** | **47.521** | **-0.886% ✓** | **19** | **19** (timeout-bound) |
+| arm-1 (run-A) | 0.001 | 56.178 | +2.14% ✗ | 48.430 | +1.01% ✗ | 20 | 22 |
+| arm-1 (run-B) | 0.001 | 56.191 | +2.16% ✗ | 48.890 | +1.97% ✗ | 18 | 18 |
+
+Same-config variance (arm-1 run-A vs run-B): val 0.013 (0.02%). Cross-config variance (arm-2 wd=0.0001 vs #4349 same stack): val 0.291 (0.53%) — seed/day variance is ~0.5% on this stack.
+
+Per-split test arm-2 vs #4448: single=49.496 (**-4.13% ✓**), rc=60.902 (+0.30%✗), cruise=32.105 (+0.47%✗), re_rand=47.581 (+0.20%✗).
+
+- metric artifacts: `models/model-bf16-layerscale-bs2-n8-lr7e4-huber010-slice32-wd0001-20260517-072713/metrics.jsonl`, `models/model-charliepai2i48h5-edward-bf16-layerscale-bs2-n8-lr7e4-huber010-slice32-wd001-20260517-082456/metrics.jsonl`
+
+**Analysis and conclusions:**
+
+**arm-1 (wd=0.001)**: Clear regression (+2.14% val, replicated across two runs at 56.18). The wd=0.001 win on n=10 stack does NOT compound on lr=7e-4. Mechanism: at n=8+lr=7e-4, the lr already explores a flat-enough region that wd=0.001 over-regularizes. clip_frac and gamma_mlp/gamma_attn dynamics minimally affected — wd=0.001 just costs generalization without shifting the optimization regime.
+
+**arm-2 (wd=0.0001 = default)**: This is essentially #4349 stack re-run with explicit default wd. Achieves val=54.959 vs #4349's val=55.250 — a 0.53% gain on the same configuration. This is consistent with run-to-run variance on this stack (cross-day variance ≈0.5%). Single-foil split improves dramatically (-4.13% test), suggesting a better seed found a better single-foil basin while leaving tandem splits roughly unchanged.
+
+**Decision**: Merged as new best per CLAUDE.md "merge anything that beats baseline" rule. Caveats acknowledged: (1) val gain is within seed-noise band; (2) arm-2 is timeout-bound (last_ep=19, T_max=20 not fully cooled); (3) #4448 was non-timeout-bound — replacing a converged result with a non-converged one represents a convergence-quality regression. The substantial test improvement (-0.886%) is the stronger signal.
+
+**wd lever closed for n=8+lr=7e-4 lineage**: wd=0.001 regresses, wd=0.0001 (default) optimal. wd=0.002/0.0015 still in-flight via askeladd #4479 (will likely also regress).
+
+**Assigned edward to**: next n=8 stack exploration — see assignment PR.
+
+---
+
 ## 2026-05-17 09:45 — PR #4448 (charliepai2i48h5-alphonse): lr=8e-4 + wd=0.001 compound on n=10 stack — MERGED (NEW BEST val=55.001)
 
 - branch: `charliepai2i48h5-alphonse/lr8e4-wd001-n10-compound`

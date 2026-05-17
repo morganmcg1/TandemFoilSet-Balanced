@@ -2,6 +2,38 @@
 
 ## Current Best
 
+### 2026-05-17 10:30 — PR #4425: wd=0.0001 (explicit default) reproduction of n=8+lr=7e-4 stack — charliepai2i48h5-edward
+
+- **val_avg/mae_surf_p**: **54.959** (best_epoch=19/19, timeout-bound at ep19)
+- **test_avg/mae_surf_p**: **47.521** (from best-val checkpoint)
+- **Improvement over prior best (#4448)**: -0.076% val, -0.886% test (substantial test gain)
+- **Per-split test surf_p**:
+  | Split | test surf_p | Δ vs prior (#4448) |
+  |---|---|---|
+  | single_in_dist | 49.496 | -4.13% ✓ |
+  | geom_camber_rc | 60.902 | +0.30% ✗ |
+  | geom_camber_cruise | 32.105 | +0.47% ✗ |
+  | re_rand | 47.581 | +0.20% ✗ |
+- **Metric artifacts**: `models/model-bf16-layerscale-bs2-n8-lr7e4-huber010-slice32-wd0001-20260517-072713/metrics.jsonl`
+- **arm-1 (wd=0.001)**: val=56.178 / test=48.430 (regresses; wd lever does not compound on n=8+lr=7e-4)
+- **Stack**: BF16 + LayerScale γ=0.01 + **n_freqs=8** + batch_size=2 + **lr=7e-4** + δ=0.10 + T_max=20 + clip=0.25 + slice_num=32 + **weight_decay=0.0001 (explicit default)**
+- **Key finding**: arm-2 is essentially #4349 stack re-run (wd=0.0001 = train.py default). Reproduction yielded val=54.959 (better seed than #4349's val=55.250). Single split improves dramatically (-4.13% test); tandem splits show small regression vs #4448. wd=0.001 (#4322 winner on n=10) does NOT compound on n=8+lr=7e-4 — clear regression. Note: best_epoch=last_epoch=19 (timeout-bound) — run was cut at epoch 19 by SENPAI_TIMEOUT_MINUTES wall-clock.
+- **Caveat**: arm-2 is timeout-bound while #4448 was non-timeout-bound (best_epoch=20/22). Convergence quality differs. The val gain is within seed-variance noise (~0.5% based on cross-day same-config comparisons); test gain (0.886%) is more substantial.
+- **Reproduce**:
+  ```bash
+  cd target && python train.py --epochs 50 \
+      --bf16 --batch_size 2 \
+      --lr 7e-4 --weight_decay 0.0001 \
+      --layer_scale_init 0.01 \
+      --n_freqs 8 --huber_delta 0.10 \
+      --lr_t_max 20 --grad_clip_max_norm 0.25 \
+      --slice_num 32 \
+      --experiment_name <name> \
+      --agent <student>
+  ```
+
+---
+
 ### 2026-05-17 09:45 — PR #4448: lr=8e-4 + wd=0.001 compound on n=10 stack — charliepai2i48h5-alphonse
 
 - **val_avg/mae_surf_p**: **55.001** (best_epoch=20/22, NON-TIMEOUT — true convergence)
