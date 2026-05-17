@@ -47,7 +47,7 @@ cd target && python train.py --agent <student> \
 |----|---------|-------|--------|-----------------|
 | #4235 | alphonse | MLP-ratio sweep: 3 and 4 (vs current 2) on 12-mech stack | WIP | #4188 closed; plateau protocol → architectural angle; MLPs are the largest param group |
 | #4287 | frieren | Batch size sweep: 8 (Arm A), 12 (Arm B) vs current 4 on 12-mech stack | WIP — NEW | #4236 closed; warmup refuted; 23.84/80 GB VRAM headroom → test batch dynamics (9 vs 4-5 vs 3 steps/epoch) |
-| #4237 | fern | Depth sweep: n_layers=6, 7 (vs current 5) on 12-mech stack | WIP | #4154 closed; depth untouched since round 1; width was throughput-bound (#4167) |
+| #4295 | fern | Per-group LR: lr_attn_mult vs lr_other_mult to rebalance MLP/attn updates | WIP — NEW | #4237 closed; depth throughput-bound; MLP/attn 5× grad-norm imbalance (PR #4154) still unaddressed → rebalance via per-group LR |
 | #4253 | edward | SGDR warm restarts: T_0=17 (Arm A), T_0=12 (Arm B) on 12-mech stack | WIP — NEW | #4181 closed (LR axis locked at 1.7e-4); all arms show val descending at timeout → test mid-training LR restart |
 | #4243 | askeladd | slice_num sweep: 48 (Arm A), 96 (Arm B) vs current 64 on 12-mech stack | WIP — NEW | #4029 closed (EMA decay 0.993/0.990 within noise); slice_num cleanest untested architectural axis |
 | #4278 | nezuko | Attention dropout: p=0.05 (Arm A), p=0.10 (Arm B) in PhysicsAttention | WIP — NEW | #4030 closed; vel-surf-weight null at lr=1.7e-4; val_geom_camber_rc=53.15 dominant gap → test attention regularization |
@@ -63,7 +63,7 @@ cd target && python train.py --agent <student> \
 3. **Does weight decay re-tuning unlock more headroom?** (#4230 thorfinn) — wd untouched at 3e-4 since Lion switch in #3293.
 4. **Does MLP-ratio expansion (3, 4) beat baseline?** (#4235 alphonse) — capacity along widest parameter group; throughput penalty ~10-20% per arm.
 5. **Does larger batch_size (8, 12) unlock better convergence at fixed LR?** (#4287 frieren) — 30% VRAM utilization (23.84/80 GB headroom); batch=4 gives only ~9 steps/epoch; larger batch could improve gradient quality and potentially throughput.
-6. **Does depth scaling (n_layers=6, 7) work where width scaling didn't?** (#4237 fern) — depth untouched since round 1; per-block slice attention scales linearly with layers.
+6. **Does per-group LR rebalancing (lr_attn_mult vs lr_other_mult) address the MLP/attn optimization imbalance?** (#4295 fern) — Arm A reins in MLP (lr_other×0.5), Arm B boosts attn (lr_attn×2.0); motivated by PR #4154 5× MLP grad-norm diagnostic and confirmed amplification in #4237.
 7. **Does attention dropout (p=0.05, 0.10) reduce OOD over-fitting on geom_camber_rc?** (#4278 nezuko) — dominant val error is rc-camber split (53.15); model has zero attention regularization; small-data regime (36 training geometries).
 8. **Does slice_num=48 or 96 improve on the current 64?** (#4243 askeladd) — cleanest untested architectural axis; prior #3106 was a three-way compound; pure slice sweep is new.
 9. **Does n_head=2 or 8 outperform current n_head=4?** (#4273 tanjiro) — head_dim directly controls attention subspace rank per block; pure n_head sweep is new ground (prior #3106 compounded 3 changes).
@@ -121,6 +121,7 @@ cd target && python train.py --agent <student> \
 | #4236 (frieren warmup-cosine) | no_improvement: Arm A (warmup=2) val=41.28 (+3.6%), stop condition triggered; Arm B not run; schedule-compression effect dominates; grad-clipping already provides stabilization; warmup direction closed (2nd failure, cf #3733) → #4287 batch-size-sweep |
 | #4061 (tanjiro decoupled-heads) | no_improvement: Arm A (2-layer p head) val=40.05 (+0.53% null) but test=35.22 (+3.92%); Arm B (3-layer) val=41.93 (+5.3%); 12-mech already neutralized shared-head bottleneck (asinh+pw=2.0) → #4273 n-head-sweep |
 | #4030 (nezuko vel-surf-weight arms C/D) | no_improvement: Arm C (0.7) val=39.49 (within noise) but test=34.46 (+1.69%); Arm D (0.8) val=40.76 (+2.3%); vel-surf-weight axis closed at lr=1.7e-4 → #4278 attention-dropout |
+| #4237 (fern n-layers-sweep) | no_improvement: A (n=6) val=42.33 (+2.50, 28ep, 66s/ep), B (n=7) val=46.99 (+7.16, 24ep, 76s/ep); throughput-bound AND no iso-epoch advantage over baseline; per-epoch convergence equal or worse at matched epoch index; MLP/attn gradient imbalance amplified by depth → #4295 per-group-lr |
 
 ## Potential next research directions
 
@@ -129,7 +130,8 @@ cd target && python train.py --agent <student> \
 - **LR fine-sweep at T_max=40** — CLOSED as #4181 (edward); lr=1.5e-4 null (+1.4%), lr=2.0e-4 failure (+5.1%); lr=1.7e-4 locked
 - **EMA decay re-sweep** — CLOSED as #4029 (askeladd); 0.993 within noise + test regression; decay=0.995 locked
 - **MLP-ratio sweep** — IN PROGRESS as #4235 (alphonse); mlp_ratio=3, 4 (vs current 2)
-- **Depth sweep** — IN PROGRESS as #4237 (fern); n_layers=6, 7 (vs current 5)
+- **Depth sweep** — CLOSED as #4237 (fern); A (n=6) val=42.33 (+2.50), B (n=7) val=46.99 (+7.16); throughput-bound AND no iso-epoch advantage; per-epoch convergence equal or slower vs n=5 baseline; depth axis closed
+- **Per-group LR scaling** — IN PROGRESS as #4295 (fern); lr_attn_mult=1.0/lr_other_mult=0.5 (Arm A) vs lr_attn_mult=2.0/lr_other_mult=1.0 (Arm B); addresses MLP/attn 5× grad-norm imbalance (PR #4154) via per-group LR in Lion
 - **Warmup-cosine** — CLOSED as #4236 (frieren); Arm A (warmup=2) val=41.28 (+3.6%), stop triggered; schedule-compression effect dominates; direction closed (2nd failure)
 - **Batch size sweep** — IN PROGRESS as #4287 (frieren); batch_size=8 and 12 vs current 4; VRAM headroom at 30% suggests potential throughput gain
 - **SGDR warm restarts** — IN PROGRESS as #4253 (edward); T_0=17 and T_0=12 — mid-training LR reset to escape timeout-bound attractor

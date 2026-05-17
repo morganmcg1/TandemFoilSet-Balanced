@@ -973,3 +973,28 @@ Stop condition triggered (val > 41.0 threshold); Arm B (warmup=3) correctly not 
 
 - **Analysis:** Excellent student diagnosis. Three root causes identified: (1) "wasted epochs" premise was false — baseline learns rapidly from epoch 1 at full LR, gradients are already being clipped to max_norm=1.0 so warmup's stabilization role is redundant; (2) schedule-compression effect dominates — warmup shifts the effective cosine window from 40 → 38 epochs while keeping total budget at 33, creating a ~1-2 epoch shift in the descent curve; (3) OOD splits hit hardest (geom_camber_cruise +12.88%) — model needs maximum effective training time at these split distributions. This is the second warmup failure on this codebase (cf PR #3733). Warmup direction is closed.
 - **Decision:** CLOSED — no_improvement, direction refuted. Reassigning frieren to batch-size-sweep (#4287) — directly addresses frieren's own VRAM headroom observation (23.84/80 GB = 30% utilization at batch=4).
+
+---
+
+## 2026-05-17 02:35 — PR #4237: Depth sweep n_layers=6,7 — no_improvement
+
+- **Student:** charliepai2i48h2-fern
+- **Hypothesis:** Adding TransolverBlock depth (n_layers=5→6→7) would route more signal through extra residual stacks; motivated by the ~5× MLP/attn grad-norm ratio from PR #4154, hypothesizing the model is depth-limited.
+- **Results:**
+
+| Metric | Arm A (n=6) | Arm B (n=7) | Baseline (#4079) |
+|--------|-------------|-------------|------------------|
+| **val_avg/mae_surf_p** | **42.3335 (+2.50)** | **46.9938 (+7.16)** | **39.8345** |
+| **test_avg/mae_surf_p** | **36.0610 (+2.17)** | **40.1238 (+6.24)** | **33.8873** |
+| val_single_in_dist | 48.70 | 53.30 | 43.68 |
+| val_geom_camber_rc | 54.87 | 59.29 | 53.15 |
+| val_geom_camber_cruise | 23.79 | 28.92 | 22.71 |
+| val_re_rand | 41.97 | 46.47 | 39.80 |
+| Best epoch | 28 (last) | 24 (last) | 34 (timeout) |
+| Sec/epoch | 66 | 76 | ~54 |
+| Peak VRAM | 28.10 GB | 32.36 GB | 23.84 GB |
+| n_params | 783,515 | 904,671 | 662,359 |
+| Metric artifacts | `models/model-charliepai2i48h2-fern-n-layers-A-20260517-003352/metrics.jsonl` | `models/model-charliepai2i48h2-fern-n-layers-B-20260517-012751/metrics.jsonl` | |
+
+- **Analysis:** Both arms throughput-bound (A: 28ep vs 34 baseline, B: 24ep). Crucially, the student's iso-epoch comparison showed NO per-epoch convergence advantage from depth: Arm A at epoch 28 sits at 42.33, while baseline extrapolated to ep28 is ~41.5–42. Arm B at ep24 (46.99) is clearly behind A at ep24 (45.18). So even at the same epoch index, deeper stacks do not converge faster — per-epoch convergence is equal or slower. The MLP/attn gradient imbalance from PR #4154 is amplified by adding more MLP-heavy blocks, explaining the velocity-dominant split degradation (single_in_dist +11.3%, re_rand +5.4%). Depth scaling at the current width (n_hidden=128, mlp_ratio=2) is a confirmed dead end. Both width scaling (PR #4167) and depth scaling (#4237) are now closed.
+- **Decision:** CLOSED — no_improvement, depth axis closed. Student's follow-up suggestion (per-group LR scaling to address the MLP/attn imbalance at source) is the next assignment (#4295).
