@@ -220,9 +220,10 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 use_qk_norm=False):
+                 use_qk_norm=False, use_post_ln=False):
         super().__init__()
         self.last_layer = last_layer
+        self.use_post_ln = use_post_ln
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
@@ -238,8 +239,12 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        if self.use_post_ln:
+            fx = self.ln_1(self.attn(fx) + fx)
+            fx = self.ln_2(self.mlp(fx) + fx)
+        else:
+            fx = self.attn(self.ln_1(fx)) + fx
+            fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -251,7 +256,7 @@ class Transolver(nn.Module):
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
-                 use_qk_norm=False):
+                 use_qk_norm=False, use_post_ln=False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -272,7 +277,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
-                use_qk_norm=use_qk_norm,
+                use_qk_norm=use_qk_norm, use_post_ln=use_post_ln,
             )
             for i in range(n_layers)
         ])
@@ -566,6 +571,7 @@ class Config:
     lion_lr: float = 1e-4  # Lion lr; canonical: AdamW_lr / 3..10
     lion_wd: float = 1e-3  # Lion wd; canonical: AdamW_wd * 3..10
     use_qk_norm: bool = False  # ViT-22B-style LayerNorm(head_dim) on Q and K before SDPA
+    use_post_ln: bool = False  # Post-LN (LN after residual sum) instead of Pre-LN (Vaswani 2017 original)
 
 
 cfg = sp.parse(Config)
@@ -605,6 +611,7 @@ model_config = dict(
     slice_num=64,
     mlp_ratio=cfg.mlp_ratio,
     use_qk_norm=cfg.use_qk_norm,
+    use_post_ln=cfg.use_post_ln,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -726,12 +733,23 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        # Per-block grad-norm diagnostic — Post-LN vs Pre-LN gradient magnitude
+        # comparison. Cheap: one extra norm per block, only on first batch/epoch.
+        per_block_grad = {}
+        if log_diag_this_batch:
+            for li, blk in enumerate(model.blocks):
+                sq = 0.0
+                for p in blk.parameters():
+                    if p.grad is not None:
+                        sq += p.grad.detach().float().pow(2).sum().item()
+                per_block_grad[f"train/grad_norm_block_{li}"] = sq ** 0.5
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=GRAD_CLIP_MAX_NORM)
         optimizer.step()
         global_step += 1
         wandb.log({
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
+            **per_block_grad,
             "global_step": global_step,
         })
 
