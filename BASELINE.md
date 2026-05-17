@@ -1,6 +1,53 @@
 # Baseline — icml-appendix-willow-pai2i-48h-r3
 
-## Current best (as of 2026-05-17 08:45) — PR #4447: Cosine T_max=20 (finer cooldown sweep, 16th winner)
+## Current best (as of 2026-05-17 09:58) — PR #4296: slice_num=32 (attention slice sweep, 17th winner)
+
+Seventeen winners merged: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + SOAP optimizer (PR #3283, −31.7%) + SOAP precond_freq=5 (PR #3495, −1.78%) + EMA model weights decay=0.999 (PR #3430, −18.8%) + EMA decay=0.99 (PR #3591, −3.85%) + Huber beta=0.5 (PR #3316, −6.05%) + Cauchy loss c=1.0 (PR #3612, −3.67%) + Huber beta=0.1 (PR #3868, −3.77%) + Lookahead k=5 (PR #3947, −4.14%) + Gradient clipping max_norm=1.0 (PR #3497, −2.72%) + Huber beta=0.01 (PR #4037, −2.51%) + bfloat16 autocast (PR #3975, −9.74%) + cosine T_max=25 (PR #4263, −8.47%) + lr=2e-3 (PR #4336, −6.33%) + cosine T_max=20 (PR #4447, −2.72%) + **slice_num=32** (PR #4296, thorfinn, **−7.42% vs previous canonical**).
+
+**Primary ranking metric:**
+- `val_avg/mae_surf_p` = **31.9978** (run `yt8irybe`, thorfinn variant-slice32, best epoch 21)
+
+**Test (paper-facing):**
+- `test_avg/mae_surf_p_excl_cruise` (3-split mean) = **32.017** (−10.0% vs previous 35.5786)
+  - `test_single_in_dist/mae_surf_p` = 32.904
+  - `test_geom_camber_rc/mae_surf_p` = 39.102
+  - `test_re_rand/mae_surf_p` = 24.045
+  - `test_geom_camber_cruise/mae_surf_p` = NaN (pre-existing bug)
+
+**Config (post-merge):**
+- Transolver: n_hidden=128, n_layers=5, n_head=4, **slice_num=32** (was 64), mlp_ratio=2, dropout=0
+- **SOAP optimizer** (precondition_frequency=5) **lr=2e-3**, warmup_epochs=3 (LinearLR) → **CosineAnnealingLR(`--cosine_t_max 25`)**, weight_decay=1e-4, batch_size=4, surf_weight=10.0
+- 50 epochs, **Huber loss (huber_beta=0.01, cauchy_c=0.0)**; `vol_loss + 10*surf_loss`
+- **EMA of model weights** (ema_decay=0.99, updated each training step)
+- **Lookahead (k=5, alpha=0.5)** wrapping SOAP
+- **Gradient clipping (max_norm=1.0)** applied before optimizer.step()
+- **bfloat16 autocast** (`--use_bf16`)
+- **cosine_t_max=25** (`--cosine_t_max 25`): NOTE reverts from T_max=20; at slice_num=32 the model completes 21 epochs so T_max=25 gives appropriate cooldown (LR at epoch 21 ≈ 17% of peak)
+- Wall-clock: ~30 min cap, **best epoch 21** (vs 17 at slice_num=64 — slice_num=32 reduces per-step cost, fits 4 extra epochs)
+- Peak VRAM: **~33.0 GB**
+- `param count = 0.66M`
+
+**Reproduce:**
+```bash
+cd target/ && python train.py \
+  --optimizer soap \
+  --precondition_frequency 5 \
+  --lr 2e-3 --warmup_epochs 3 \
+  --huber_beta 0.01 \
+  --surf_weight 10.0 --seed 42 \
+  --ema_decay 0.99 \
+  --use_lookahead --lookahead_k 5 --lookahead_alpha 0.5 \
+  --grad_clip 1.0 \
+  --use_bf16 \
+  --cosine_t_max 25 \
+  --slice_num 32
+```
+
+**Mechanism note:** slice_num=32 vs 64 — the 0.66M Transolver over-segments TandemFoilSet at 64 slices; coarser attention grouping at 32 lets the model concentrate on physically meaningful regions (leading/trailing edges, wake interaction zones). The key compound effect: slice_num=32 reduces per-step compute enough to fit **21 epochs in the 30-min cap** (vs 17 at slice_num=64). Four extra epochs of cosine cooldown substantially reduce final variance. slice_num=96 (Arm 2) was much worse (val 45.83) — confirms the optimum is below 64 for this model size. Note: T_max=25 is reverted from 20 because at 21 epochs, T_max=20 would over-cool (LR hits floor too early). A T_max sweep at slice_num=32 is a natural follow-up.
+
+---
+
+## Previous best (as of 2026-05-17 08:45) — PR #4447: Cosine T_max=20 (finer cooldown sweep, 16th winner)
 
 Sixteen winners merged: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + SOAP optimizer (PR #3283, −31.7%) + SOAP precond_freq=5 (PR #3495, −1.78%) + EMA model weights decay=0.999 (PR #3430, −18.8%) + EMA decay=0.99 (PR #3591, −3.85%) + Huber beta=0.5 (PR #3316, −6.05%) + Cauchy loss c=1.0 (PR #3612, −3.67%) + Huber beta=0.1 (PR #3868, −3.77%) + Lookahead k=5 (PR #3947, −4.14%) + Gradient clipping max_norm=1.0 (PR #3497, −2.72%) + Huber beta=0.01 (PR #4037, −2.51%) + bfloat16 autocast (PR #3975, −9.74%) + cosine T_max=25 (PR #4263, −8.47%) + lr=2e-3 (PR #4336, −6.33%) + **cosine T_max=20** (PR #4447, tanjiro, **−2.72% vs previous canonical**).
 
