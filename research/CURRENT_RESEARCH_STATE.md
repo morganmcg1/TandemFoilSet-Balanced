@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-17 08:50 UTC (R30 — closed #4441/#4442/#4281 (val regressions; β/grad_clip non-orthogonal; capacity compute-bound; asym-FFN cruise gain reversed); 3 new: #4492 per-channel β, #4493 dropout sweep, #4494 mlp_ratio=3 uniform)
+- **Updated:** 2026-05-17 10:20 UTC (R32 — MAJOR: σ recalibrated 0.62→0.34 (grad-clip halves seed variance); lr 5e-4→6e-4 merged (val 33.68→33.353); 5 closures + 6 new R32 assignments)
 - **Track:** Charlie local-metrics arm (`charlie-pai2i-48h-r1`)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-48h-r1`
 - **Target base:** `icml-appendix-charlie`
@@ -10,31 +10,31 @@
 
 None on record for this launch. Default goal: drive `test_avg/mae_surf_p` down.
 
-## Current best baseline — PR #4398 GRADIENT CLIPPING
+## Current best baseline — PR #4443 lr=6e-4
 
-**val_avg/mae_surf_p = 33.6757**, **test_avg/mae_surf_p = 29.6535** (PR #4398,
-max_grad_norm=1.0, single-seed, best epoch 36).
+**val_avg/mae_surf_p = 33.353**, **test_avg/mae_surf_p = 28.826** (PR #4443,
+lr=6e-4, max_grad_norm=1.0, single-seed, best epoch 37).
 
-Per-split val: single=31.858, rc=48.254, cruise=17.771, re_rand=36.820.
-Per-split test: single=32.69, rc=43.66, cruise=14.47, re_rand=27.79.
+Per-split val: single=34.25, rc=45.63, cruise=17.73, re_rand=35.80.
 
-**Total improvement from calibration baseline:** 143.52 → 33.68 = **-76.5%**
+**Total improvement from calibration baseline:** 143.52 → 33.35 = **-76.8%**
 
-**CRITICAL — Noise model update (PR #4342 askeladd 3-seed confirmation):**
-- 3-seed std on old (pre-clip) stack: **σ = 0.62 pts** (NOT ±5-10 as previously stated)
-- PR #4282's val=36.13 was a 1.7σ favorable seed; true 3-seed mean was 37.20
-- New 2σ clear-win threshold: **val ≤ 32.5** (1.2 pts below 33.68)
-- Single-seed results in [32.5, 34.9] are within noise — 3-seed confirmation needed
-- Grad_clip stack std unknown; probably ≤ 0.62 (more stable training = more reproducible)
+**CRITICAL — Noise model RECALIBRATED (PR #4440 frieren, grad-clip stack):**
+- 3-seed mean on GRAD-CLIP stack: **34.18 ± 0.341** (NOT ±0.62 as prev stated)
+- PR #4398's val=33.68 was a −1.5σ favorable seed; true mean was 34.18
+- New 2σ clear-win threshold: **val ≤ 32.67** (0.68 pts below 33.35)
+- Conservative (until 3-seed of lr=6e-4 confirmed): val ≤ 33.0
+- Grad-clip halved seed variance (0.62→0.34) — stable gradients = reproducible training
 
-## Round wins merged (R1–R28)
+## Round wins merged (R1–R32)
 
 | PR | Hypothesis | val_avg | Δ |
 |----|------------|--------:|---|
 | ... (R1–R22 wins) | ... | 36.13 | previous history |
-| **#4398** | **Gradient clipping max_norm=1.0** | **33.68** | **−6.8%** — **CURRENT BASELINE** |
+| **#4398** | **Gradient clipping max_norm=1.0** | **33.68** | **−6.8%** |
+| **#4443** | **lr 5e-4→6e-4** | **33.353** | **−1.0%** — **CURRENT BASELINE** |
 
-## Key architecture (current baseline — grad_clip stack)
+## Key architecture (current baseline — lr=6e-4 + grad_clip stack)
 
 | Group | Value |
 |-------|-------|
@@ -43,77 +43,69 @@ Per-split test: single=32.69, rc=43.66, cruise=14.47, re_rand=27.79.
 | Compile | `torch.compile(model, dynamic=True, mode="default")` |
 | Conditioning | FiLM head [log_Re, AoA0, AoA1] |
 | Precision | bf16 autocast |
-| Optim | Schedule-Free AdamW `lr=5e-4, wd=1e-4, warmup=200` |
-| **Grad Clip** | **`clip_grad_norm_(params, max_norm=1.0)` — NEW, PR #4398** |
+| Optim | Schedule-Free AdamW **`lr=6e-4` (NEW)**, `wd=1e-4`, `warmup=200` |
+| **Grad Clip** | **`clip_grad_norm_(params, max_norm=1.0)` — PR #4398** |
 | Loss | SmoothL1 (beta=0.25), surf_weight=10.0 |
 | EMA | decay=0.997 |
-| Compute | ~49s/epoch, **36 epochs**, peak VRAM 22.6 GB, **983,871 params** |
+| Compute | ~48s/epoch, **37 epochs**, peak VRAM 22.6 GB, **983,871 params** |
 
 ## Currently in flight (8 WIP — all students active)
 
 | PR | Student | Hypothesis | Theme | Status |
 |----|---------|------------|-------|--------|
-| #4440 | frieren | 3-seed confirmation of new grad-clip stack (noise model) | validation | WIP — R28 fresh |
-| #4441 | thorfinn | n_hidden=144 + grad_clip — capacity push, stable training | architecture | WIP — R28 fresh |
-| #4442 | tanjiro | Asymmetric FFN last-block + grad_clip — cruise gain retest | architecture | WIP — R28 fresh |
-| #4443 | edward | lr sweep {6e-4, 7.5e-4} on grad-clip stack | optim | WIP — R28 fresh |
-| #4444 | fern | surf_weight {5, 7} downward sweep on grad-clip stack | loss | WIP — R28 fresh |
-| #4445 | nezuko | grad_clip rate sweep {0.5, 2.0} — explore max_norm axis | optim | WIP — R28 fresh |
-| #4446 | askeladd | EMA decay {0.995, 0.999} retest on grad-clip stack | optim | WIP — R28 fresh |
-| #4492 | alphonse | Per-channel β (β_uxy=0.05, β_p=0.25) — address p-channel tail asymmetry | loss | WIP — R30 fresh |
-| #4493 | thorfinn | Dropout sweep {0.05, 0.0} on grad-clip stack — test regularization redundancy | optim/reg | WIP — R30 fresh |
-| #4494 | tanjiro | mlp_ratio=3 uniform on grad-clip stack — capacity vs placement disentangle | architecture | WIP — R30 fresh |
+| #4515 | frieren | 3-seed noise calibration of lr=6e-4 baseline | calibration | WIP — R32 fresh |
+| #4516 | edward | warmup_steps sweep {100, 300} on lr=6e-4 | optim | WIP — R32 fresh |
+| #4517 | askeladd | batch_size sweep {4, 12} on lr=6e-4 + grad-clip | optim | WIP — R32 fresh |
+| #4519 | nezuko | n_head sweep {2, 8} on lr=6e-4 — attention expressiveness | architecture | WIP — R32 fresh |
+| #4520 | tanjiro | n_layers sweep {4, 6} on lr=6e-4 — depth retest | architecture | WIP — R32 fresh |
+| #4522 | alphonse | weight_decay sweep {5e-5, 2e-4} on lr=6e-4 | optim/reg | WIP — R32 fresh |
+| #4444 | fern | surf_weight=7 confirmation on lr=6e-4 baseline (send-back) | loss | WIP — R32 send-back |
+| #4493 | thorfinn | dropout sweep {0.05, 0.0} on grad-clip stack | optim/reg | WIP — R30 ongoing |
 
-## Fully closed axes (updated for grad-clip stack baseline)
+## Fully closed axes (updated for lr=6e-4 + grad_clip baseline)
 
 | Axis | Verdict |
 |------|---------|
-| **n_layers** | FULLY CLOSED at 5 (tested on old stack; result expected to hold) |
-| **mlp_ratio (uniform)** | FULLY CLOSED at 2 (uniform); asymmetric per-block IN FLIGHT (tanjiro #4442) |
-| **n_head** | FULLY CLOSED at 4 |
-| **SF warmup_steps** | FULLY CLOSED at 200 (triangulated from both sides on old stack) |
-| **slice_num** | FULLY CLOSED at 8 (compile kernel sweet spot, both 6 and 12 lose) |
-| **weight_decay** | FULLY CLOSED at 1e-4 |
-| **dropout (PhysicsAttention)** | FULLY CLOSED at 0.1 on old stack (may warrant retest on grad-clip stack) |
-| **surf_weight (upward)** | FULLY CLOSED — 10 < 15 < 20 monotone regression; downward probe IN FLIGHT (fern #4444) |
-| **drop_path (p=0.1)** | CLOSED — clear regression; wrong for shallow 5-block stack at constant rate |
-| **EMA decay** | CLOSED at 0.997 on old stack; retest IN FLIGHT on grad-clip stack (askeladd #4446) |
-| **lr (old stack)** | CLOSED at 5e-4 on old stack; retest on grad-clip stack IN FLIGHT (edward #4443) |
-| **n_hidden** | OPEN — 160 compute-bound, 144 compute-bound on old stack; retesting 144 on grad-clip stack (thorfinn #4441) |
-| **grad_clip max_norm** | PARTIALLY OPEN — 1.0 is the merged baseline; {0.5, 2.0} in flight (nezuko #4445) |
+| **n_layers** | OPEN — closed at 5 on old stack; retesting {4, 6} on new stack (tanjiro #4520) |
+| **mlp_ratio (uniform)** | FULLY CLOSED at 2 (both old and new stack; asym placement closed too) |
+| **n_head** | OPEN — closed at 4 on old stack; retesting {2, 8} on new stack (nezuko #4519) |
+| **SF warmup_steps** | OPEN — closed at 200 on old stack; retesting {100, 300} with lr=6e-4 (edward #4516) |
+| **slice_num** | FULLY CLOSED at 8 |
+| **weight_decay** | OPEN — closed at 1e-4 on old stack; retesting {5e-5, 2e-4} with grad_clip + lr=6e-4 (alphonse #4522) |
+| **dropout (PhysicsAttention)** | OPEN — closed at 0.1 on old stack; retesting {0.05, 0.0} with grad_clip (thorfinn #4493) |
+| **surf_weight (upward)** | FULLY CLOSED at 10 |
+| **surf_weight (downward)** | BORDERLINE — sw=7 val=33.61 (1.7σ below true mean 34.18); needs confirmation on lr=6e-4 stack (fern #4444) |
+| **drop_path (p=0.1)** | CLOSED — clear regression on old stack |
+| **EMA decay** | FULLY CLOSED at 0.997 (confirmed on both old and grad-clip stacks) |
+| **lr** | 6e-4 MERGED (PR #4443); optimum in {5e-4, 6e-4, 7.5e-4}. Fine sweep or schedule options open. |
+| **n_hidden** | CLOSED — 144/160 compute-bound on both old and new stacks (>56s/epoch) |
+| **grad_clip max_norm** | FULLY CLOSED at 1.0 (confirmed on grad-clip stack) |
+| **β (SmoothL1)** | FULLY CLOSED on grad-clip stack — β and clip compete; uniform β best at 0.25 with clip active |
+| **batch_size** | OPEN — closed on old stack; retesting {4, 12} with grad_clip + lr=6e-4 (askeladd #4517) |
 | GEGLU on attention | FULLY CLOSED — all regressed |
 | Gate-activation axis | CLOSED — GEGLU > ReGLU > SwiGLU |
 | FiLM family | FULLY CLOSED |
-| batch_size=8, RMSNorm, FiLM-full | FULLY CLOSED |
+| RMSNorm | FULLY CLOSED |
 
-## Key R28 insights (transformative round)
+## Key R32 insights (transformative round)
 
-1. **GRADIENT INSTABILITY WAS THE HIDDEN BOTTLENECK**: Pre-clip norms 20–250 on EVERY step (p50 ~25, max ~262). Without clipping, SF AdamW second-moment estimates were constantly destabilized. The entire research programme was running a fundamentally noisy optimizer.
-2. **val variance is ±0.62, NOT ±5-10pt**: askeladd's 3-seed confirmation (PR #4342) showed σ=0.62. The "±5-10pt" estimate in BASELINE.md was wrong and led to premature closures of experiments within noise.
-3. **rc-split is a structural bottleneck confirmed**: grad_clip improved all splits except rc (+0.10 only). Weight-level reg, block-level reg (drop_path), and now optimizer stability don't help rc. The problem is inductive-bias/capacity.
-4. **Multiple pre-grad-clip experiments may have been within noise**: The old baseline (36.13) was a 1.7σ favorable seed (true mean 37.20). Experiments landing in [36.0, 38.4] on the old stack were "within noise" — not necessarily regressions.
-5. **The grad-clip win (−6.8%) suggests significant headroom**: 3-seed mean on old stack was 37.20; new baseline 33.68 = 5.6σ improvement. This is a compound gain waiting to be exploited across all retested axes.
+1. **σ recalibrated**: Grad-clip halved seed variance (0.62→0.34). The new 2σ clear-win threshold is 0.68 pts below baseline. Previously "within noise" closures (val 34.0–34.5 when baseline was 33.68) were genuine 1–2σ regressions, not ambiguous noise.
+2. **lr=6e-4 is the new optimum**: 2.4σ below the true lr=5e-4 mean (34.18). A +20% LR exploits stable clipped-gradient step direction signal. 7.5e-4 overshoots.
+3. **The bottleneck is upstream of FFN/embedding width**: mlp_ratio=3, n_hidden=144, asym-FFN, per-channel β — ALL show same fingerprint: in-dist regresses, rc/OOD improves, val_avg close to baseline. The attention token-mixing mechanism is the constraint.
+4. **val_single_in_dist vs test_single_in_dist diverge**: val regresses (−3.6 pts on average) while test stays flat or improves on the same split. Possible partition artifact or systematic difference in the val/test single_in_dist samples.
+5. **RC-split structural bottleneck**: improves with nearly every added-capacity experiment (−1.66 n_hidden=144, −2.24 sw=7, −2.62 lr=6e-4) but never enough to pull val_avg down without in-dist tradeoff.
 
 ## Potential next research directions
 
-1. **3-seed confirmation of grad-clip stack** — IN FLIGHT (frieren #4440). Critical for noise model.
-2. **n_hidden=144 + grad_clip** — IN FLIGHT (thorfinn #4441).
-3. **Asymmetric FFN + grad_clip** — IN FLIGHT (tanjiro #4442).
-4. **lr {6e-4, 7.5e-4} on grad-clip stack** — IN FLIGHT (edward #4443).
-5. **surf_weight {5, 7} on grad-clip stack** — IN FLIGHT (fern #4444).
-6. **grad_clip rate {0.5, 2.0}** — IN FLIGHT (nezuko #4445).
-7. **EMA decay {0.995, 0.999} on grad-clip stack** — IN FLIGHT (askeladd #4446).
-8. **Per-channel β (β_uxy=0.05, β_p=0.25)** — IN FLIGHT (alphonse #4492). β/grad_clip are NOT orthogonal (R29 confirmed); per-channel approach may decouple the channel-specific residual-regime effects.
-9. **Dropout sweep {0.05, 0.0}** — IN FLIGHT (thorfinn #4493). Grad_clip fires 100% of steps — likely competing with dropout for regularization. If dropout=0 wins, critical finding on over-regularization.
-10. **mlp_ratio=3 uniform** — IN FLIGHT (tanjiro #4494). Disentangles capacity (more FFN width) from placement (asym-last-block). Closes the capacity axis cleanly.
-11. **rc-split structural bottleneck**: grad_clip and capacity (n_hidden=144 +1.66 rc) BOTH help rc, but n_hidden=144 regresses in-dist. Asymmetric capacity for OOD-relevant features is a deep avenue.
-12. **warmup_steps retest on grad-clip stack** — closed at 200 on old stack; optimizer dynamics shifted substantially (100% clip activation changes effective LR curve)
-13. **n_hidden=160 on grad-clip stack** — compute-bound diagnosis from thorfinn confirmed; need bigger budget or compute-efficiency win
-14. **Batch size** — batch=8 closed on old stack; unclear on grad-clip stack
-
-## R30 critical insights
-
-1. **β and grad_clip are NOT orthogonal**: both impose "preserve small-error gradient signal" through competing mechanisms. uniform β=0.05 + grad_clip: val=34.00 (+0.32, within noise) with test=28.72 (−0.93). The overlap is fundamental: clip normalizes ‖g‖ to 1.0 which already imposes constant-magnitude gradient direction regardless of error magnitude.
-2. **Asymmetric FFN (last-block) cruise gain was a gradient-instability artifact**: pre-clip the wider readout was partially attenuating gradient noise; once grad_clip handles that directly, the gain evaporates (+0.59 cruise regression post-clip).
-3. **n_hidden=144 is compute-bound NOT capacity-bound**: 33 epochs at 56s vs 37 epochs at 48s for n_hidden=128. The wider model converges slower than it can exhaust within the 30-min budget. rc improved (−1.66) despite val_avg regression — suggests capacity DOES help rc but the budget doesn't let it converge.
-4. **Regularization redundancy**: grad_clip active 100% of steps at pre-clip norm 37–90 mean = extreme continuous regularization. dropout=0.1 on top may be over-constraining the model, explaining why val_single_in_dist regressed (+3.59 thorfinn, +4.18 alphonse β=0.05) while test improved.
+1. **3-seed of lr=6e-4** — IN FLIGHT (frieren #4515). Critical calibration.
+2. **warmup_steps {100, 300} with lr=6e-4** — IN FLIGHT (edward #4516).
+3. **batch_size {4, 12}** — IN FLIGHT (askeladd #4517).
+4. **n_head {2, 8} retest** — IN FLIGHT (nezuko #4519). Attention mechanism axis.
+5. **n_layers {4, 6} retest** — IN FLIGHT (tanjiro #4520). Depth axis.
+6. **weight_decay {5e-5, 2e-4}** — IN FLIGHT (alphonse #4522).
+7. **surf_weight=7 + lr=6e-4 stacked** — IN FLIGHT (fern #4444 send-back).
+8. **dropout retest** — IN FLIGHT (thorfinn #4493, on old baseline).
+9. **Geometric inductive bias for rc-split**: explicit edge/distance features, equivariant coordinates — high-value architectural axis for the chronic rc bottleneck
+10. **Val/test single_in_dist divergence investigation**: why val regresses while test improves on same split
+11. **LR fine sweep {5.5e-4, 6.5e-4}** — close lr axis; confirm 6e-4 is at the optimum
+12. **Cosine annealing LR with SF AdamW** — schedule experiments; risky but unexplored

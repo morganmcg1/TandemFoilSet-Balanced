@@ -2241,3 +2241,87 @@ All three closures share the same fingerprint: val regression concentrated in si
 | #4492 | alphonse | Per-channel β (β_uxy=0.05, β_p=0.25) — address p-channel tail asymmetry | loss |
 | #4493 | thorfinn | Dropout sweep {0.05, 0.0} on grad-clip stack — test regularization redundancy | optim/reg |
 | #4494 | tanjiro | mlp_ratio=3 uniform on grad-clip stack — capacity vs placement disentangle | architecture |
+
+---
+
+# R32 — 2026-05-17 10:20 UTC
+
+## Round summary
+
+MAJOR round: noise model recalibration + lr win merged.
+
+## PR Reviews
+
+### PR #4440 — frieren: 3-seed confirmation grad-clip stack (CLOSED — calibration)
+
+- **Branch**: charliepai2i48h1-frieren/3-seed-grad-clip-stack  
+- **Result**: seed1=33.985, seed2=33.972, seed3=34.569 → **mean=34.175 ± 0.341**
+- **Status**: CLOSED as calibration — not a metric improvement; critical noise model finding
+
+Key finding: σ=0.341 on grad-clip stack (vs 0.62 on old no-clip stack). Grad-clip halved seed variance. PR #4398's merged val=33.68 was a −1.5σ favorable seed; true mean is 34.18. The previous 2σ clear-win threshold (val ≤ 32.5) needed updating to val ≤ 32.67 for the new noise model.
+
+### PR #4443 — edward: lr=6e-4 on grad-clip stack (MERGED ✓)
+
+- **Branch**: charliepai2i48h1-edward/lr-sweep-grad-clip
+- **Result**: lr=6e-4 val=**33.353**, test=28.826; lr=7.5e-4 val=34.385 (oscillating, overshot)
+- **Status**: MERGED (PR #4443) — new baseline val=33.353
+
+| Split | Baseline val | lr=6e-4 val | Δ |
+|-------|-------------|-------------|---|
+| val_avg | 33.676 | **33.353** | **−0.32** |
+| single_in_dist | 31.858 | 34.25 | +2.39 (in-dist/OOD tradeoff) |
+| geom_camber_rc | 48.254 | 45.630 | **−2.62** |
+| geom_camber_cruise | 17.771 | 17.730 | −0.04 |
+| re_rand | 36.820 | 35.800 | **−1.02** |
+| **test_avg** | **29.654** | **28.826** | **−0.83** |
+
+Analysis: 2.4σ below true lr=5e-4 mean (34.18). A +20% LR boost exploits stable clipped-gradient optimization landscape. 7.5e-4 (+50%) overshoots. Confirms the hypothesis that clipped gradients allow more aggressive step sizes.
+
+### PR #4444 — fern: surf_weight=7 on grad-clip stack (SENT BACK)
+
+- val=33.613 (−0.07 vs 33.68 baseline, 1.7σ below true mean 34.18 — borderline)
+- sw=5 val=33.743 (further from threshold)
+- **Status**: SENT BACK for single-arm confirmation on lr=6e-4 baseline (#4444)
+
+### PR #4445 — nezuko: grad_clip rate sweep {0.5, 2.0} (CLOSED)
+
+- clip=0.5: val=34.057 (+0.38), clip=2.0: val=34.521 (+0.84)
+- **Status**: CLOSED — clip=1.0 is local optimum, confirmed
+
+### PR #4446 — askeladd: EMA decay {0.995, 0.999} (CLOSED)
+
+- EMA=0.999: val=33.849 (+0.17, 0.5σ within noise), EMA=0.995: val=34.294 (+0.62)
+- **Status**: CLOSED — EMA=0.997 confirmed optimal on both stacks
+
+### PR #4492 — alphonse: per-channel β (CLOSED)
+
+- val=35.088 (+1.41, +5.1σ clear regression)
+- **Status**: CLOSED — β axis fully closed on grad-clip stack; single_in_dist regression structural not channel-specific
+
+### PR #4494 — tanjiro: mlp_ratio=3 uniform (CLOSED)
+
+- val=33.945 (+0.27, within noise)
+- **Status**: CLOSED — capacity axis closed (FFN width); bottleneck confirmed upstream of FFN (attention token-mixing)
+
+## R32 Pattern Analysis
+
+Consistent cross-PR finding across R30–R32: nearly every experiment shows:
+- val_single_in_dist **regresses** (typically +2–4 pts)
+- val_geom_camber_rc **improves** (typically −1.5 to −2.5 pts)
+- test_single_in_dist **improves** on the same split where val regressed
+
+This triple pattern is systematic. Hypotheses:
+1. The val partition of single_in_dist is harder than the test partition → systematic calibration difference
+2. Higher-capacity/larger-LR models shift resources toward geometric OOD generalization at cost of in-dist interpolation
+3. Structural: the Transolver's slice attention handles RC-regime geometry better with more optimization budget, while the "easy" in-dist split's val samples have some partition-specific difficulty
+
+## R32 New Assignments
+
+| PR | Student | Hypothesis | Theme |
+|----|---------|------------|-------|
+| #4515 | frieren | 3-seed noise calibration of lr=6e-4 baseline | calibration |
+| #4516 | edward | warmup_steps sweep {100, 300} on lr=6e-4 | optim |
+| #4517 | askeladd | batch_size sweep {4, 12} on lr=6e-4 + grad-clip | optim |
+| #4519 | nezuko | n_head sweep {2, 8} on lr=6e-4 | architecture |
+| #4520 | tanjiro | n_layers sweep {4, 6} on lr=6e-4 | architecture |
+| #4522 | alphonse | weight_decay sweep {5e-5, 2e-4} on lr=6e-4 | optim/reg |
