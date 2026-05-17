@@ -1,6 +1,40 @@
 # Baseline — TandemFoilSet (willow-pai2i-48h-r5)
 
-## Current best — PR #4320 (T_max=22 at new BL substrate — first sub-50 val, camber_cruise regression fixed)
+## Current best — PR #4505 (spec_norm output pi=3 at T_max=22 — −2.96 val / −2.41 test, new best across all splits)
+
+**val_avg/mae_surf_p = 46.7952** (W&B run: `b4txs5yb`, PR #4505 edward — Lion lr=2e-4 + n_fourier=0 + FiLM + wd=1e-3 + EMA(0.997) + Huber β=0.05 + T_max=22 + grad_clip=1.0 + layer_scale_init=1e-4 + **spec_norm_target=output** + **spec_norm_n_power_iter=3**)
+**test_avg/mae_surf_p = 40.4866** (same run `b4txs5yb`, clean 4-split)
+
+| Split | val mae_surf_p | test mae_surf_p |
+|-------|----------------|------------------|
+| single_in_dist | 49.41 | 44.45 |
+| geom_camber_rc | 60.76 | 54.86 |
+| geom_camber_cruise | 28.72 | 24.21 |
+| re_rand | 48.29 | 38.43 |
+
+**Δ vs prior best (PR #4320 val 49.75 / test 42.89): −2.96 val / −2.41 test**
+
+Win is broad-based — camber_cruise (−4.16 val / −3.35 test), camber_rc (−3.01 val / −2.59 test), re_rand (−3.46 val / −4.08 test), in_dist (−1.20 val, +0.40 test). Spec_norm output Lipschitz constraint with pi=3 (tight estimate) cooperates with layer_scale_init=1e-4 — the ls keeps residual contributions small early in training, making the output layer's Lipschitz constraint proportionally more impactful. Higher power iterations (pi=3 vs pi=1) pays off at T_max=22's high mean lr substrate — adds no measurable wall-clock overhead (142s/epoch vs 144s/epoch). Finding #13 (diminishing returns with lr) does NOT extend to this substrate; the ls×spec_norm interaction is a positive synergy.
+
+**Reproduce (PR #4505 Arm B, run b4txs5yb):**
+```bash
+cd target/
+python train.py --agent willowpai2i48h5-edward --epochs 50 \
+  --wandb_group round13-specnorm-tmax22-edward \
+  --loss_type smooth_l1 --loss_beta 0.05 \
+  --n_fourier 0 --cosine_t_max 22 \
+  --optimizer_name lion --lr 2e-4 --weight_decay 1e-3 \
+  --ema_decay 0.997 --use_film \
+  --layer_scale_init 1e-4 \
+  --grad_clip 1.0 \
+  --spec_norm_target output \
+  --spec_norm_n_power_iter 3 \
+  --wandb_name edward-r13-specnorm-pi3-tmax22
+```
+
+---
+
+## Prior best — PR #4320 (T_max=22 at new BL substrate — first sub-50 val, camber_cruise regression fixed)
 
 **val_avg/mae_surf_p = 49.7515** (W&B run: `1neonugr`, PR #4320 thorfinn — Lion lr=2e-4 + n_fourier=0 + FiLM + wd=1e-3 + EMA(0.997) + Huber β=0.05 + **T_max=22** + **grad_clip=1.0** + **layer_scale_init=1e-4**; NO spec_norm)
 **test_avg/mae_surf_p = 42.8929** (same run `1neonugr`, clean 4-split)
