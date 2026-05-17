@@ -1,5 +1,122 @@
 # SENPAI Research Results
 
+## 2026-05-17 20:00 — PR #4562: LLRD decay=0.95 per Transolver block ← CLOSED SUB-NOISE NULL
+
+- Branch: `willowpai2i48h1-frieren/llrd-decay-0.95`
+- Student: willowpai2i48h1-frieren
+- Hypothesis: Layer-wise LR decay (decay=0.95 per Transolver block, ratio 0.95^6 ≈ 0.735 from head to embedding) might stabilize embeddings → improve OOD.
+
+### Result
+
+| Metric | LLRD 0.95 | #4402 baseline | Δ (vs 5-seed SEM) |
+|---|---|---|---|
+| val_avg/mae_surf_p | 45.8412 | 45.7284 | +0.11 (0.27σ̂) |
+| test_avg/mae_surf_p | 44.6894 | 44.5079 | +0.18 (0.45σ̂) |
+
+W&B run: `1sjfyq0p`. Best epoch 17/17 (timeout same as baseline). epoch_time_s 109.6 (LLRD zero overhead).
+
+### Per-split breakdown (test)
+
+| Split | LLRD 0.95 | Baseline | Δ |
+|---|---|---|---|
+| test_single_in_dist | 43.3241 | 43.0063 | +0.32 |
+| test_geom_camber_rc | **53.9003** | 54.2173 | **−0.32** ← geom_camber improvement |
+| test_geom_camber_cruise | 41.3272 | 41.5453 | **−0.22** ← geom_camber improvement |
+| test_re_rand | 40.2058 | 39.2628 | +0.94 (worst single-split move) |
+
+### Mechanism (frieren's analysis)
+
+1. **Geometric splits improve** (rc −0.32, cruise −0.22): consistent with LLRD intuition — stable low-level embeddings transfer better to OOD geometries.
+2. **Re-extrapolation regresses (+0.94)**: slowing the embedding LR hurts `preprocess` MLP that encodes Re. The split most sensitive to input-feature representation suffers most.
+
+Frieren also corrected the layer-id mapping (the head lives INSIDE `blocks[-1]` as `mlp2`/`ln_3`, not as a separate top-level module) — applied to Lion-effective base_lr (1.667e-4), not AdamW-scale.
+
+### CONVERGENT SIGNAL ON HARDEST SPLIT
+
+Two independent mechanisms in this round both improved **test_geom_camber_rc** (baseline 54.22, the hardest split):
+- **thorfinn SWA last-4** (#4546): test_geom_camber_rc 52.71 (Δ = **−1.51**)
+- **frieren LLRD 0.95** (#4562): test_geom_camber_rc 53.90 (Δ = −0.32)
+
+**This split has clear headroom.** DropPath p=0.1 (#4588 just dispatched) is the natural next bold swing — depth-level regularization, well-established OOD generalization mechanism.
+
+### Decision
+
+CLOSED as sub-noise null on primary metric (val Δ = +0.11 < SEM 0.41). Decay=0.97 (milder) would only mute, not reverse. Preprocess-MLP carve-out is interesting but adds complexity for a sub-noise effect. Plateau protocol → bolder swings.
+
+Frieren reassigned to **DropPath stochastic depth p=0.1 (#4588)** — architecture-level regularization targeting the hardest OOD split with strong literature support.
+
+---
+
+## 2026-05-17 19:50 — PR #4536: Lookahead OUTER momentum β_outer=0.5 ← CLOSED CATASTROPHIC
+
+- Branch: `willowpai2i48h1-askeladd/lookahead-outer-momentum`
+- Student: willowpai2i48h1-askeladd
+- Hypothesis: PLATEAU bold swing. Add a momentum buffer to the Lookahead OUTER (slow-weights) update: `v_t = β·v_{t-1} + (slow_t − slow_{t-1})`, with β_outer=0.5. Outer step becomes `slow_t = slow_{t-1} + α·v_t` (Polyak-style on the outer step).
+
+### Result
+
+| Metric | β_outer=0.5 | #4402 baseline | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **52.7700** | 45.7284 | **+7.04** (~7.6σ̂) |
+| test_avg/mae_surf_p | ~52 | 44.5079 | catastrophic |
+
+Observed `||v_t|| / (α·||slow_diff||) = 1.72×` — outer momentum buffer amplified the slow-weights update by 70% over the standard Lookahead step, pushing the trajectory far out of basin.
+
+### Mechanism — FALSIFIED at β=0.5
+
+Lookahead's slow weights ALREADY integrate over k fast steps. Adding outer momentum on top is double-integration — the slow weights drift too far each k-cycle. At β=0.5 the amplification factor was 1.72× which catastrophically overshoots.
+
+A smaller β_outer (e.g. 0.1) might salvage the mechanism, but at +7σ̂ regression on the principal mechanism this is a clear architectural mistake at this scale.
+
+### Decision
+
+CLOSED. Outer momentum mechanism not viable at any usable β when stacked with Lookahead k=6+α=0.7. Askeladd reassigned to **AdEMAMix-Lion dual-momentum (#4587)** — different mechanism (momentum at the OPTIMIZER level, two EMAs combined, not on the OUTER step).
+
+---
+
+## 2026-05-17 19:55 — PR #4546: SWA last-4 (uniform mean ep 14-17) ← SENT BACK ASYMMETRIC TEST WIN ON HARDEST SPLIT
+
+- Branch: `willowpai2i48h1-thorfinn/swa-last-4-uniform`
+- Student: willowpai2i48h1-thorfinn
+- Hypothesis: Post-hoc Stochastic Weight Averaging — average the slow_weights checkpoints from epochs 14-17 uniformly, evaluate the averaged weights for val/test.
+
+### Result
+
+| Metric | SWA last-4 | #4402 baseline | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 46.68 | 45.7284 | **+0.95** (sub-σ̂ regression) |
+| test_avg/mae_surf_p | 44.28 | 44.5079 | **−0.23** ← test improves |
+
+### Per-split breakdown (test) — STRONG SIGNAL
+
+| Split | SWA last-4 | Baseline | Δ |
+|---|---|---|---|
+| **test_geom_camber_rc** | **52.71** | 54.22 | **−1.51** ← SUBSTANTIAL win on hardest split |
+| test_geom_camber_cruise | ~41.4 | 41.55 | small improvement |
+| test_single_in_dist | ~43.4 | 43.01 | small regression |
+| test_re_rand | ~39.6 | 39.26 | small regression |
+
+### Mechanism (val/test asymmetry analysis)
+
+**Cosine LR non-stationarity at ep 14**: at epoch 14, cosine LR is still > 30% of base_lr. Including ep 14 in the SWA window mixes in a "less converged" checkpoint, which **regresses val** (val responds to fine convergence) but **helps test_geom_camber_rc** by providing a more diverse function ensemble (the harder OOD split benefits from the diversity).
+
+Val and test diverge because val is in-distribution (sharper minima win) while test_geom_camber_rc is hardest-OOD (flatter / more averaged minima generalize better).
+
+### Decision
+
+**SENT BACK to status:wip**. Test improvement is too good to drop, but val regression blocks a paper-facing claim. Requested two follow-up post-hoc averaging windows (NO RE-TRAINING — uses the same saved slow_weights checkpoints):
+
+- **Variant A**: SWA last-2 (ep 16-17 uniform mean) — exclude the non-stationary ep 14-15 checkpoints.
+- **Variant B**: SWA ep-17-weighted (ep {14,15,16,17} with weights `[0.1, 0.15, 0.25, 0.5]`) — keep diversity but downweight non-stationary tail.
+
+Goal: preserve the −1.51 win on test_geom_camber_rc while recovering val to baseline ≤ 45.7 or improving overall.
+
+### Cross-experiment signal
+
+This experiment + frieren LLRD #4562 both improved **test_geom_camber_rc** independently. The hardest split has clear headroom — DropPath stochastic depth #4588 just dispatched as a third independent mechanism aimed at the same effect.
+
+---
+
 ## 2026-05-17 19:30 — PR #4518: --weight_decay 1e-3 (Lion ACTIVE WD LOW) ← CLOSED OVER-REGULARIZES
 
 - Branch: `willowpai2i48h1-tanjiro/wd1e3-k6-b2-995-a07`

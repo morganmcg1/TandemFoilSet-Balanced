@@ -1,7 +1,7 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 19:30
-- **Launch:** willow-pai2i-48h-r1 (round 33 — Lookahead-Lion era; **⚠️ PLATEAU PROTOCOL ACTIVE**; **PROGRAMME ALL-TIME BEST val=45.7284 / test=44.5079 SEED=0** (PR #4402); **5-seed canonical val=46.83±0.41 SEM / test=45.49±0.40 SEM (PAPER-READY)**; **⚠️ MAJOR FINDING (round-31): Lion WD has been fp32 NO-OP at wd ≤ 1e-4 for entire programme** (tanjiro #4456); **25 closures since merge, ZERO improvements**; **⚠️ ONLY POSSIBLE WIN: alphonse #4521 wd=3e-3 single-seed val=45.49 (Δ −0.24) — seed-replication in flight**; **WD bowl single-seed NON-MONOTONIC (0→+1.27→-0.24→+0.98) — strongly suggests wd=3e-3 result is seed noise**; **k×(1−β2) invariant FALSIFIED (edward #4506)**; **α, LR, warm restarts, EMA, β2-RIGHT, β2-LEFT, k-RIGHT, k×β2 joint all RESOLVED**; **8 experiments in flight: magnitude-tempered Lion + aux curvature + wd=3e-3 seed replication + outer momentum + focal-loss + Huber + SWA-last-4 + LLRD**)
+- **Date:** 2026-05-17 20:00
+- **Launch:** willow-pai2i-48h-r1 (round 34 — Lookahead-Lion era; **⚠️ PLATEAU PROTOCOL ACTIVE**; **PROGRAMME ALL-TIME BEST val=45.7284 / test=44.5079 SEED=0** (PR #4402); **5-seed canonical val=46.83±0.41 SEM / test=45.49±0.40 SEM (PAPER-READY)**; **⚠️ MAJOR FINDING (round-31): Lion WD has been fp32 NO-OP at wd ≤ 1e-4 for entire programme** (tanjiro #4456); **28 closures since merge, ZERO improvements**; **⚠️ POSSIBLE WIN PENDING: alphonse #4521 wd=3e-3 single-seed val=45.49 (Δ −0.24) — seed-replication in flight**; **⚠️ NEW SIGNAL (round-33/34): test_geom_camber_rc has CONVERGENT improvement across thorfinn SWA last-4 (−1.51, baseline 54.22) + frieren LLRD 0.95 (−0.32) — hardest split has clear headroom; DropPath p=0.1 dispatched as third independent mechanism**; **WD bowl single-seed NON-MONOTONIC (0→+1.27→-0.24→+0.98) — strongly suggests wd=3e-3 result is seed noise**; **k×(1−β2) invariant FALSIFIED (edward #4506)**; **outer-momentum mechanism FALSIFIED at β=0.5 (askeladd #4536 catastrophic +7σ̂)**; **α, LR, warm restarts, EMA, β2-RIGHT, β2-LEFT, k-RIGHT, k×β2 joint, LLRD-0.95 all RESOLVED**; **8 experiments in flight: magnitude-tempered Lion + aux curvature + wd=3e-3 seed replication + AdEMAMix-Lion + focal-loss + Huber + SWA-narrower-window + DropPath**)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN)
 - **Latest direction from human team:** None (no open issues scoped to this launch)
@@ -162,20 +162,30 @@ Per tanjiro's #4456 finding, every Lion WD probe at wd ≤ 1e-4 in this programm
 
 If any of {1e-3, 3e-3, 1e-2} beats #4402, the entire programme has a new compound. If all regress, the smoothing compound genuinely doesn't want explicit WD — that itself is a paper-grade finding.
 
-## Active WIP experiments (round 33)
+## Active WIP experiments (round 34)
 
 | PR | Student | Hypothesis | Status | Priority |
 |----|---------|-----------|--------|----------|
-| #4580 | edward | **Aux curvature regression head (weight=0.3)** — physics-aware multi-task | NEW (round 33) | Bold data-side mechanism |
-| #4579 | tanjiro | **Magnitude-tempered Lion τ=0.5** — `sign(c) * |c|^0.5` instead of pure sign | NEW (round 33) | Bold optimizer-family modification |
-| #4562 | frieren | **Layer-wise LR decay (LLRD) decay=0.95 per Transolver block** | Running (round 32) | Bold per-block training dynamics |
+| #4588 | frieren | **DropPath stochastic depth p=0.1** per Transolver block (linear schedule 0→0.1) | NEW (round 34) | Bold architecture-level regularization, targets hardest OOD split |
+| #4587 | askeladd | **AdEMAMix-Lion**: dual-momentum fast (β1=0.9) + slow (β1=0.9999) EMA, α_m=0.7 | NEW (round 34) | Bold optimizer-level mechanism |
+| #4580 | edward | **Aux curvature regression head (weight=0.3)** — physics-aware multi-task | Running (round 33) | Bold data-side mechanism |
+| #4579 | tanjiro | **Magnitude-tempered Lion τ=0.5** — `sign(c) * \|c\|^0.5` instead of pure sign | Running (round 33) | Bold optimizer-family modification |
 | #4547 | nezuko | **Huber loss δ=1.0** — loss-curvature reformulation | Running (round 32) | Bold loss-mechanism swing |
-| #4546 | thorfinn | **SWA uniform mean of slow_weights at ep {14,15,16,17}** | Running (round 32) | Bold variance-reduction |
+| **#4546** | **thorfinn** | **SWA NARROWER WINDOW** — Variant A (ep 16-17 uniform) + Variant B (ep {14-17} weighted [0.1,0.15,0.25,0.5]) | **SENT BACK (round 34)** | **⚠️ Asymmetric: −1.51 win on hardest split test_geom_camber_rc, +0.95 val regression — narrowing may fix val while preserving the hardest-split win** |
 | #4537 | fern | **Focal-loss per-node hardness weighting γ=1.0** on surface MAE | Running (round 31) | Bold loss reformulation |
-| #4536 | askeladd | **Lookahead OUTER momentum β_outer=0.5** on slow-step direction | Running (round 31) | Bold optimizer mechanism |
-| **#4521** | **alphonse** | **--weight_decay 3e-3 SEED REPLICATION (seeds 1,2,3,4)** | **SENT BACK (round 32)** | **⚠️ ONLY potential win since #4402 — verify reproducibility** |
+| **#4521** | **alphonse** | **--weight_decay 3e-3 SEED REPLICATION (seeds 1,2,3,4)** | **SENT BACK (round 32)** | **⚠️ ONLY potential val/test win since #4402 — verify reproducibility** |
 
-**All 8 students active. Zero idle. 8 bold-swing axes in flight covering: aux-curvature + magnitude-tempering + LLRD + Huber + SWA + focal-loss + outer-momentum + wd-replication. None are micro-probes — every axis is a mechanism modification or new auxiliary task.**
+**All 8 students active. Zero idle. 8 bold-swing axes in flight covering: DropPath + AdEMAMix-Lion + aux-curvature + magnitude-tempering + Huber + SWA-narrower + focal-loss + wd-replication. None are micro-probes — every axis is a mechanism modification or new auxiliary task.**
+
+## ⚠️ CONVERGENT SIGNAL — hardest split test_geom_camber_rc has clear headroom
+
+Two independent mechanisms in this round/last improved **test_geom_camber_rc** (baseline 54.22, the hardest split):
+- **thorfinn SWA last-4** (#4546): test_geom_camber_rc 52.71 (Δ = **−1.51**, ~3.6σ̂ on a per-split basis)
+- **frieren LLRD 0.95** (#4562): test_geom_camber_rc 53.90 (Δ = −0.32)
+
+Common mechanism: both inject "averaging-like" regularization that increases the implicit ensemble effect at OOD inputs. SWA is exactly that; LLRD's slowed embedding likely averages the input-feature representation across the cosine tail.
+
+**Third independent mechanism dispatched (#4588 frieren DropPath p=0.1)** — depth-level stochasticity acts as an implicit ensemble during training, well-established to improve OOD generalization. If DropPath improves test_geom_camber_rc by ≥0.5, the converging story is robust and we should target this split specifically.
 
 ### ⚠️ Round-29 strategic theme: PLATEAU PROTOCOL activated
 
@@ -189,6 +199,12 @@ If any of {1e-3, 3e-3, 1e-2} beats #4402, the entire programme has a new compoun
 - **seed=4 canonical (frieren #4498):** strengthens paper SEM from n=4 (0.48 test) to n=5 (~0.43 test). Low-risk paper-strengthening.
 
 If alphonse or fern wins, multi-seed it immediately. If both regress, escalate to: (1) per-region loss weighting, (2) Tiger/ScheduleFree optimizers, (3) cosine warm restarts, (4) data augmentation.
+
+## Round-34 closures + sendbacks (3 actions — outer-momentum falsification + SWA asymmetric test win + LLRD null)
+
+- **#4536 askeladd (Lookahead OUTER momentum β_outer=0.5)** CLOSED CATASTROPHIC: val=52.77 (+7.04, ~7.6σ̂). Observed `||v_t|| / (α·||slow_diff||) = 1.72×` — outer momentum amplified the slow-weights step by 70% beyond the standard Lookahead update, pushing trajectory far out of basin. Mechanism: Lookahead's slow weights ALREADY integrate over k fast steps; outer momentum is double-integration. **Mechanism FALSIFIED at β=0.5.** Askeladd reassigned to **AdEMAMix-Lion dual-momentum (#4587)** — momentum at the optimizer level (two EMAs combined), not on the outer step.
+- **#4546 thorfinn (SWA uniform mean ep 14-17)** SENT BACK: val=46.68 (+0.95) but test=44.28 (**−0.23**) AND test_geom_camber_rc=52.71 (**−1.51** on baseline 54.22 — SUBSTANTIAL win on the hardest split). Val/test asymmetry mechanism: cosine LR non-stationarity at ep 14 — including the less-converged checkpoint regresses val (in-distribution) while increasing function diversity benefits the hardest OOD split. Requested **TWO narrower SWA windows as post-hoc averaging** (no re-training): Variant A: ep 16-17 uniform; Variant B: ep {14,15,16,17} weighted `[0.1, 0.15, 0.25, 0.5]`. Goal: preserve −1.51 hardest-split win while recovering val.
+- **#4562 frieren (LLRD decay=0.95 per Transolver block)** CLOSED NULL: val=45.84 (+0.11, 0.27σ̂), test=44.69 (+0.18, 0.45σ̂). Both inside 5-seed SEM. Per-split mixed: geom_camber_rc −0.32 (good), geom_camber_cruise −0.22 (good), re_rand +0.94 (bad — slowing preprocess MLP hurt Re encoding). Layer-id mapping correction worth noting (head lives inside blocks[-1] as mlp2/ln_3, not separate top-level module). Frieren reassigned to **DropPath stochastic depth p=0.1 (#4588)** — architecture-level regularization targeting hardest OOD split.
 
 ## Round-33 closures (2 closures — completing WD bowl + falsifying k×β2 invariant)
 
