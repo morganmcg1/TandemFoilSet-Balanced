@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -269,16 +270,30 @@ class TransolverBlock(nn.Module):
         return fx
 
 
+def fourier_features(coords: torch.Tensor, num_freqs: int) -> torch.Tensor:
+    """Tancik-style sinusoidal positional encoding for 2D coordinates.
+
+    Applies γ(p) = [sin(2π f_k p), cos(2π f_k p)] with log-spaced f_k = 2^k,
+    k = 0..num_freqs-1. ``coords`` shape (..., 2); returns (..., 4 * num_freqs).
+    Bounded in [-1, 1] regardless of coord scale.
+    """
+    freqs = 2.0 ** torch.arange(num_freqs, dtype=coords.dtype, device=coords.device)
+    proj = coords.unsqueeze(-1) * freqs * (2.0 * math.pi)
+    return torch.cat([proj.sin(), proj.cos()], dim=-1).flatten(-2)
+
+
 class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False, cond_dim=0,
                  ffn_act="gelu", norm_type="layernorm",
+                 fourier_pe_freqs: int = 0,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
+        self.fourier_pe_freqs = fourier_pe_freqs
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
 
@@ -322,10 +337,13 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
-        # Condition values (Re, AoA, NACA, gap, stagger) are sample-level
-        # constants stored per-node; node 0 is always real (padding appended
-        # at the end by pad_collate) so we read the global condition from it.
-        cond = x[:, 0, 13:] if self.cond_dim > 0 else None
+        # Condition values (Re, AoA, NACA, gap, stagger) live at dims [13, 13+cond_dim).
+        # Slice with an explicit end so any per-node features appended after
+        # (e.g. Fourier PE at dim 24+) don't leak into the FiLM input.
+        cond = x[:, 0, 13:13 + self.cond_dim] if self.cond_dim > 0 else None
+        if self.fourier_pe_freqs > 0:
+            ff = fourier_features(x[..., :2], self.fourier_pe_freqs)
+            x = torch.cat([x, ff], dim=-1)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx, cond=cond)
@@ -581,6 +599,8 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     use_bf16: bool = False   # Enable bf16 mixed-precision via torch.autocast (H95)
     T_max: int = 15  # CosineAnnealingLR period; default preserves prior behavior
+    fourier_pe: bool = False   # Tancik Fourier PE on (x, z) coords (H106)
+    fourier_pe_freqs: int = 8  # Number of log-spaced frequencies; adds 4*K features
 
 
 cfg = sp.parse(Config)
@@ -615,9 +635,11 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+fourier_pe_freqs = cfg.fourier_pe_freqs if cfg.fourier_pe else 0
+extra_pe_features = 4 * fourier_pe_freqs
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    fun_dim=X_DIM - 2 + extra_pe_features,
     out_dim=3,
     n_hidden=128,
     n_layers=cfg.n_layers,
@@ -627,6 +649,7 @@ model_config = dict(
     cond_dim=cfg.cond_dim,  # log(Re), AoA1, NACA1(3), AoA2, NACA2(3), gap, stagger = 11; 0 disables FiLM
     ffn_act=cfg.ffn_act,
     norm_type=cfg.norm_type,
+    fourier_pe_freqs=fourier_pe_freqs,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -768,6 +791,8 @@ for epoch in range(MAX_EPOCHS):
         "ffn_act": cfg.ffn_act,
         "use_bf16": cfg.use_bf16,
         "T_max": cfg.T_max,
+        "fourier_pe": cfg.fourier_pe,
+        "fourier_pe_freqs": fourier_pe_freqs,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "gate_stats": gate_stats,
