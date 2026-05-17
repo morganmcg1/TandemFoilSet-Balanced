@@ -1,5 +1,54 @@
 # SENPAI Research Results
 
+## 2026-05-17 11:05 — #4507 #4495 #4470 CLOSED (Findings #57-59); fern→#4574, askeladd→#4575, tanjiro→#4577 (new-BL orthogonal re-screens)
+
+### #4507 fern — R13 H93: spec_norm INPUT {pi=1,pi=3} at T_max=22 (CLOSED — Finding #57)
+
+| placement | pi | W&B | val_avg | Δ vs old BL |
+|---|---|---|---|---|
+| output #4505 | 3 | b4txs5yb | 46.7952 | −2.96 MERGED |
+| output #4505 | 1 | 1xy56nr6 | 48.0400 | −1.71 |
+| **input #4507** | 1 | 14ycsdrs | 50.5927 | +0.84 (null) |
+| **input #4507** | 3 | 5cxu5hak | 49.5504 | −0.20 (null) |
+
+**Finding #57**: spec_norm INPUT at T_max=22 is null — both arms within ±1σ_T22. Placement matters: output head constraint (generalization regularizer) decisively outperforms input constraint. ls×spec_norm synergy is output-specific. Input pi=1 over-shrinks high-magnitude features (+4.73 in_dist val); pi=3 recovers via better σ-estimate. Against new BL (46.80): both +2.76/+3.80 val worse. Spec_norm input axis closed.
+
+New assignment: fern → #4574 (R13 H99 lr recalibration {2.3e-4, 2.5e-4} at new spec_norm BL).
+
+---
+
+### #4495 askeladd — R13 H90: ls upward {2e-4,3e-4} at T_max=22 (CLOSED — Finding #58)
+
+Combined with #4419 (Finding #48): clean U-shape with ls=1e-4 as local optimum.
+
+| ls | val_avg | Δ vs BL |
+|----|---------|---------|
+| 1e-5 (#4419) | 54.23 | +4.48 |
+| 5e-5 (#4419) | 52.85 | +3.10 |
+| **1e-4 (BL)** | **49.75** | **0** |
+| 2e-4 (4ooadyta) | 52.07 | +2.32 |
+| 3e-4 (h4ti2plx) | 51.98 | +2.23 |
+
+**Finding #58**: ls axis fully closed in BOTH directions at T_max=22 — clean U-shape, ls=1e-4 (CaiT/DeiT-III default) is local optimum. Mechanism: balance between enough residual capacity and not over-investing. Camber_rc was NOT helped by either direction — confirms camber_rc bottleneck is NOT residual capacity at this substrate.
+
+New assignment: askeladd → #4575 (R13 H100 wd downward {7e-4, 5e-4} at new spec_norm BL).
+
+---
+
+### #4470 tanjiro — R13 H88: batch_size {2,8} at T_max=22 (CLOSED — Finding #59)
+
+| bs | run | val_avg | Δ vs BL |
+|----|-----|---------|---------|
+| 2 (best) | fmwyafnc | 50.08 | +0.33 (null) |
+| **4 (BL)** | 1neonugr | **49.75** | 0 |
+| 8 | 3okzue66 | 78.06 | +28.30 (catastrophic) |
+
+**Finding #59**: batch_size axis closed at T_max=22 under SENPAI_TIMEOUT_MINUTES=30. bs=4 is the sweet spot. bs=2: 2× steps/epoch but only 13 epochs in 30 min (schedule undertraversed). bs=8: ~94 steps/epoch × 13 epochs = 1.2k total updates vs ~5k at BL — far from converged. bs=4 confirmed canonical at current wall-clock.
+
+New assignment: tanjiro → #4577 (R13 H101 EMA recalibration {0.995, 0.998} at new spec_norm BL).
+
+---
+
 ## 2026-05-17 10:45 — #4505 MERGED (Finding #56: spec_norm output pi=3 is new BL val 46.80/test 40.49); #4503 CLOSED (Finding #55: Huber β axis closed, β=0.05 local minimum asymmetric); edward→#4560 (R13 H98 spec_norm pi=5/pi=10), alphonse→#4557 (R13 H97 grad_clip)
 
 ### #4505 edward — R13 H92: spec_norm output {pi=1,pi=3} at T_max=22 (MERGED — Finding #56, NEW BEST)

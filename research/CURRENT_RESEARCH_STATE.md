@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-17 (~10:50 UTC) — #4505 MERGED (Finding #56: spec_norm output pi=3 is NEW BL val 46.80/test 40.49 — biggest single win this round). #4503 CLOSED (Finding #55: Huber β axis fully closed). edward→#4560 (R13 H98 spec_norm pi=5/10), alphonse→#4557 (R13 H97 grad_clip). All 8 students staffed. ~3h left.
+- **Date:** 2026-05-17 (~11:10 UTC) — #4507 #4495 #4470 CLOSED (Findings #57-59: spec_norm input null, ls fully closed, batch_size closed). fern/askeladd/tanjiro reassigned to lr/wd/EMA re-screens at NEW BL. All 8 staffed. ~2.5h left.
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
@@ -52,16 +52,16 @@ Key mechanism: spec_norm output (Lipschitz constraint on final layer) cooperates
 
 | PR | Student | Hypothesis | Status | Substrate |
 |----|---------|------------|--------|-----------|
-| **#4560** | **edward** | **R13 H98: spec_norm output {pi=5,pi=10} at T_max=22** | **Just assigned** | T_max=22 NEW BL — power-iter axis |
-| **#4557** | **alphonse** | **R13 H97: grad_clip {0.7,1.5} at T_max=22** | **Just assigned** | T_max=22 — clip untested axis |
-| **#4531** | **thorfinn** | **R13 H95: T_max×lr basin pairing {T_max=24,T_max=26}×lr=2.5e-4** | In flight | T_max=22 — basin pairing |
-| **#4533** | **nezuko** | **R13 H96: surf_weight downward {7.5, 5} at T_max=22** | In flight | T_max=22 — surf_weight downward |
-| **#4507** | **fern** | **R13 H93: spec_norm INPUT {pi=1, pi=3} at T_max=22** | In flight | T_max=22 — spec_norm input |
-| **#4508** | **frieren** | **R13 H94: n_fourier=8 {σ=5, σ=10} at T_max=22** | In flight | T_max=22 — n_fourier axis |
-| **#4495** | **askeladd** | **R13 H90: ls upward {2e-4, 3e-4} at T_max=22** | In flight | T_max=22 — ls upward |
-| **#4470** | **tanjiro** | **R13 H88: batch_size {2, 8} at T_max=22** | In flight | T_max=22 — batch-size |
+| **#4574** | **fern** | **R13 H99: lr recalibration {2.3e-4, 2.5e-4} at new spec_norm BL** | **Just assigned** | T_max=22 NEW BL |
+| **#4575** | **askeladd** | **R13 H100: wd downward {7e-4, 5e-4} at new spec_norm BL** | **Just assigned** | T_max=22 NEW BL |
+| **#4577** | **tanjiro** | **R13 H101: EMA recalibration {0.995, 0.998} at new spec_norm BL** | **Just assigned** | T_max=22 NEW BL |
+| **#4560** | **edward** | **R13 H98: spec_norm output {pi=5, pi=10} at T_max=22** | In flight | T_max=22 NEW BL — power-iter axis |
+| **#4557** | **alphonse** | **R13 H97: grad_clip {0.7, 1.5} at T_max=22** | In flight | T_max=22 NEW BL — clip axis |
+| **#4531** | **thorfinn** | **R13 H95: T_max×lr basin pairing {T_max=24,T_max=26}×lr=2.5e-4** | In flight | T_max=22 OLD BL — basin pairing |
+| **#4533** | **nezuko** | **R13 H96: surf_weight downward {7.5, 5} at T_max=22** | In flight | T_max=22 OLD BL — surf_weight down |
+| **#4508** | **frieren** | **R13 H94: n_fourier=8 {σ=5, σ=10} at T_max=22** | In flight | T_max=22 OLD BL — n_fourier |
 
-**All 8 students at T_max=22 substrate.** R13 in full swing. **NEW BL = 46.7952 val / 40.4866 test (spec_norm pi=3).** All in-flight students should compare against OLD BL (49.75/42.89) since they were assigned before the merge.
+**All 8 students staffed.** 5 at NEW BL (spec_norm pi=3); 3 at OLD BL (assigned before merge, compare against 49.75/42.89).
 
 **σ_T20 established** (PR #4346 fern, Finding #45): 5-seed σ_val = 1.70, σ_test = 1.40. Merge thresholds: <1 val = noise, 1-2 val = weak signal, ≥2 val = robust. camber_rc has σ ~3.4 (extra caution for rc-only improvements).
 
@@ -110,7 +110,7 @@ Key mechanism: spec_norm output (Lipschitz constraint on final layer) cooperates
 | #4231 | tanjiro | LR recalibration: lr=1.7e-4 directional winner at old substrate. Test regresses vs new BL. **Finding #32**: LR finding for follow-up at new BL → #4315. | CLOSED |
 | #4214 | frieren | EMA@layer_scale+T_max=20: timeout-truncated. **Finding #28**: layer_scale stabilises ema=0.999 but slow. | CLOSED |
 
-## Key findings (cumulative, 56)
+## Key findings (cumulative, 59)
 
 1. **FiLM on log(Re)** contributes −4.35 val / −4.56 test under n_fourier=0.
 2. **EMA(0.997)** contributes +4.4 val on top of Lion.
@@ -150,6 +150,9 @@ Key mechanism: spec_norm output (Lipschitz constraint on final layer) cooperates
 36. **lr=1.5e-4 is a SHARP local minimum at T_max=24+clip+no-ls**: all wider LR arms ({1.3, 1.7, 2.0}×1e-4) regress ≥2.2 val. Finding #22 (clip shifts lr optimum to 2e-4 at T_max=14) does NOT generalize to T_max=24; elevated late-schedule LR at T_max=24 already provides effective high-LR. LR axis fully closed at old substrate.
 37. **T_max=22 is the new optimum — first sub-50 val, camber_cruise regression fixed**: lower cosine-endpoint LR (~1.24e-4 at epoch 14) vs T_max=20 (~1.34e-4) gives the small-gradient cruise domain better convergence. Win is broad-based (all 4 val splits, 3 of 4 test). T_max=16 regresses (+1.97 val) confirming the mechanism: higher time-averaged LR (more T_max) is beneficial IF the endpoint LR is simultaneously lower. Safe range with ls: T_max ∈ [20, 22]; T_max=24 diverges (Finding #33). Follow-up: T_max=23 cliff-edge probe (#4372).
 38. **EMA axis closed at new BL substrate** (T_max=20+ls+clip+lr=2e-4): ema=0.995 regresses +1.48 val, ema=0.999 catastrophically bad +6.46 val (worst on ALL 4 splits). Root cause: 13-epoch wall-clock budget means ema=0.999's long averaging window is dominated by early-training weights — starvation-bottlenecked, not stability-bottlenecked. Layer_scale does NOT allow ema=0.999 to compete within this budget. EMA axis robustly closed across all 3 substrates (Findings #28+#34+#38): ema=0.997 is the optimum everywhere.
+59. **batch_size axis closed at T_max=22 under 30-min wall-clock** (Finding #59, tanjiro #4470): bs=4 sweet spot. bs=2 null (within σ, schedule undertraversed at 13 epochs). bs=8 catastrophic (+28 val — far from converged at 1.2k updates). bs=4 confirmed canonical at SENPAI_TIMEOUT_MINUTES=30.
+58. **ls axis fully closed in BOTH directions at T_max=22** (Finding #58, askeladd #4495+#4419): clean U-shape with ls=1e-4 (CaiT default) as local optimum. ls<1e-4 starves residual capacity; ls>1e-4 over-invests (in_dist dominates, camber_rc regresses). Camber_rc bottleneck NOT residual capacity.
+57. **spec_norm INPUT at T_max=22 is null** (Finding #57, fern #4507): both arms within ±1σ_T22. Placement matters — output head constraint (generalization) decisively outperforms input constraint. Input pi=1 over-shrinks high-magnitude features; pi=3 recovers partially. Against new BL: both input arms +2.76/+3.80 val worse. Output > input for spec_norm.
 56. **spec_norm output pi=3 wins at T_max=22 — NEW BEST val 46.7952 / test 40.4866** (Finding #56, edward #4505): pi=1 −1.71 val, pi=3 −2.96 val vs old BL. Finding #13 (diminishing returns with lr) does NOT extend to T_max=22+ls=1e-4 — the ls×spec_norm synergy is a positive interaction. Tighter Lipschitz (pi=3) better than loose (pi=1) at high-mean-lr substrate. No overhead (~142s/epoch). Win is generalization-oriented (camber_rc, cruise, re_rand improve most; in_dist marginal). Power-iteration axis not yet closed — pi=5/10 in flight (#4560).
 55. **Huber β axis fully closed at T_max=22 — β=0.05 local minimum, asymmetric landscape** (Finding #55, alphonse #4503): β=0.03(+5.57), β=0.04(+4.63), β=0.05(BL), β=0.10(+2.69), β=0.15(+2.21). L1 side hurts ~2× more than L2 side. Mechanism: Lion sign-update + L1-corner = flat-magnitude gradient on small residuals → slows late convergence. Per-split: in_dist regressed most (+7-9 val) under narrowing — highest dynamic range, most sensitive to β=0.05 smoothing. β axis definitively closed.
 54. **surf_weight upward direction closed at T_max=22** (Finding #54, nezuko #4420): w=15 +3.76 val, w=20 +5.76 val — monotonically worse on BOTH heads (not a vol→surf trade). camber_rc hit hardest (representation-limited, not gradient-balance-limited). Volumetric loss is useful auxiliary signal for shared encoder. Optimum likely below w=10 at this substrate. Downward probe in flight (#4533).
@@ -183,14 +186,21 @@ Key mechanism: spec_norm output (Lipschitz constraint on final layer) cooperates
 - surf_weight upward (Finding #54) — CLOSED, downward in flight (#4533)
 - σ_T22 calibration (Finding #51) — CLOSED
 - spec_norm output pi=1,pi=3 (Finding #56) — pi=3 MERGED (new BL); pi=5/10 in flight (#4560)
+- spec_norm input (Finding #57) — null result, CLOSED in both directions
+- ls both directions (Findings #48+#58) — FULLY CLOSED — ls=1e-4 is optimum
+- batch_size (Finding #59) — CLOSED — bs=4 canonical under 30-min timeout
 
 **Open axes at T_max=22** (in flight):
 - **spec_norm output pi higher**: {pi=5, pi=10} — in flight (#4560 edward)
 - **grad_clip**: {0.7, 1.5} — in flight (#4557 alphonse) — untested at new substrate
 - **batch_size**: {2, 8} — in flight (#4470 tanjiro)
 - **ls upward**: {2e-4, 3e-4} — in flight (#4495 askeladd)
-- **spec_norm input**: {pi=1, pi=3} — in flight (#4507 fern) [pi=1 slightly worse than BL]
-- **n_fourier=8**: {σ=5, σ=10} — in flight (#4508 frieren) [σ=5 worse, σ=10 not seen yet]
+- **lr recalibration at NEW BL**: {2.3e-4, 2.5e-4} — in flight (#4574 fern)
+- **wd downward at NEW BL**: {7e-4, 5e-4} — in flight (#4575 askeladd)
+- **EMA recalibration at NEW BL**: {0.995, 0.998} — in flight (#4577 tanjiro)
+- **spec_norm output pi higher**: {pi=5, pi=10} — in flight (#4560 edward)
+- **grad_clip at NEW BL**: {0.7, 1.5} — in flight (#4557 alphonse)
+- **n_fourier=8**: {σ=5, σ=10} — in flight (#4508 frieren) [σ=5 worse, σ=10 in progress]
 - **T_max×lr basin pairing**: {T_max=24,T_max=26}×lr=2.5e-4 — in flight (#4531 thorfinn)
 - **surf_weight downward**: {7.5, 5} — in flight (#4533 nezuko)
 
