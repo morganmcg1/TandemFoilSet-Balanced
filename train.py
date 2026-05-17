@@ -24,6 +24,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -31,8 +32,9 @@ import torch.nn.functional as F
 import wandb
 import yaml
 from einops import rearrange
+from scipy.spatial import cKDTree
 from timm.layers import trunc_normal_
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from tqdm import tqdm
 
 from data import (
@@ -75,6 +77,93 @@ def encode_inputs(x_norm: torch.Tensor, num_freq: int) -> torch.Tensor:
         [x_norm[..., : POS_COLS.start], x_norm[..., POS_COLS.stop :]], dim=-1
     )
     return torch.cat([enc, non_pos], dim=-1)
+
+
+# ---------------------------------------------------------------------------
+# kNN augmentation for incompressibility aux loss (Hagnell 2025, PR #4551)
+# ---------------------------------------------------------------------------
+
+class KNNAugmentedDataset(Dataset):
+    """Wraps a base SplitDataset to add per-sample kNN indices over raw (x,z).
+
+    kNN is computed once per sample (lazy + cached per dataloader worker). The
+    cached tensor is `[N, k]` int64 — indices into the full N-node array (kNN
+    over ALL nodes; the divergence loss masks the *centers* to volume only).
+    """
+
+    def __init__(self, base_ds, k: int = 4):
+        self.base_ds = base_ds
+        self.k = k
+        self._cache: dict[int, torch.Tensor] = {}
+
+    def __len__(self):
+        return len(self.base_ds)
+
+    def __getitem__(self, idx):
+        x, y, is_surface = self.base_ds[idx]
+        knn = self._cache.get(idx)
+        if knn is None:
+            coords = x[:, :2].numpy().astype(np.float64)  # raw (x, z) positions
+            tree = cKDTree(coords)
+            _, nn_idx = tree.query(coords, k=self.k + 1)  # includes self at col 0
+            knn = torch.from_numpy(nn_idx[:, 1:].astype(np.int64))  # [N, k]
+            self._cache[idx] = knn
+        return x, y, is_surface, knn
+
+
+def pad_collate_with_knn(batch):
+    """pad_collate variant that also pads kNN indices.
+
+    Padding nodes get knn_idx=0 (valid index, harmless since volume_mask masks
+    them out of the loss).
+    """
+    xs, ys, surfs, knns = zip(*batch)
+    max_n = max(x.shape[0] for x in xs)
+    B = len(xs)
+    k = knns[0].shape[1]
+    x_pad = torch.zeros(B, max_n, xs[0].shape[1])
+    y_pad = torch.zeros(B, max_n, ys[0].shape[1])
+    surf_pad = torch.zeros(B, max_n, dtype=torch.bool)
+    mask = torch.zeros(B, max_n, dtype=torch.bool)
+    knn_pad = torch.zeros(B, max_n, k, dtype=torch.long)
+    for i, (x, y, sf, knn) in enumerate(zip(xs, ys, surfs, knns)):
+        n = x.shape[0]
+        x_pad[i, :n] = x
+        y_pad[i, :n] = y
+        surf_pad[i, :n] = sf
+        mask[i, :n] = True
+        knn_pad[i, :n] = knn
+    return x_pad, y_pad, surf_pad, mask, knn_pad
+
+
+def divergence_aux(pred_u, x_coords, knn_idx, volume_mask):
+    """Approximate ∇·u on volume nodes via kNN finite-difference projection.
+
+    For each center node, project velocity differences `du = u(nbr) - u(ctr)`
+    onto position differences `dx = pos(nbr) - pos(ctr)`. Under isotropic
+    neighbor distribution this equals divergence/2 (cross-Jacobian terms cancel
+    on average); a uniform 1/2 scaling is absorbed into the loss weight λ.
+
+    Args:
+        pred_u: [B, N, 2] predicted (Ux, Uy) in normalized space.
+        x_coords: [B, N, 2] raw (x, z) positions (used for dx scale).
+        knn_idx: [B, N, k] long, indices into the second dim of pred_u / x_coords.
+        volume_mask: [B, N] bool — True for valid non-surface non-padding nodes.
+
+    Returns:
+        Tuple of (squared loss scalar, signed div magnitude scalar for diagnostics).
+    """
+    B, N, k = knn_idx.shape
+    batch_idx = torch.arange(B, device=knn_idx.device)[:, None, None].expand(-1, N, k)
+    u_neighbors = pred_u[batch_idx, knn_idx]      # [B, N, k, 2]
+    x_neighbors = x_coords[batch_idx, knn_idx]    # [B, N, k, 2]
+    du = u_neighbors - pred_u.unsqueeze(2)         # [B, N, k, 2]
+    dx = x_neighbors - x_coords.unsqueeze(2)       # [B, N, k, 2]
+    r2 = (dx ** 2).sum(-1).clamp(min=1e-6)         # [B, N, k]
+    proj = (du * dx).sum(-1) / r2                  # [B, N, k] — directional derivative
+    div_u = proj.mean(-1)                          # [B, N]
+    div_vol = div_u[volume_mask]                   # [n_volume_total]
+    return (div_vol ** 2).mean(), div_vol.detach().abs().mean()
 
 
 # ---------------------------------------------------------------------------
@@ -566,6 +655,8 @@ class Config:
     lion_lr: float = 1e-4  # Lion lr; canonical: AdamW_lr / 3..10
     lion_wd: float = 1e-3  # Lion wd; canonical: AdamW_wd * 3..10
     use_qk_norm: bool = False  # ViT-22B-style LayerNorm(head_dim) on Q and K before SDPA
+    lambda_div: float = 0.0  # incompressibility aux-loss weight (0 = disabled)
+    div_k: int = 4  # k-nearest-neighbors for kNN finite-diff divergence estimate
 
 
 cfg = sp.parse(Config)
@@ -581,13 +672,24 @@ stats = {k: v.to(device) for k, v in stats.items()}
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
+# Training loader gets kNN augmentation when div aux loss is active; val/test
+# keep plain pad_collate since aux loss is training-only.
+if cfg.lambda_div > 0:
+    train_loader_kwargs = dict(loader_kwargs)
+    train_loader_kwargs["collate_fn"] = pad_collate_with_knn
+    train_ds_for_loader = KNNAugmentedDataset(train_ds, k=cfg.div_k)
+    print(f"Divergence aux loss active: lambda={cfg.lambda_div}, k={cfg.div_k}")
+else:
+    train_loader_kwargs = loader_kwargs
+    train_ds_for_loader = train_ds
+
 if cfg.debug:
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              shuffle=True, **loader_kwargs)
+    train_loader = DataLoader(train_ds_for_loader, batch_size=cfg.batch_size,
+                              shuffle=True, **train_loader_kwargs)
 else:
     sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              sampler=sampler, **loader_kwargs)
+    train_loader = DataLoader(train_ds_for_loader, batch_size=cfg.batch_size,
+                              sampler=sampler, **train_loader_kwargs)
 
 val_loaders = {
     name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
@@ -688,14 +790,21 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
-    for batch_idx, (x, y, is_surface, mask) in enumerate(
+    for batch_idx, batch in enumerate(
         tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False)
     ):
+        if cfg.lambda_div > 0:
+            x, y, is_surface, mask, knn_idx = batch
+            knn_idx = knn_idx.to(device, non_blocking=True)
+        else:
+            x, y, is_surface, mask = batch
+            knn_idx = None
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
+        x_raw_pos = x[..., :2].clone()  # raw positions for divergence dx
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         if cfg.coord_noise_std > 0:
             pad_mask = mask.unsqueeze(-1).to(x_norm.dtype)  # (B, N, 1); zero at padding
@@ -722,18 +831,32 @@ for epoch in range(MAX_EPOCHS):
         surf_mask = mask & is_surface
         vol_loss = (err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+        main_loss = vol_loss + cfg.surf_weight * surf_loss
+
+        log_batch = {
+            "train/loss": None,  # set below to include aux contribution
+            "train/main_loss": main_loss.item(),
+            "global_step": global_step + 1,
+        }
+        if cfg.lambda_div > 0:
+            div_aux_loss, div_abs = divergence_aux(
+                pred[..., :2], x_raw_pos, knn_idx, vol_mask,
+            )
+            loss = main_loss + cfg.lambda_div * div_aux_loss
+            log_batch["train/div_aux"] = div_aux_loss.item()
+            log_batch["train/div_abs_mean"] = div_abs.item()
+        else:
+            loss = main_loss
 
         optimizer.zero_grad()
         loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=GRAD_CLIP_MAX_NORM)
         optimizer.step()
         global_step += 1
-        wandb.log({
-            "train/loss": loss.item(),
-            "train/grad_norm": grad_norm.item(),
-            "global_step": global_step,
-        })
+        log_batch["train/loss"] = loss.item()
+        log_batch["train/grad_norm"] = grad_norm.item()
+        log_batch["global_step"] = global_step
+        wandb.log(log_batch)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
