@@ -1,9 +1,61 @@
 # TandemFoilSet Baseline
 
 **Branch:** `icml-appendix-willow-pai2i-48h-r2`
-**Last updated:** 2026-05-16 21:30 UTC
+**Last updated:** 2026-05-17 10:45 UTC
 
-## Current best — PR #4067: AdamW β2=0.95 — alphonse
+## Current best — PR #4453: n_layers=4 depth win — alphonse
+
+| Metric | Value | Source |
+|---|---|---|
+| `val_avg/mae_surf_p` | **50.1193** | PR #4453 alphonse n_layers=4 Lookahead k=3 slice=8 `uiy4eks9` |
+| `test_3split/mae_surf_p` | **50.2103** | PR #4453 alphonse (manual 3-split, cruise NaN excluded) |
+
+Per-split val (PR #4453, run `uiy4eks9`):
+
+| Split | mae_surf_p | Δ vs prior baseline (50.1657) |
+|---|---|---|
+| val_single_in_dist | 60.392 | +2.52 (regressed vs eps=1e-9 baseline) |
+| **val_geom_camber_rc** | **60.666** | **−1.895 (−3.0%)** |
+| val_geom_camber_cruise | 31.444 | −0.544 |
+| **val_re_rand** | **48.656** | +0.41 |
+| **val_avg** | **50.1193** | **−0.047 (−0.09%)** |
+
+Per-split test (run `uiy4eks9`, best-ckpt eval via `scripts/test_eval_only.py --batch_size 1`):
+
+| Split | mae_surf_p |
+|---|---|
+| test_single_in_dist | 51.466 |
+| test_geom_camber_rc | **57.357** |
+| test_geom_camber_cruise | NaN (fleet-wide data/scoring.py bug) |
+| test_re_rand | 41.808 |
+| **test_3split** | **50.2103** |
+
+Reproduce:
+```bash
+cd "target/" && python train.py \
+  --grad_clip 5.0 --huber_delta 0.5 --ema_decay 0.99 --asinh_p_scale 1.0 \
+  --use_swiglu --mlp_ratio 1.333 --n_head 2 --asinh_vel_scale 0.5 \
+  --slice_num 8 \
+  --use_lookahead --lookahead_k 3 --lookahead_alpha 0.5 \
+  --n_layers 4 \
+  --agent <student>
+```
+
+**Note on eps**: this run used default adamw_eps=1e-8 (NOT 1e-9). The eps=1e-9 axis (PR #4401, val=50.1657 on n_layers=5) and n_layers=4 axis are independent and likely additive. Stacking {n_layers=4 + eps=1e-9} is unverified — assigned as the immediate follow-up.
+
+**Mechanism**: depth-axis points down at our 30-min wall-clock budget. n_layers=3 (26 epochs) and n_layers=4 (22 epochs) both beat n_layers=5 (17 epochs) — more Lookahead slow-weight syncs more than compensate for reduced per-block capacity. n_layers=7 (10 epochs) collapses badly. n_layers=4 wins over n_layers=3 on val (capacity sweet spot: enough depth, enough updates).
+
+**Dominant gain**: val_geom_camber_rc 62.561 → 60.666 (−1.895 absolute, −3.0%) — the hardest split continues to improve.
+
+**Key comparison** (all recent baselines):
+| Config | val | test |
+|---|---|---|
+| n_layers=5, eps=1e-9 (PR #4401) | 50.166 | 50.340 |
+| **n_layers=4, eps=1e-8 (PR #4453, this)** | **50.119** | **50.210** |
+
+---
+
+## Previous best — PR #4067: AdamW β2=0.95 — alphonse
 
 | Metric | Value | Source |
 |--------|-------|--------|
