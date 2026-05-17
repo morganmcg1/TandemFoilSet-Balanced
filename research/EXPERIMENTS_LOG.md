@@ -1927,3 +1927,99 @@ Note: both #4186 and #4155 were trained on the **old pre-SF baseline** since the
 | PR | Student | Hypothesis | Theme |
 |----|---------|------------|-------|
 | #4381 | nezuko | Stochastic depth (drop_path) p=0.1 on residual branches — block-level reg, attack rc-split bottleneck | regularization (structural) |
+
+## 2026-05-17 06:00 — R27 BATCH: 3 closures, 1 send-back, 3 new assignments
+
+---
+
+## 2026-05-17 06:00 — PR #4360 — warmup_steps=100 (CLOSED — axis triangulated)
+
+- **Branch:** `charliepai2i48h1-frieren/sf-warmup-100-on-mlp-ratio-2`
+- **Hypothesis:** Inverse probe to failed warmup=500. Wider model's cleaner early gradients may want SHORTER warmup, not longer.
+- **Results:**
+
+| warmup_steps | val_avg | Δ vs 200 |
+|--------------|---------|---------|
+| 100 | 37.1455 | +1.02 (+2.8%) worse |
+| **200 (baseline)** | **36.13** | — |
+| 500 | 37.2646 | +1.13 (+3.1%) worse |
+
+- **Metrics path:** `models/model-sf-warmup-100-on-mlp-ratio-2-20260517-044056/metrics.jsonl`
+- **Key finding:** Two-sided triangulation. warmup_steps=200 is a real optimum from both directions — narrow window (~[150, 250]).
+- **Mechanism refinement (student):** prediction of early instability did NOT manifest — epoch 1-5 trajectories essentially identical between warmup=100 and =200. The penalty accumulates from a STEADY-STATE difference in SF AdamW's running second-moment quality, not a transient warmup effect. **warmup_steps governs long-run optimizer state quality, not just the LR ramp.**
+- **Decision:** CLOSED. warmup axis FULLY CLOSED at 200. No follow-up sweeps (150, 250) — marginal expected gain not worth GPU time.
+
+---
+
+## 2026-05-17 06:00 — PR #4361 — n_hidden=160 (CLOSED — compute-bound capacity signal)
+
+- **Branch:** `charliepai2i48h1-thorfinn/n-hidden-160-on-mlp-ratio-2`
+- **Hypothesis:** Per thorfinn's wd evidence (model is capacity-limited), push n_hidden 128→160 (+25% width).
+- **Results:**
+
+| Metric | n_hidden=160 | Baseline (36.13) | Δ |
+|--------|-------------|-----------------|---|
+| val_avg/mae_surf_p | 37.242 | 36.13 | +1.11 (+3.1%) |
+| test_avg/mae_surf_p | 32.200 | 31.97 | +0.23 |
+| epochs reached | 31 | 37 | **−6** |
+| sec/epoch | 58.06 | 47.76 | +21.6% |
+| peak VRAM | 27.99 GB | 22.61 GB | +5.4 GB |
+| n_params | 1,531,583 | 983,871 | +55.7% |
+| val_geom_camber_cruise | **20.68** | 21.37 | **−0.69 (BETTER)** |
+
+- **Metrics path:** `models/model-n-hidden-160-on-mlp-ratio-2-20260517-044058/metrics.jsonl`
+- **Critical signal — val still descending at termination:** last 5 epochs val_avg: 38.81 → 38.33 → 38.03 → 37.81 → 37.24. Descent is ACCELERATING (last delta −0.57). Compute-bound, not capacity-failure. With +3-5 epochs would cross baseline; with +10 would beat cleanly.
+- **Split pattern matches budget-bound interpretation**: cruise (cleanest split) already beats baseline (−3.2%), in-dist regressed most (undertrained on easy data), rc/re_rand also undertrained. This is what an "undertrained wider model" looks like — easy splits fit fast, hard splits need more steps.
+- **Decision:** CLOSED. Per PR decision rule for "val still descending at last epoch". n_hidden axis NOT fully closed — triangulates the cost/benefit boundary. Reassigning thorfinn to n_hidden=144 (softer +12.5% step, budget-feasible).
+- **Implementation note:** dim_head with n_head=4 and n_hidden=160 → 40 (vs baseline 32). PhysicsAttention's per-head Linear(dim_head, dim_head) quadrupled. Compile warmup at epoch 1 was 94.2s (vs baseline ~30s) — wider hidden dim has compile-cost overhead.
+
+---
+
+## 2026-05-17 06:00 — PR #4363 — slice_num=12 (CLOSED — axis fully closed at 8)
+
+- **Branch:** `charliepai2i48h1-tanjiro/slice-num-12-on-mlp-ratio-2`
+- **Hypothesis:** Upward probe at wider FFN. Each slice gets more processing → maybe more slices help.
+- **Results:**
+
+| slice_num | val_avg | Δ |
+|-----------|---------|---|
+| 6 (#4341) | 37.25 | +1.12 |
+| **8 (baseline)** | **36.13** | — |
+| 12 (this) | 37.38 | +1.25 |
+
+- **Metrics path:** `models/model-slice-num-12-on-mlp-ratio-2-20260517-044808/metrics.jsonl`
+- **Compile sweet spot at slice_num=8 confirmed:** slice_num=12 ran 52.64s/epoch (+10.2%); compile-warmup epoch 1 took 38.86s (+9s vs baseline ~30s). Both directions (6, 12) pay a compile-kernel penalty. **slice_num=8 hits a torch.compile kernel selection optimum** — a real systems-level finding.
+- **OOD-specific regression signal:** in-dist marginally improved (val_single 36.41 vs 36.67), but all three OOD splits regressed (rc +5.3%, re_rand +6.5%, cruise +1.0%). Suggests finer slicing causes slice tokens to cluster around narrower training-time regions → inductive-bias overfitting to partition structure.
+- **Decision:** CLOSED. slice_num axis FULLY CLOSED at 8. Both directions lose by similar magnitude AND OOD signature is structural (not just undertraining).
+- **Strategic insight (student):** "Capacity gains likely live in: deeper stacks (n_layers > 5), wider hidden dims (n_hidden > 128), or different mlp_ratio probes — NOT slice routing." Confirmed: n_layers/mlp_ratio closed, n_hidden in flight at softer step.
+- **Reassignment:** tanjiro → asymmetric FFN (mlp_ratio=3 on last block only, per fern's #1 follow-up).
+
+---
+
+## 2026-05-17 06:00 — PR #4314 — lr sweep {3e-4, 7.5e-4} (SENT BACK — borderline test win, undertrained 7.5e-4)
+
+- **Branch:** `charliepai2i48h1-edward/lr-sweep-on-mlp-ratio-2`
+- **Hypothesis:** Sweep ±50% around lr=5e-4 baseline.
+- **Results:**
+
+| arm | val_avg | Δ vs 36.13 | test_avg | Δ vs 31.97 |
+|-----|---------|------------|---------|------------|
+| lr=3e-4 (A) | 38.51 | +2.38 (+6.6%) | 33.82 | +1.85 (+5.8%) |
+| **lr=5e-4 (baseline)** | **36.13** | — | **31.97** | — |
+| lr=7.5e-4 (B) | 36.54 | +0.41 (+1.1%) | **31.51** | **−0.46 (−1.4% BETTER)** |
+
+- **Metrics paths:** `models/model-lr-3e-4-on-mlp-ratio-2-20260517-032644/metrics.jsonl`, `models/model-lr-7p5e-4-on-mlp-ratio-2-20260517-042458/metrics.jsonl`
+- **Critical signal:** Arm B (lr=7.5e-4) best epoch is the FINAL epoch (38), val still descending: 38.06 → 37.79 → 37.24 → 37.09 → 36.54. Test improved by 1.4% (outside seed noise on test_avg). Val regression of 1.1% is within seed noise.
+- **Decision:** SEND BACK with lr=6e-4 probe (student's suggestion #2 — midpoint between confirmed 5e-4 and undertrained 7.5e-4). This is the budget-feasible sandwich-triangulation probe.
+- **Rationale for not closing:** Per standing decision rule "Close only if results are clearly worse (>5% regression)". +1.1% val regression with test improvement is "request changes" territory.
+
+---
+
+### R27 New Assignments
+
+| PR | Student | Hypothesis | Theme |
+|----|---------|------------|-------|
+| #4314 | edward | lr=6e-4 single-arm probe (sandwich-triangulation) | optim (send-back) |
+| #4397 | thorfinn | n_hidden=144 — softer +12.5% capacity step (budget-feasible) | architecture |
+| #4398 | frieren | gradient clipping max_grad_norm=1.0 — fresh untested stability axis | optim |
+| #4399 | tanjiro | Asymmetric FFN: mlp_ratio=3 on last block only — capture cruise gain, preserve depth | architecture |
