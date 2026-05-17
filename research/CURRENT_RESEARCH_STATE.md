@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-17 10:55 UTC (R33 — dropout axis CLOSED at p=0.1 (both arms within noise vs lr=6e-4 baseline); thorfinn assigned LR fine sweep {5.5e-4, 6.5e-4} PR #4542)
+- **Updated:** 2026-05-17 11:20 UTC (R34 — surf_weight axis CLOSED at sw=10 on lr=6e-4 stack (sw=7 regressed +2.79σ, rc gain REVERSED — lr absorbed the mechanism); fern assigned cosine annealing LR PR #4555)
 - **Track:** Charlie local-metrics arm (`charlie-pai2i-48h-r1`)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-48h-r1`
 - **Target base:** `icml-appendix-charlie`
@@ -59,7 +59,7 @@ Per-split val: single=34.25, rc=45.63, cruise=17.73, re_rand=35.80.
 | #4519 | nezuko | n_head sweep {2, 8} on lr=6e-4 — attention expressiveness | architecture | WIP — R32 fresh |
 | #4520 | tanjiro | n_layers sweep {4, 6} on lr=6e-4 — depth retest | architecture | WIP — R32 fresh |
 | #4522 | alphonse | weight_decay sweep {5e-5, 2e-4} on lr=6e-4 | optim/reg | WIP — R32 fresh |
-| #4444 | fern | surf_weight=7 confirmation on lr=6e-4 baseline (send-back) | loss | WIP — R32 send-back |
+| **#4555** | **fern** | **Cosine annealing LR with SF AdamW — extract convergence from budget** | **optim/schedule** | **WIP — R34 fresh** |
 | **#4542** | **thorfinn** | **LR fine sweep {5.5e-4, 6.5e-4} — close lr axis** | **optim** | **WIP — R33 fresh** |
 
 ## Fully closed axes (updated for lr=6e-4 + grad_clip baseline)
@@ -74,10 +74,10 @@ Per-split val: single=34.25, rc=45.63, cruise=17.73, re_rand=35.80.
 | **weight_decay** | OPEN — closed at 1e-4 on old stack; retesting {5e-5, 2e-4} with grad_clip + lr=6e-4 (alphonse #4522) |
 | **dropout (PhysicsAttention)** | **FULLY CLOSED at p=0.1** — d=0.05/0.0 both within noise vs lr=6e-4 baseline; dropout helps in-dist generalization independently of grad-clip (thorfinn #4493 closed) |
 | **surf_weight (upward)** | FULLY CLOSED at 10 |
-| **surf_weight (downward)** | BORDERLINE — sw=7 val=33.61 (1.7σ below true mean 34.18); needs confirmation on lr=6e-4 stack (fern #4444) |
+| **surf_weight (downward)** | **FULLY CLOSED at sw=10** — sw=7 regressed +2.79σ on lr=6e-4 stack; rc gain from sw=7 was absorbed by lr mechanism (fern #4444 closed) |
 | **drop_path (p=0.1)** | CLOSED — clear regression on old stack |
 | **EMA decay** | FULLY CLOSED at 0.997 (confirmed on both old and grad-clip stacks) |
-| **lr** | 6e-4 MERGED (PR #4443); fine sweep {5.5e-4, 6.5e-4} IN FLIGHT (thorfinn #4542). Cosine schedule unexplored. |
+| **lr** | 6e-4 MERGED (PR #4443); fine sweep {5.5e-4, 6.5e-4} IN FLIGHT (thorfinn #4542); cosine annealing schedule IN FLIGHT (fern #4555). |
 | **n_hidden** | CLOSED — 144/160 compute-bound on both old and new stacks (>56s/epoch) |
 | **grad_clip max_norm** | FULLY CLOSED at 1.0 (confirmed on grad-clip stack) |
 | **β (SmoothL1)** | FULLY CLOSED on grad-clip stack — β and clip compete; uniform β best at 0.25 with clip active |
@@ -86,6 +86,12 @@ Per-split val: single=34.25, rc=45.63, cruise=17.73, re_rand=35.80.
 | Gate-activation axis | CLOSED — GEGLU > ReGLU > SwiGLU |
 | FiLM family | FULLY CLOSED |
 | RMSNorm | FULLY CLOSED |
+
+## Key R34 insights
+
+1. **surf_weight and lr are substitute mechanisms, not complements**: sw=7 improved rc by −2.25 on old lr=5e-4 stack; lr=6e-4 ALONE improved rc by −2.62 without touching surf_weight. Stacking sw=7 + lr=6e-4 REVERSED the rc gain (+1.94 regression). Both knobs adjust encoder capacity allocation — when one is already optimal, the other over-corrects.
+2. **rc-split bottleneck (~45.6) is now resistant to optimizer/loss knobs**: lr tuning, surf_weight tuning, and dropout tuning have all failed to crack it further. Future rc attacks need architectural changes, data augmentation, or physics-informed losses.
+3. **val/test divergence persists**: sw=7 + lr=6e-4 shows val +0.95 regression while test −0.56 improvement. Consistent with structural partition asymmetry hypothesis.
 
 ## Key R33 insights
 
@@ -110,8 +116,9 @@ Per-split val: single=34.25, rc=45.63, cruise=17.73, re_rand=35.80.
 6. **weight_decay {5e-5, 2e-4}** — IN FLIGHT (alphonse #4522).
 7. **surf_weight=7 + lr=6e-4 stacked** — IN FLIGHT (fern #4444 send-back).
 8. **LR fine sweep {5.5e-4, 6.5e-4}** — IN FLIGHT (thorfinn #4542). Close lr axis.
-9. **Geometric inductive bias for rc-split**: explicit edge/distance features, equivariant coordinates — high-value architectural axis for the chronic rc bottleneck
-10. **Val/test single_in_dist divergence investigation**: why val regresses while test improves on same split. Dropout axis closure (R33) confirms this is not a regularization artifact — it's structural.
-11. **Cosine annealing LR with SF AdamW** — schedule experiments; unexplored; risky but potential for extracting more from the 37-epoch budget
-12. **Per-channel surf_weight {Ux, Uy, p separately}** — pressure-channel weighting may give finer control than uniform surf_weight
-13. **DropPath (stochastic depth)** — thorfinn R33 closure suggests dropout axis exhausted; stochastic depth is a different structural regularizer worth testing on grad-clip stack
+9. **Cosine annealing LR with SF AdamW** — IN FLIGHT (fern #4555). Address still-descending-at-e37 pattern.
+10. **Geometric inductive bias for rc-split**: explicit edge/distance features, equivariant coordinates — high-value architectural axis for the chronic rc bottleneck (~45.6, resistant to optimizer/loss knobs)
+11. **Val/test single_in_dist divergence investigation**: structural partition asymmetry confirmed across R33/R34 (dropout, surf_weight both show val regression / test improvement)
+12. **Per-channel surf_weight {Ux, Uy, p separately}** — finer-grained pressure-channel control; may avoid the substitution issue with lr
+13. **DropPath (stochastic depth) p=0.05** — different stochastic regularizer from dropout; never tested on grad-clip + lr=6e-4 stack
+14. **Physics-informed auxiliary loss (continuity: div(u)=0)** — orthogonal physics constraint for rc-split geometry shifts

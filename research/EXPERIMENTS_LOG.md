@@ -2377,3 +2377,50 @@ Dropout axis fully closed at p=0.1 on both grad-clip and lr=6e-4 stacks. The reg
 | PR | Student | Hypothesis | Theme |
 |----|---------|------------|-------|
 | #4542 | thorfinn | LR fine sweep {5.5e-4, 6.5e-4} on lr=6e-4 + grad-clip — close lr axis | optim |
+
+---
+
+## 2026-05-17 11:15 — PR #4444: surf_weight=7 confirmation on lr=6e-4 stack (CLOSED)
+
+- **Branch:** `charliepai2i48h1-fern/surf-weight-7-lr6e4-confirm`
+- **Hypothesis:** surf_weight=7 won narrowly on old lr=5e-4 stack (val 33.61 vs baseline 33.68). Need confirmation that it stacks with the new lr=6e-4 baseline.
+- **Metrics path:** `models/model-surf-weight-7-lr-6e-4-confirm-20260517-094233/metrics.jsonl`
+
+### Confirmation results (sw=7 + lr=6e-4 vs new baseline sw=10 + lr=6e-4)
+
+| Metric | Baseline (sw=10, lr=6e-4) | sw=7 + lr=6e-4 | Δ | σ-units |
+|--------|--------------------------|----------------|---|---------|
+| **val_avg/mae_surf_p** (primary) | **33.353** | **34.303** | **+0.950** | **+2.79σ** |
+| test_avg/mae_surf_p | 28.826 | 28.267 | **−0.560** | — |
+| val_single_in_dist | 34.25 | 34.451 | +0.20 | +0.6σ |
+| val_geom_camber_rc | 45.63 | 47.567 | +1.94 | +5.7σ |
+| val_geom_camber_cruise | 17.73 | 18.167 | +0.44 | +1.3σ |
+| val_re_rand | 35.80 | 37.029 | +1.23 | +3.6σ |
+
+### Analysis
+
+**Clear regression: val_avg +2.79σ above new baseline → close axis** per decision rule.
+
+**Critical mechanism finding — rc-split gain REVERSED:** 
+| Stack | sw=10 val_rc | sw=7 val_rc | Δ |
+|-------|-------------|-------------|---|
+| lr=5e-4 (old) | 48.254 | 46.006 | **−2.25** (sw=7 WINS) |
+| lr=6e-4 (new) | 45.630 | 47.567 | **+1.94** (sw=7 LOSES) |
+
+The lr=6e-4 step size + grad-clip stability already extracted the same encoder capacity improvement that sw=7 achieved on the old stack. The rc improvement (48.25→45.63, −2.62) happened with lr alone. Stacking sw=7 on top then OVER-corrects the loss balance, hurting surface prediction without any additional rc benefit.
+
+**Two levers for the same mechanism**: lowering surf_weight and raising lr both adjust the encoder's effective training signal — when both are applied together, the encoder over-invests in volume features and surface prediction regresses. **The mechanisms are substitutes, not complements.**
+
+**val/test divergence flagged**: test_avg=28.27 (−0.56 vs baseline) while val regresses +0.95. Consistent with the broader val/test single_in_dist divergence pattern.
+
+### Conclusion
+
+surf_weight axis fully closed at sw=10 on lr=6e-4 + grad-clip stack. The rc-split bottleneck (~45.6) is now resistant to surf_weight tuning given lr=6e-4 is active. Future rc-split attacks need orthogonal mechanisms: architectural encoder changes, data augmentation, or physics-informed losses.
+
+---
+
+## R34 New Assignment
+
+| PR | Student | Hypothesis | Theme |
+|----|---------|------------|-------|
+| #4555 | fern | Cosine annealing LR with SF AdamW — extract convergence from budget | optim/schedule |
