@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-17 11:20 UTC (R34 — surf_weight axis CLOSED at sw=10 on lr=6e-4 stack (sw=7 regressed +2.79σ, rc gain REVERSED — lr absorbed the mechanism); fern assigned cosine annealing LR PR #4555)
+- **Updated:** 2026-05-17 11:45 UTC (R35 — n_layers=4 MERGED val 33.353→32.859 (PR #4520, compute savings mechanism); tanjiro assigned n_layers=3 depth probe PR #4578)
 - **Track:** Charlie local-metrics arm (`charlie-pai2i-48h-r1`)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-48h-r1`
 - **Target base:** `icml-appendix-charlie`
@@ -10,63 +10,62 @@
 
 None on record for this launch. Default goal: drive `test_avg/mae_surf_p` down.
 
-## Current best baseline — PR #4443 lr=6e-4
+## Current best baseline — PR #4520 n_layers=4
 
-**val_avg/mae_surf_p = 33.353**, **test_avg/mae_surf_p = 28.826** (PR #4443,
-lr=6e-4, max_grad_norm=1.0, single-seed, best epoch 37).
+**val_avg/mae_surf_p = 32.859**, **test_avg/mae_surf_p = 28.283** (PR #4520,
+n_layers=4, lr=6e-4, max_grad_norm=1.0, single-seed, best epoch 45).
 
-Per-split val: single=34.25, rc=45.63, cruise=17.73, re_rand=35.80.
+Per-split val: single=33.389, rc=45.420, cruise=17.257, re_rand=35.371.
 
-**Total improvement from calibration baseline:** 143.52 → 33.35 = **-76.8%**
+**Total improvement from calibration baseline:** 143.52 → 32.859 = **-77.1%**
 
-**CRITICAL — Noise model RECALIBRATED (PR #4440 frieren, grad-clip stack):**
-- 3-seed mean on GRAD-CLIP stack: **34.18 ± 0.341** (NOT ±0.62 as prev stated)
-- PR #4398's val=33.68 was a −1.5σ favorable seed; true mean was 34.18
-- New 2σ clear-win threshold: **val ≤ 32.67** (0.68 pts below 33.35)
-- Conservative (until 3-seed of lr=6e-4 confirmed): val ≤ 33.0
-- Grad-clip halved seed variance (0.62→0.34) — stable gradients = reproducible training
+**CRITICAL — Noise model (PR #4440 frieren, grad-clip stack):**
+- σ=0.341 on grad-clip stack; 2σ clear-win threshold: **val ≤ 32.18**
+- Conservative threshold: val ≤ **32.52** (1σ below 32.859)
+- Within noise: val in [32.18, 33.54]; Clear regression: val ≥ 33.54
 
-## Round wins merged (R1–R32)
+## Round wins merged (R1–R35)
 
 | PR | Hypothesis | val_avg | Δ |
 |----|------------|--------:|---|
 | ... (R1–R22 wins) | ... | 36.13 | previous history |
 | **#4398** | **Gradient clipping max_norm=1.0** | **33.68** | **−6.8%** |
-| **#4443** | **lr 5e-4→6e-4** | **33.353** | **−1.0%** — **CURRENT BASELINE** |
+| **#4443** | **lr 5e-4→6e-4** | **33.353** | **−1.0%** |
+| **#4520** | **n_layers=4 (compute savings)** | **32.859** | **−1.5%** — **CURRENT BASELINE** |
 
-## Key architecture (current baseline — lr=6e-4 + grad_clip stack)
+## Key architecture (current baseline — n_layers=4 + lr=6e-4 + grad_clip stack)
 
 | Group | Value |
 |-------|-------|
-| Model | Transolver, n_hidden=128, n_layers=5, n_head=4, **slice_num=8**, **mlp_ratio=2** |
+| Model | Transolver, n_hidden=128, **n_layers=4** (PR #4520), n_head=4, **slice_num=8**, **mlp_ratio=2** |
 | FFN | GEGLU gating, **inner_dim=256** |
 | Compile | `torch.compile(model, dynamic=True, mode="default")` |
 | Conditioning | FiLM head [log_Re, AoA0, AoA1] |
 | Precision | bf16 autocast |
-| Optim | Schedule-Free AdamW **`lr=6e-4` (NEW)**, `wd=1e-4`, `warmup=200` |
+| Optim | Schedule-Free AdamW **`lr=6e-4`**, `wd=1e-4`, `warmup=200` |
 | **Grad Clip** | **`clip_grad_norm_(params, max_norm=1.0)` — PR #4398** |
 | Loss | SmoothL1 (beta=0.25), surf_weight=10.0 |
 | EMA | decay=0.997 |
-| Compute | ~48s/epoch, **37 epochs**, peak VRAM 22.6 GB, **983,871 params** |
+| Compute | **~40s/epoch, 45 epochs**, peak VRAM **18.6 GB**, **798,515 params** |
 
 ## Currently in flight (8 WIP — all students active)
 
 | PR | Student | Hypothesis | Theme | Status |
 |----|---------|------------|-------|--------|
-| #4515 | frieren | 3-seed noise calibration of lr=6e-4 baseline | calibration | WIP — R32 fresh |
-| #4516 | edward | warmup_steps sweep {100, 300} on lr=6e-4 | optim | WIP — R32 fresh |
-| #4517 | askeladd | batch_size sweep {4, 12} on lr=6e-4 + grad-clip | optim | WIP — R32 fresh |
-| #4519 | nezuko | n_head sweep {2, 8} on lr=6e-4 — attention expressiveness | architecture | WIP — R32 fresh |
-| #4520 | tanjiro | n_layers sweep {4, 6} on lr=6e-4 — depth retest | architecture | WIP — R32 fresh |
-| #4522 | alphonse | weight_decay sweep {5e-5, 2e-4} on lr=6e-4 | optim/reg | WIP — R32 fresh |
-| **#4555** | **fern** | **Cosine annealing LR with SF AdamW — extract convergence from budget** | **optim/schedule** | **WIP — R34 fresh** |
-| **#4542** | **thorfinn** | **LR fine sweep {5.5e-4, 6.5e-4} — close lr axis** | **optim** | **WIP — R33 fresh** |
+| #4515 | frieren | 3-seed noise calibration of lr=6e-4 baseline | calibration | WIP — R32 (NOTE: baseline changed to n_layers=4) |
+| #4516 | edward | warmup_steps sweep {100, 300} on lr=6e-4 | optim | WIP — R32 (NOTE: baseline changed) |
+| #4517 | askeladd | batch_size sweep {4, 12} on lr=6e-4 + grad-clip | optim | WIP — R32 (NOTE: baseline changed) |
+| #4519 | nezuko | n_head sweep {2, 8} on lr=6e-4 — attention expressiveness | architecture | WIP — R32 (NOTE: baseline changed) |
+| #4522 | alphonse | weight_decay sweep {5e-5, 2e-4} on lr=6e-4 | optim/reg | WIP — R32 (NOTE: baseline changed) |
+| **#4578** | **tanjiro** | **n_layers=3 depth probe** | **architecture** | **WIP — R35 fresh** |
+| **#4555** | **fern** | **Cosine annealing LR with SF AdamW** | **optim/schedule** | **WIP — R34 fresh** |
+| **#4542** | **thorfinn** | **LR fine sweep {5.5e-4, 6.5e-4} — close lr axis** | **optim** | **WIP — R33 (NOTE: baseline changed)** |
 
 ## Fully closed axes (updated for lr=6e-4 + grad_clip baseline)
 
 | Axis | Verdict |
 |------|---------|
-| **n_layers** | OPEN — closed at 5 on old stack; retesting {4, 6} on new stack (tanjiro #4520) |
+| **n_layers** | **OPEN (partial)** — n_layers=4 MERGED (+1.5σ win, PR #4520, compute savings); n_layers=3 probe IN FLIGHT (tanjiro #4578). n_layers=6 clearly regressed. n_layers≤4 may continue trend. |
 | **mlp_ratio (uniform)** | FULLY CLOSED at 2 (both old and new stack; asym placement closed too) |
 | **n_head** | OPEN — closed at 4 on old stack; retesting {2, 8} on new stack (nezuko #4519) |
 | **SF warmup_steps** | OPEN — closed at 200 on old stack; retesting {100, 300} with lr=6e-4 (edward #4516) |
@@ -86,6 +85,13 @@ Per-split val: single=34.25, rc=45.63, cruise=17.73, re_rand=35.80.
 | Gate-activation axis | CLOSED — GEGLU > ReGLU > SwiGLU |
 | FiLM family | FULLY CLOSED |
 | RMSNorm | FULLY CLOSED |
+
+## Key R35 insights
+
+1. **Compute-savings is the dominant mechanism for depth reduction**: n_layers=4 wins not because 4 attention blocks is the right inductive bias, but because fewer layers = more epochs within 30-min budget (40s vs 48s/epoch → 45 vs 37 epochs). n_layers=6 loses for the opposite reason (57s/epoch → 32 epochs, compute-starved).
+2. **All 4 val splits improved under n_layers=4**: in-dist −0.86, rc −0.21, cruise −0.47, re_rand −0.43. Unlike most previous wins which traded in-dist for OOD, this improvement is uniform — budget gain helped everywhere.
+3. **7 in-flight PRs are now testing on the obsolete n_layers=5 baseline**: #4515, #4516, #4517, #4519, #4522, #4542, #4555. When they complete, compare results against new baseline (32.859). If results are near-baseline (32.859±noise), they may need rerun on n_layers=4.
+4. **n_hidden=144 retest opportunity**: with n_layers=4 at 40s/epoch, n_hidden=144 might bring time back to ~48s/epoch — same budget as old baseline but with both n_layers=4 and n_hidden=144. Width-for-depth trade is unexplored at n_layers=4.
 
 ## Key R34 insights
 
@@ -108,15 +114,15 @@ Per-split val: single=34.25, rc=45.63, cruise=17.73, re_rand=35.80.
 
 ## Potential next research directions
 
-1. **3-seed of lr=6e-4** — IN FLIGHT (frieren #4515). Critical calibration.
-2. **warmup_steps {100, 300} with lr=6e-4** — IN FLIGHT (edward #4516).
-3. **batch_size {4, 12}** — IN FLIGHT (askeladd #4517).
-4. **n_head {2, 8} retest** — IN FLIGHT (nezuko #4519). Attention mechanism axis.
-5. **n_layers {4, 6} retest** — IN FLIGHT (tanjiro #4520). Depth axis.
-6. **weight_decay {5e-5, 2e-4}** — IN FLIGHT (alphonse #4522).
-7. **surf_weight=7 + lr=6e-4 stacked** — IN FLIGHT (fern #4444 send-back).
-8. **LR fine sweep {5.5e-4, 6.5e-4}** — IN FLIGHT (thorfinn #4542). Close lr axis.
-9. **Cosine annealing LR with SF AdamW** — IN FLIGHT (fern #4555). Address still-descending-at-e37 pattern.
+1. **3-seed of lr=6e-4 + n_layers=5** — IN FLIGHT (frieren #4515). Note: baseline changed to n_layers=4; results will inform σ at old config but not new.
+2. **warmup_steps {100, 300}** — IN FLIGHT (edward #4516). Note: tested on n_layers=5 stack; compare vs new baseline 32.859.
+3. **batch_size {4, 12}** — IN FLIGHT (askeladd #4517). Note: tested on n_layers=5 stack.
+4. **n_head {2, 8} retest on n_layers=4** — IN FLIGHT (nezuko #4519). Note: tested on n_layers=5; with n_layers=4 as new baseline, n_head retest on n_layers=4 may be more valuable.
+5. **n_layers=3 depth probe** — IN FLIGHT (tanjiro #4578). Does compute-savings continue below 4?
+6. **weight_decay {5e-5, 2e-4}** — IN FLIGHT (alphonse #4522). Note: tested on n_layers=5.
+7. **LR fine sweep {5.5e-4, 6.5e-4}** — IN FLIGHT (thorfinn #4542). Note: tested on n_layers=5.
+8. **Cosine annealing LR** — IN FLIGHT (fern #4555). Note: tested on n_layers=5.
+9. **n_hidden=144 retest on n_layers=4** — With n_layers=4 at 40s/epoch, n_hidden=144 brings ~48s/epoch (old baseline rate) but with more params; previously compute-bound on n_layers=5.
 10. **Geometric inductive bias for rc-split**: explicit edge/distance features, equivariant coordinates — high-value architectural axis for the chronic rc bottleneck (~45.6, resistant to optimizer/loss knobs)
 11. **Val/test single_in_dist divergence investigation**: structural partition asymmetry confirmed across R33/R34 (dropout, surf_weight both show val regression / test improvement)
 12. **Per-channel surf_weight {Ux, Uy, p separately}** — finer-grained pressure-channel control; may avoid the substitution issue with lr
