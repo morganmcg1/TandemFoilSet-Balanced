@@ -288,6 +288,9 @@ class Transolver(nn.Module):
                  slice_num=32, ref=8, unified_pos=False, cond_dim=0,
                  ffn_act="gelu", norm_type="layernorm",
                  fourier_pe_freqs: int = 0,
+                 spectral_norm_slice: bool = False,
+                 spectral_norm_out: bool = False,
+                 sn_power_iterations: int = 2,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -325,6 +328,19 @@ class Transolver(nn.Module):
                 nn.init.zeros_(block.film.net[-1].weight)
                 nn.init.zeros_(block.film.net[-1].bias)
                 block.film.net[-1].bias.data[:n_hidden] = 1.0
+        # Spectral norm wrap (H133): constrain Lipschitz of slice-assignment
+        # (and optionally output projection) singular values. Applied AFTER
+        # apply(_init_weights) so the trunc_normal init is the weight_orig.
+        if spectral_norm_slice:
+            for block in self.blocks:
+                block.attn.in_project_slice = nn.utils.spectral_norm(
+                    block.attn.in_project_slice, n_power_iterations=sn_power_iterations
+                )
+        if spectral_norm_out:
+            for block in self.blocks:
+                block.attn.to_out[0] = nn.utils.spectral_norm(
+                    block.attn.to_out[0], n_power_iterations=sn_power_iterations
+                )
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -601,6 +617,9 @@ class Config:
     T_max: int = 15  # CosineAnnealingLR period; default preserves prior behavior
     fourier_pe: bool = False   # Tancik Fourier PE on (x, z) coords (H106)
     fourier_pe_freqs: int = 8  # Number of log-spaced frequencies; adds 4*K features
+    spectral_norm_slice: bool = False  # H133: spectral norm on PhysicsAttention.in_project_slice
+    spectral_norm_out: bool = False    # H133 Arm B: spectral norm on PhysicsAttention.to_out[0]
+    sn_power_iterations: int = 2       # H133: power iterations per forward (legacy nn.utils.spectral_norm)
 
 
 cfg = sp.parse(Config)
@@ -650,6 +669,9 @@ model_config = dict(
     ffn_act=cfg.ffn_act,
     norm_type=cfg.norm_type,
     fourier_pe_freqs=fourier_pe_freqs,
+    spectral_norm_slice=cfg.spectral_norm_slice,
+    spectral_norm_out=cfg.spectral_norm_out,
+    sn_power_iterations=cfg.sn_power_iterations,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -657,6 +679,17 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+if cfg.spectral_norm_slice:
+    for block in model.blocks:
+        sn_weight = block.attn.in_project_slice.weight_orig
+        assert sn_weight is not None, "spectral_norm not applied to in_project_slice"
+    print(f"Spectral norm on in_project_slice: confirmed (n_power_iterations={cfg.sn_power_iterations})")
+if cfg.spectral_norm_out:
+    for block in model.blocks:
+        sn_weight = block.attn.to_out[0].weight_orig
+        assert sn_weight is not None, "spectral_norm not applied to to_out[0]"
+    print(f"Spectral norm on to_out: confirmed (n_power_iterations={cfg.sn_power_iterations})")
 
 if cfg.optimizer == "lion":
     optimizer = Lion(model.parameters(), lr=cfg.lr, betas=(cfg.beta1, cfg.beta2),
@@ -793,6 +826,9 @@ for epoch in range(MAX_EPOCHS):
         "T_max": cfg.T_max,
         "fourier_pe": cfg.fourier_pe,
         "fourier_pe_freqs": fourier_pe_freqs,
+        "spectral_norm_slice": cfg.spectral_norm_slice,
+        "spectral_norm_out": cfg.spectral_norm_out,
+        "sn_power_iterations": cfg.sn_power_iterations,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "gate_stats": gate_stats,
