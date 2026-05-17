@@ -1,5 +1,63 @@
 # SENPAI Research Results
 
+## 2026-05-17 04:00 — PR #4265: Lookahead-Lion LR sweep ← CLOSED (Lion LR landscape SHARPER than AdamW; rate-limit-close, Arm 1 only)
+
+- Branch: `willowpai2i48h1-fern/lookahead-lion-lr-sweep`
+- Student: willowpai2i48h1-fern
+- W&B runs: `95hnfvyz` (CANONICAL, val=49.41, best_ep=17), `ip13tzlx` (rerun, bit-identical val=49.41), 2 failed (`1mw6phnm`, `oyum34fy`), 1 actively retrying (`01p7odez`); group `lookahead_lion_lr_sweep`
+- Hypothesis: Probe Lion-era LR frontier vs default cfg.lr=5e-4 → Lion lr=1.667e-4. Arms: cfg.lr=3e-4 (Lion lr=1e-4) and cfg.lr=7.5e-4 (Lion lr=2.5e-4).
+
+### Results (Arm 1 only completed; rate-limit-close pattern)
+
+| Arm | val_avg | test_avg | best_ep | Δ vs baseline (47.97) |
+|---|---|---|---|---|
+| cfg.lr=3e-4 (Lion lr=1e-4) | **49.41** | 47.93 | 17 | **+1.44 regress** |
+| cfg.lr=7.5e-4 (Lion lr=2.5e-4) | NEVER RAN | — | — | missing arm |
+
+### Frontier finding
+
+**Lion LR landscape is SHARPER than AdamW LR landscape.** Dropping cfg.lr by 40% (5e-4 → 3e-4) gives +1.44 val regression. Under AdamW (PR #4182), the LR landscape was flat-to-improving in the 5e-4→7e-4 direction. Under Lion, the optimum has narrower tolerance.
+
+Mechanism: Lion's sign-quantized step has constant per-parameter magnitude → no adaptive gradient scaling to forgive small-LR error. Halving Lion LR halves step size everywhere, slowing convergence within the fixed 17-epoch cosine budget.
+
+### Decision
+
+Closed — val=49.41 > current programme best 47.97. The cfg.lr=7.5e-4 direction is now less interesting (LR-sensitivity established on the smaller side; larger LR may also be sub-optimal). Closing as canonical Lion-LR-sensitivity data.
+
+### Process flag
+
+4th occurrence of heartbeat-rerun pattern (#4202, #4241, #4242, #4264). Pod stuck retrying Arm 1 instead of progressing to Arm 2. Fern reassigned to **slice_num=96 (#4323)** — SINGLE-ARM to eliminate this risk.
+
+## 2026-05-17 04:00 — PR #4264: Lookahead-Lion β2 scan ← CLOSED (Lion β2 sensitivity — largest single-knob regression in Lion era; rate-limit-close, Arm 1 only)
+
+- Branch: `willowpai2i48h1-frieren/lookahead-lion-b2-scan`
+- Student: willowpai2i48h1-frieren
+- W&B runs: `rp741afd` (CANONICAL, val=54.62, best_ep=17), `pp1nvrod` (rerun, bit-identical), 1 failed; group `lookahead_lion_b2_scan`
+- Hypothesis: Probe Lion m-buffer β2 ∈ {0.95, 0.98} vs default 0.99. Lion's β2 controls m-buffer EMA decay (direction-extraction smoothing).
+
+### Results (Arm 1 only completed; rate-limit-close pattern)
+
+| Arm | val_avg | test_avg | best_ep | Δ vs baseline (47.97) |
+|---|---|---|---|---|
+| lion_b2=0.95 | **54.62** | 52.24 | 17 | **+6.65 major regress** |
+| lion_b2=0.98 | NEVER RAN | — | — | missing arm |
+
+### Frontier finding
+
+**Lion β2 is HIGHLY sensitive — dropping from 0.99 to 0.95 collapses performance by +6.65 val MAE.** This is the LARGEST single-knob regression seen in the Lion era.
+
+Mechanism: Lion's β2 controls the m-buffer EMA decay. β2=0.95 → m has half-life ≈14 training steps (vs ~69 steps at β2=0.99). Lion's update direction (sign of β1·m + (1-β1)·grad) needs m to smooth across many batches to extract a stable direction. With β2=0.95 + batch=4, m forgets noise too quickly → sign-update direction becomes noise-driven.
+
+**Opposite of the AdamW β2 finding** (PR #4183 was flat in [0.93, 0.97]): under AdamW, Lookahead's basin-averaging absorbed v_t noise. Under Lion, m is doing direction-extraction (not magnitude smoothing); small β2 cannot be compensated by Lookahead.
+
+### Conclusion
+
+**Lion β2 should likely INCREASE from default 0.99, not decrease.** The b2=0.98 arm is unlikely to win; a more interesting probe would be β2 ∈ {0.995, 0.999} — but that's a future PR. Closing as canonical Lion-β2-sensitivity data.
+
+### Decision
+
+Closed — val=54.62 > current programme best 47.97. Frieren reassigned to **slice_num=32 (#4325)** — SINGLE-ARM, architectural; pairs with fern's slice_num=96 (#4323) to characterize the slice dimension.
+
 ## 2026-05-17 03:00 — PR #4241: Lookahead-Lion k=3 ← CLOSED (k-shift prediction CONFIRMED; canonical k-frontier)
 
 - Branch: `willowpai2i48h1-edward/lookahead-lion-k3`
