@@ -1,7 +1,7 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 11:00
-- **Launch:** willow-pai2i-48h-r1 (round 25 — Lookahead-Lion era; **NEW PROGRAMME ALL-TIME BEST val=45.7284 / test=44.5079** (PR #4402 merged, k=6+β2=0.995+α=0.7 SUPER-ADDITIVE compound, Δ−1.11 val); **k=5+β2=0.995 3-seed canonical COMPLETE (47.10±0.46 / 45.82±0.74)**; **ALL 5 architectural up-arms CLOSED**; **β2=0.995 right-edge closed at k=5**; **k-bowl + β2-bowl + α-bowl probes in flight at new compound**)
+- **Date:** 2026-05-17 12:00
+- **Launch:** willow-pai2i-48h-r1 (round 26 — Lookahead-Lion era; **PROGRAMME ALL-TIME BEST val=45.7284 / test=44.5079** (PR #4402, k=6+β2=0.995+α=0.7); **3-seed canonical at new best COMPLETE: 46.95±1.20 val / 45.61±0.97 test** — variance is 2.6× wider than at OLD best; **k-bowl right-flank CLOSED at k=7 (#4426 val=46.42)**; **LR / WD / seed=3 micro-probes in flight at new compound**)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN)
 - **Latest direction from human team:** None (no open issues scoped to this launch)
@@ -18,13 +18,23 @@ Beat the Transolver baseline on `val_avg/mae_surf_p` (lower is better). Paper-fa
 
 Win threshold: **val < 45.7284**. Prior best: val=46.8383 (PR #4373, k=5).
 
-### 3-seed canonical of NEW programme best (just dispatched round-25)
+### 3-seed canonical of NEW programme best (COMPLETE — round-26; PAPER-READY)
 
 | Seed | val_avg | test_avg | Source |
 |---|---|---|---|
 | 0 | **45.7284** | **44.5079** | PR #4402 MERGED (`ejacndhj`) |
-| 1 | TBD | TBD | tanjiro #4428 in flight (round 25) |
-| 2 | TBD | TBD | thorfinn #4429 in flight (round 25) |
+| 1 | 48.14 | 46.40 | PR #4428 closed (tanjiro) |
+| 2 | 46.99 | 45.95 | PR #4429 closed (thorfinn) |
+| **mean ± σ̂** | **46.95 ± 1.20** | **45.61 ± 0.97** | — |
+| 3 | TBD | TBD | **thorfinn #4457 in flight (round 26)** — tightens σ̂ to n=4 |
+
+### ⚠️ CRITICAL VARIANCE FINDING (round-26)
+
+**3-seed σ̂ at NEW best (k=6+β2=0.995) is 1.20 val — 2.6× wider than the σ̂=0.46 at OLD best (k=5+β2=0.995).**
+
+Mean improvement at k=5 → k=6 = 0.15 val on the 3-seed mean. Pooled σ̂_diff ≈ 0.74. **The k=5 → k=6 mean improvement is NOT statistically significant at p<0.05** (z ≈ 0.20). The single-seed win (45.73) is at ~−1σ of the k=6 distribution — partly seed luck. Headline stands per single-seed merge rule, but follow-ups should weight σ̂ when prioritizing.
+
+Mechanism speculation: at k=6, the inner trajectory takes one extra step before each Lookahead pull. That extra step amplifies the seed-dependent trajectory direction, increasing the variance of where the slow weights land. Longer m-buffer (β2=0.995) does NOT fully compensate at k=6 the way it does at k=5.
 
 ### 3-seed canonical of PREVIOUS best k=5+β2=0.995 (COMPLETE — round-25)
 
@@ -96,32 +106,34 @@ At β2=0.995, α=0.7:
 |---|---|---|---|
 | 5 | 0.140 | 46.84 | merged #4373 → superseded |
 | **6** | **0.117** | **45.73** | **merged #4402 — CURRENT BEST** |
-| **7** | **0.10** | **TBD** | **askeladd #4426 in flight (round 25)** |
+| 7 | 0.10 | 46.42 | closed #4426 (round-26) — k-bowl right-flank FIRM at k=6 |
 
-## Active WIP experiments (round 25)
+**k-bowl bounded:** k=6 is the unique optimum at α=0.7 + β2=0.995. The super-additivity is LOCAL to k=6, not a broad "longer sync interval works under longer m-buffer" claim.
+
+## Active WIP experiments (round 26)
 
 | PR | Student | Hypothesis | Status | Priority |
 |----|---------|-----------|--------|----------|
-| #4426 | askeladd | **k=7 + β2=0.995 + α=0.7 (k-bowl right-flank at new β2)** | NEW (round 25) | **#1 Winner candidate** |
-| #4430 | alphonse | α=0.75 + k=6 + β2=0.995 (α-bowl right at new best) | NEW (round 25) | α-frontier probe |
-| #4431 | frieren | β2=0.994 + k=6 + α=0.7 (β2-bowl left-edge at new k) | NEW (round 25) | β2-bowl mapping |
-| #4427 | fern | β2=0.997 + k=6 + α=0.7 (β2-bowl right-edge at new k) | NEW (round 25) | β2-bowl mapping |
-| #4428 | tanjiro | 3-seed canonical seed=1: k=6 + β2=0.995 + α=0.7 | NEW (round 25) | Paper-facing canonical |
-| #4429 | thorfinn | 3-seed canonical seed=2: k=6 + β2=0.995 + α=0.7 | NEW (round 25) | Paper-facing canonical |
-| #4432 | edward | cfg.lr=7e-4 + k=6 + β2=0.995 (LR re-tune at double-smooth compound) | NEW (round 25) | LR probe |
+| #4455 | askeladd | **cfg.lr=4e-4 + k=6 + β2=0.995 + α=0.7 (LR LEFT micro-probe at new compound)** | NEW (round 26) | LR-bowl LEFT bracket |
+| #4456 | tanjiro | **--lion_wd 5e-5 + k=6 + β2=0.995 (WD LEFT micro-probe at new compound)** | NEW (round 26) | WD-bowl LEFT bracket |
+| #4457 | thorfinn | **3-seed canonical seed=3: k=6 + β2=0.995 + α=0.7 (tightens σ̂)** | NEW (round 26) | Paper-facing canonical (n=4) |
+| #4430 | alphonse | α=0.75 + k=6 + β2=0.995 (α-bowl right at new best) | Running (round 25) | α-frontier probe |
+| #4431 | frieren | β2=0.994 + k=6 + α=0.7 (β2-bowl left-edge at new k) | Running (round 25) | β2-bowl mapping |
+| #4427 | fern | β2=0.997 + k=6 + α=0.7 (β2-bowl right-edge at new k) | Running (round 25) | β2-bowl mapping |
+| #4432 | edward | cfg.lr=7e-4 + k=6 + β2=0.995 (LR RIGHT bracket at new compound) | Running (round 25) | LR probe |
 | #4415 | nezuko | α=0.65 + k=5 + β2=0.995 (α-bowl left-side micro-probe) | Running (round 24) | α-frontier probe |
 
 **All 8 students active. Zero idle. Single-arm policy in force.**
 
-### Round-25 strategic theme: dense sampling around super-additive compound
+### Round-26 strategic theme: variance-aware micro-probing + LR/WD bracketing
 
-PR #4402's super-additive compound is the major discovery. The round-25 assignments sample the (k, β2, α, lr) neighborhood of the new best densely:
-- **k-extension** (askeladd #4426): does k-bowl continue shifting under β2=0.995?
-- **β2 micro-bowl at k=6** (fern #4427, frieren #4431): bracket the β2 bowl under new k
-- **α micro-probe** (alphonse #4430): α-bowl under new compound
-- **Paper canonical** (tanjiro #4428, thorfinn #4429): 3-seed variance of new best
-- **LR re-tune** (edward #4432): compensate for double-smoothing with higher lr
-- **α=0.65 legacy** (nezuko #4415, in flight): α-bowl left at old k=5
+Given the σ̂=1.20 variance flag at k=6+β2=0.995, round-26 prioritizes (1) tightening the paper canonical with one more seed (#4457), and (2) bracketing the LR and WD bowls at the new compound to find improvements that visibly exceed seed noise. LR is bracketed both LEFT (askeladd #4455 at 4e-4) and RIGHT (edward #4432 at 7e-4 from round-25) so we map both flanks at the new compound in parallel.
+
+## Round-26 closures (3 closures)
+
+- **#4429 thorfinn (seed=2 k=6+β2=0.995)** CLOSED: val=46.99 / test=45.95. Near distribution center; completes 3-seed canonical.
+- **#4428 tanjiro (seed=1 k=6+β2=0.995)** CLOSED: val=48.14 (+2.41 vs seed=0). VARIANCE FINDING: σ̂_val=1.20 at k=6 vs 0.46 at k=5 (2.6× wider). Mean improvement (k=5→k=6) NOT statistically significant.
+- **#4426 askeladd (k=7+β2=0.995+α=0.7)** CLOSED: val=46.42 (+0.69 vs k=6). k-bowl right-flank FIRM at k=6 under α=0.7+β2=0.995. Super-additivity is LOCAL to k=6.
 
 ## Round-25 closures (7 closures; 1 merge)
 
@@ -203,14 +215,14 @@ PR #4402's super-additive compound is the major discovery. The round-25 assignme
 - **3-seed canonical** (tanjiro #4428, thorfinn #4429) — paper-facing variance for new best
 - **α=0.65 + k=5 + β2=0.995** (nezuko #4415) — α left-side at old k; still informative for paper
 
-### Priority 2 (next idle-round; gated on round-25 outcomes)
+### Priority 2 (next idle-round; gated on round-26 outcomes)
 
-- **k=8 + β2=0.995 + α=0.7** — if k=7 wins, probe further right; if k=7 closes, k-bowl right-edge mapped
-- **k=7 + β2=0.994 or β2=0.997** — (k, β2) interaction grid if k=7 lands close to winner
-- **α=0.65 + k=6 + β2=0.995** — α left-side at full new compound (complement to nezuko's k=5 probe)
-- **cfg.lr=4e-4 + k=6 + β2=0.995** — left side of LR bowl at new compound (if 7e-4 wins, go right; if not, go left)
-- **β2=0.994 + α=0.75 + k=6** — 3-way micro-probe if both α=0.75 and β2=0.994 show positive directions
-- **k=6 + β2=0.995 + α=0.7 + --lion_wd 5e-5** — weight-decay micro-probe (current 1e-4 may need tuning at new compound)
+- **--lion_wd 2e-4 + k=6 + β2=0.995** — WD RIGHT bracket (if WD-LEFT #4456 regresses, probe RIGHT)
+- **cfg.lr=6e-4 + k=6 + β2=0.995** — LR MID bracket (if both LR-LEFT 4e-4 and LR-RIGHT 7e-4 regress, search inside)
+- **α=0.65 + k=6 + β2=0.995** — α LEFT at new compound (complement to nezuko's #4415 at k=5)
+- **k=7 + β2=0.997 + α=0.7** — (k, β2) joint shift up the right diagonal (if k-bowl shifts with β2)
+- **Warmup epochs=1 at new compound** — if seed σ̂=1.20 traces to early-trajectory instability, warmup may damp it
+- **lr-schedule: cosine + 0.1 floor** — keep slow weights moving in last few epochs; gentle (no T_max change)
 
 ### Priority 3 (Plateau-protocol escalation if round-25 saturates)
 

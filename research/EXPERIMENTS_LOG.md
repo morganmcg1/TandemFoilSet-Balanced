@@ -1,5 +1,79 @@
 # SENPAI Research Results
 
+## 2026-05-17 12:00 — PR #4429: 3-seed canonical seed=2 (k=6 + β2=0.995 + α=0.7) ← CLOSED
+
+- Branch: `willowpai2i48h1-thorfinn/k6-b2-995-a07-seed2`
+- Student: willowpai2i48h1-thorfinn
+- Hypothesis: seed=2 canonical of new programme best (PR #4402) for paper-facing 3-seed mean.
+
+### Results
+
+| Seed | val_avg | test_avg |
+|---|---|---|
+| 0 (MERGED #4402) | 45.7284 | 44.5079 |
+| 1 (PR #4428) | 48.14 | 46.40 |
+| **2 (THIS PR)** | **46.99** | **45.95** |
+| **mean ± σ̂** | **46.95 ± 1.20** | **45.61 ± 0.97** |
+
+### Decision
+
+**CLOSED — canonical complete, paper-ready.** Seed=2 is near the center of the distribution. The 3-seed mean (46.95 / 45.61) is paper-facing. Thorfinn reassigned to **seed=3 canonical (#4457)** — adds to canonical to tighten σ̂_mean from 0.69 to 0.60 at n=4.
+
+## 2026-05-17 12:00 — PR #4428: 3-seed canonical seed=1 (k=6 + β2=0.995 + α=0.7) ← CLOSED (VARIANCE FINDING)
+
+- Branch: `willowpai2i48h1-tanjiro/k6-b2-995-a07-seed1`
+- Student: willowpai2i48h1-tanjiro
+- Hypothesis: seed=1 canonical of new programme best (PR #4402) for paper-facing 3-seed mean.
+
+### Results
+
+val_avg=48.14 (+2.41 vs seed=0), test_avg=46.40 (+1.89 vs seed=0).
+
+### CRITICAL VARIANCE FINDING
+
+**3-seed σ̂ at k=6 + β2=0.995 is 1.20 (val) — 2.6× wider than the σ̂=0.46 at k=5 + β2=0.995.**
+
+| Compound | val σ̂ | test σ̂ | n |
+|---|---|---|---|
+| k=5 + β2=0.995 (OLD best) | 0.46 | 0.74 | 3 |
+| **k=6 + β2=0.995 (NEW best)** | **1.20** | **0.97** | **3** |
+
+Mean improvement Δ = 47.10 − 46.95 = 0.15 val on the 3-seed mean. With pooled σ̂_diff ≈ √(0.46²+1.20²)/√3 ≈ 0.74, **the k=5→k=6 mean improvement is NOT statistically significant at p<0.05** (z ≈ 0.20).
+
+The seed=0 win (45.73, the merged baseline) is at ~−1σ from the mean of the k=6 distribution — partly seed luck, not pure mechanistic gain. Headline single-seed win stands per the single-seed merge rule, but follow-up assignments should weight σ̂ when prioritizing follow-ups (LR/WD micro-probes have less room to escape this noise).
+
+### Decision
+
+**CLOSED — variance flag raised.** Tanjiro reassigned to **--lion_wd 5e-5 + k=6 + β2=0.995 (#4456)** — WD LEFT micro-probe at new compound.
+
+## 2026-05-17 12:00 — PR #4426: k=7 + β2=0.995 + α=0.7 (k-bowl right-flank) ← CLOSED
+
+- Branch: `willowpai2i48h1-askeladd/k7-b2-995-a07`
+- Student: willowpai2i48h1-askeladd
+- Hypothesis: At β2=0.995, the k-bowl shifted from k=5 to k=6 (super-additive). Does it continue shifting to k=7?
+
+### Results
+
+val_avg=46.42 (+0.69 vs k=6 PR #4402's 45.73).
+
+### Mechanism finding
+
+**k-bowl right-flank is FIRM at k=6 under α=0.7 + β2=0.995.** The longer m-buffer (β2=0.995, half-life ≈138 steps) extends but does not unbound the k-optimum. At k=7, the inner trajectory overshoots its useful smoothing window — the slow-weight pull arrives after the trajectory has drifted away from the coherent direction.
+
+This bounds the super-additivity: it is LOCAL to k=6, not a broad "all longer sync intervals work better under longer m-buffer" claim.
+
+### k-frontier at β2=0.995, α=0.7 (UPDATED)
+
+| k | val | Status |
+|---|---|---|
+| 5 | 46.84 | merged #4373 → superseded |
+| **6** | **45.73** | **merged #4402 — CURRENT BEST** |
+| 7 | 46.42 | closed #4426 |
+
+### Decision
+
+**CLOSED.** Askeladd reassigned to **cfg.lr=4e-4 + k=6 + β2=0.995 + α=0.7 (#4455)** — LR LEFT micro-probe at new compound (complements edward #4432's LR=7e-4 RIGHT bracket).
+
 ## 2026-05-17 11:00 — PR #4402: k=6 + β2=0.995 + α=0.7 compound ← MERGED (NEW PROGRAMME ALL-TIME BEST)
 
 - Branch: `willowpai2i48h1-askeladd/k6-b2-995-a07-compound`
