@@ -524,6 +524,7 @@ class Config:
     use_swiglu: bool = False  # swap GELU MLP for SwiGLU gated MLP inside TransolverBlocks
     mlp_ratio: float = 2.0  # hidden expansion ratio for the MLP/SwiGLU block; float allows param-match (e.g. 1.333)
     n_head: int = 4  # number of attention heads; n_hidden must be divisible by n_head
+    n_hidden: int = 128  # Transolver model hidden dimension; must be divisible by n_head
     sgdr_t0: int = 0  # CosineAnnealingWarmRestarts cycle length; 0 disables (use plain cosine)
     slice_num: int = 64  # physics-attention slice count (node partitioning granularity)
     adamw_beta2: float = 0.999  # AdamW second-moment EMA decay; default 0.999
@@ -558,11 +559,14 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+if cfg.n_hidden % cfg.n_head != 0:
+    raise ValueError(f"n_hidden ({cfg.n_hidden}) must be divisible by n_head ({cfg.n_head})")
+
 model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=cfg.n_hidden,
     n_layers=5,
     n_head=cfg.n_head,
     slice_num=cfg.slice_num,
@@ -575,7 +579,7 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)  "
-      f"[use_swiglu={cfg.use_swiglu}, mlp_ratio={cfg.mlp_ratio}, n_head={cfg.n_head}, slice_num={cfg.slice_num}]")
+      f"[n_hidden={cfg.n_hidden}, use_swiglu={cfg.use_swiglu}, mlp_ratio={cfg.mlp_ratio}, n_head={cfg.n_head}, slice_num={cfg.slice_num}]")
 
 ema_model = copy.deepcopy(model)
 for p in ema_model.parameters():
@@ -731,6 +735,7 @@ for epoch in range(MAX_EPOCHS):
         model_norm = model_norm_sq ** 0.5
         ema_lag_rel = ema_lag / max(model_norm, 1e-12)
 
+    peak_gb_epoch = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
@@ -741,6 +746,7 @@ for epoch in range(MAX_EPOCHS):
         "lr": scheduler.get_last_lr()[0],
         "train/lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
+        "peak_gpu_gb": peak_gb_epoch,
         "global_step": global_step,
     }
     if cfg.use_lookahead:
@@ -765,7 +771,7 @@ for epoch in range(MAX_EPOCHS):
         torch.save(ema_model.state_dict(), model_path)
         tag = " *"
 
-    peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    peak_gb = peak_gb_epoch
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
