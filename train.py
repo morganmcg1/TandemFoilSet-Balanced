@@ -99,6 +99,34 @@ class SwiGLU(nn.Module):
         return self.fc3(F.silu(self.fc1(x)) * self.fc2(x))
 
 
+class GeGLU(nn.Module):
+    """GeGLU MLP (Shazeer 2020): y = W3 (GELU(W1 x) * (W2 x))."""
+
+    def __init__(self, in_features, hidden_features, out_features=None):
+        super().__init__()
+        out_features = out_features or in_features
+        self.fc1 = nn.Linear(in_features, hidden_features, bias=False)  # gate branch (GELU)
+        self.fc2 = nn.Linear(in_features, hidden_features, bias=False)  # value branch
+        self.fc3 = nn.Linear(hidden_features, out_features, bias=False)  # output projection
+
+    def forward(self, x):
+        return self.fc3(F.gelu(self.fc1(x)) * self.fc2(x))
+
+
+class BilinearGLU(nn.Module):
+    """Bilinear gated linear unit: y = W3 ((W1 x) * (W2 x)). No activation in gate."""
+
+    def __init__(self, in_features, hidden_features, out_features=None):
+        super().__init__()
+        out_features = out_features or in_features
+        self.fc1 = nn.Linear(in_features, hidden_features, bias=False)  # gate branch (linear)
+        self.fc2 = nn.Linear(in_features, hidden_features, bias=False)  # value branch
+        self.fc3 = nn.Linear(hidden_features, out_features, bias=False)  # output projection
+
+    def forward(self, x):
+        return self.fc3(self.fc1(x) * self.fc2(x))
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -157,7 +185,7 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 use_swiglu=False, swiglu_hidden_mult=1.0):
+                 use_swiglu=False, swiglu_hidden_mult=1.0, glu_act_type="swiglu"):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -169,7 +197,12 @@ class TransolverBlock(nn.Module):
         mlp_hidden = hidden_dim * mlp_ratio
         if use_swiglu:
             swiglu_hidden = int(mlp_hidden * swiglu_hidden_mult)
-            self.mlp = SwiGLU(hidden_dim, swiglu_hidden)
+            if glu_act_type == "geglu":
+                self.mlp = GeGLU(hidden_dim, swiglu_hidden)
+            elif glu_act_type == "bilinear":
+                self.mlp = BilinearGLU(hidden_dim, swiglu_hidden)
+            else:
+                self.mlp = SwiGLU(hidden_dim, swiglu_hidden)
         else:
             self.mlp = MLP(hidden_dim, mlp_hidden, hidden_dim,
                            n_layers=0, res=False, act=act)
@@ -192,7 +225,7 @@ class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
-                 use_swiglu=False, swiglu_hidden_mult=1.0,
+                 use_swiglu=False, swiglu_hidden_mult=1.0, glu_act_type="swiglu",
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -216,6 +249,7 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 use_swiglu=use_swiglu, swiglu_hidden_mult=swiglu_hidden_mult,
+                glu_act_type=glu_act_type,
             )
             for i in range(n_layers)
         ])
@@ -487,6 +521,7 @@ class Config:
     slice_num: int = 64
     use_swiglu: bool = False
     swiglu_hidden_mult: float = 1.0  # 1.0 = full hidden; 0.6667 = param-matched
+    glu_act_type: str = "swiglu"  # GLU gate activation: "swiglu" | "geglu" | "bilinear"
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -531,6 +566,7 @@ model_config = dict(
     mlp_ratio=2,
     use_swiglu=cfg.use_swiglu,
     swiglu_hidden_mult=cfg.swiglu_hidden_mult,
+    glu_act_type=cfg.glu_act_type,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -549,7 +585,8 @@ if cfg.compile_mode:
 print(
     f"Model: Transolver ({n_params/1e6:.3f}M params, "
     f"MLP-only={n_mlp_params/1e3:.1f}K, "
-    f"use_swiglu={cfg.use_swiglu}, swiglu_hidden_mult={cfg.swiglu_hidden_mult})"
+    f"use_swiglu={cfg.use_swiglu}, swiglu_hidden_mult={cfg.swiglu_hidden_mult}, "
+    f"glu_act_type={cfg.glu_act_type})"
 )
 
 optimizer = Lion(model.parameters(), lr=cfg.lr, betas=(0.9, 0.99), weight_decay=cfg.weight_decay)
