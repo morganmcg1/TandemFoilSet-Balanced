@@ -78,7 +78,7 @@ If 4+ of these regress, plateau breaks through researcher-agent's fresh angles (
 | **#4460** | frieren | **H126: FFN dropout {0.1, 0.2} at K=1** | HIGH (no dropout currently) | ~34.5-35.5 |
 | **#4462** | nezuko | **H127: n_hidden {96, 112} at K=1** | HIGH (smaller direction never tested) | ~34.8-36.0 |
 | **#4463** | thorfinn | **H128: compile + K=1 + T_max=24** | MED (efficiency + extended polish) | ~35.0-36.0 |
-| **#4465** | fern | **H129: Mixup α={0.2, 0.5} at K=1** | MED (sample-space regularizer) | ~34.5-36.0 |
+| **#4480** | fern | **H131: LE+TE dual coord features (4/8 extra dims)** | HIGH (OOD input representation, orthogonal to cycle 44 batch) | ~34.5-35.3 |
 | **#4466** | tanjiro | **H130: AdamW vs Lion revalidation at K=1** | LOW (sanity check) | likely confirms Lion |
 
 ## Lever Status
@@ -89,7 +89,8 @@ If 4+ of these regress, plateau breaks through researcher-agent's fresh angles (
 | Weight decay | 🔬 H125 sweep {5e-3, 1e-2} | 1e-3 locked | Direct anti-overfit |
 | FFN dropout | 🔬 H126 sweep {0.1, 0.2} | none (no dropout currently) | First test |
 | n_hidden | 🔬 H127 smaller direction {96, 112} | 128 (locked direction) | Never tested smaller |
-| Mixup | 🔬 H129 sample interpolation α={0.2, 0.5} | none | First test; distinct from H112 |
+| Mixup | ❌ Literal Mixup closed (H129: variable mesh, H55 repeat). Condition-only variant deferred. | none | Mesh identity violation |
+| LE+TE dual coords | 🔬 H131 active | none | OOD-targeted input repr; Texas A&M arXiv 2412.09399 |
 | EMA weight averaging | 🔬 H124 active | none | Different from SWA (closed) |
 | Lookahead wrapper | ❌ Schedule-incompat (H122) | none | Cosine→0 prevents late-epoch polish |
 | LR (Lion) | ✅ 3e-4 LOCKED | 3e-4 | — |

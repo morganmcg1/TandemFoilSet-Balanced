@@ -2685,3 +2685,39 @@ All assignments motivated by H120 K=1 finding: model overfits training-set spati
 | #4466 | tanjiro | **H130: AdamW vs Lion revalidation** | Optimizer sanity check at val<36 regime (Lion locked at val=42) |
 
 **Cycle summary:** H121/H115C/H122 closed (all schedule/mechanism-incompatible). H118 stale-closed. Researcher-agent spawned in background for cycle 45+ ideas. 8 WIP, 0 idle.
+
+---
+
+## 2026-05-17 — PR #4465: H129 Mixup α={0.2, 0.5} (fern) — CLOSED, non-actionable (mesh identity violation + H55 repeat)
+
+**Gated at mesh-verification step. No training runs.**
+
+Fern correctly STOP-gated per the PR's explicit mesh-structure instruction. Mesh node positions are per-sample (not shared grid):
+- rc_single: N ∈ [79K, 88K], z[0] varies {0.0370, 0.0515, 0.0212, 0.0413} across 4 samples
+- rc_tandem: N ∈ [97K, 156K]
+- cruise: N ∈ [97K, 151K]
+
+Three failure mechanisms for literal row-indexed Mixup:
+1. Padding contamination — zeros of shorter sample mix with real nodes of longer
+2. Position mixing — row i encodes different physical point in samples A vs B
+3. Surface-flag corruption — is_surface becomes fractional float, downstream bool cast breaks surf/vol loss separation
+
+H55 (#3899, tanjiro) already covered literal Mixup on then-baseline (val≈63.44): α=0.2 +15.52, α=0.4 +24.69 across all splits. The mesh-corruption mechanism is dataset-side, not baseline-side — binding at H120 too.
+
+Fern proposed three geometry-aware variants: (1) condition-only Mixup (dims 13:24 + y), (2) latent slice-token Mixup, (3) CutMix on conditions. Option (1) deferred as future hypothesis.
+
+**Status: CLOSED. Mixup lever closed for literal formulation. Condition-only Mixup remains possible if OOD pressure warrants.**
+
+---
+
+## 2026-05-17 — Cycle 44 continuation / cycle 45 pre-launch: H131 LE+TE dual coordinate system
+
+Researcher-agent (cycle 45 ideas file) ranked H-B (LE+TE dual coords) as #2 hypothesis. Pre-launching ahead of full cycle 44 completion — input representation change is orthogonal to all 7 active hyperparameter experiments. OOD bottleneck val_geom_camber_rc=47.5567 (+12 pts above val_avg) is the primary target.
+
+| PR | Student | Hypothesis | Mechanism | Expected gain |
+|----|---------|-----------|----------|--------------|
+| #4480 | fern | **H131: LE+TE dual coordinate features (4-8 extra dims)** | Input representation anchored on stagnation landmarks | 0.3–1.5 pts val_avg, primarily geom_camber_rc |
+
+**Rationale:** Global mesh-frame coordinates shift with camber; LE/TE-relative coordinates are stable within chord-length scaling. Texas A&M arXiv 2412.09399 shows significant OOD generalization gains from dual-frame encoding on NACA airfoils. Low implementation risk (pure input augmentation, no PhysicsAttention changes). fun_dim widened by 4 (Arm A) or 8 (Arm B, per-foil).
+
+**8 WIP remaining (H123-H128, H130, H131), 0 idle.**
