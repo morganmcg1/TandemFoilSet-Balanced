@@ -4,70 +4,82 @@ This is the fresh-track baseline for the Charlie local-metrics arm (research tag
 `charlie-pai2i-48h-r1`, advisor branch `icml-appendix-charlie-pai2i-48h-r1`,
 target base `icml-appendix-charlie`).
 
-## Current best configuration (merged as of 2026-05-16)
+## Current best configuration (merged as of 2026-05-17)
 
 | Group | Value |
 |-------|-------|
 | Model | Transolver, `n_hidden=128`, `n_layers=5`, `n_head=4`, **`slice_num=8` (PR #4107)**, `mlp_ratio=1`, `unified_pos=False`, **FiLM head on [log_Re, AoA0, AoA1]**, **GEGLU FFN (PR #4105)** |
+| Compile | **`torch.compile(model, dynamic=True, mode="default")`** (PR #4069) — fuses FiLM affine + GEGLU gate + QKV projections; `dynamic=True` required for pad_collate variable-length batches |
 | Optim | **Schedule-Free AdamW** `schedulefree.AdamWScheduleFree(lr=5e-4, weight_decay=1e-4, warmup_steps=200)` — PR #4071; NO LR scheduler |
 | Loss  | **SmoothL1 (Huber, beta=0.25)** in normalized space, `surf_weight=10.0` (PR #3400) |
-| EMA   | **Polyak averaging, decay=0.997**, evaluated at val/test time (PR #3783) |
+| EMA   | **Polyak averaging, decay=0.997**, evaluated at val/test time (PR #3783); EMA built before compile so `ema_model.module` is uncompiled |
 | Dropout | **dropout=0.1** in PhysicsAttention (attn + to_out) — PR #3402 |
 | Precision | **bf16 autocast** (`torch.autocast(device_type='cuda', dtype=torch.bfloat16)`) — PR #4064 |
 | FFN | **GEGLU gating** in Transolver block MLP (`FFN(x) = W2(GELU(W1a(x)) * W1b(x))`) — PR #4105 |
 | Scoring | NaN-safe accumulators (PR #3279) — `torch.where` instead of `mask * err` |
 | Sampler | `WeightedRandomSampler` over 3 domain groups |
 | Caps  | `SENPAI_MAX_EPOCHS=50`, `SENPAI_TIMEOUT_MIN=30.0` (hard per-run wall clock) |
-| Test  | Best-val EMA checkpoint evaluated on 4 test splits at end of run |
+| Test  | Best-val EMA checkpoint evaluated on 4 test splits at end of run; use `load_target = getattr(model, "_orig_mod", model)` to load state dict after compile |
 
-## Current best metrics (PR #4107, slice_num 12→8 on bf16+GEGLU+SF, single-seed, best epoch 25)
+## Current best metrics (PR #4069, torch.compile on bf16+GEGLU+SF+slice=8, single-seed, best epoch 42)
 
 **Beat this to be a winner.**
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` **(primary)** | **43.82** |
-| `test_avg/mae_surf_p` | **38.05** |
-| `test/test_single_in_dist/mae_surf_p` | 42.38 |
-| `test/test_geom_camber_rc/mae_surf_p` | 50.51 |
-| `test/test_geom_camber_cruise/mae_surf_p` | 22.71 |
-| `test/test_re_rand/mae_surf_p` | 36.58 |
+| `val_avg/mae_surf_p` **(primary)** | **37.31** |
+| `test_avg/mae_surf_p` | **32.81** |
+| `test/test_single_in_dist/mae_surf_p` | 36.49 |
+| `test/test_geom_camber_rc/mae_surf_p` | 46.33 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 17.85 |
+| `test/test_re_rand/mae_surf_p` | 30.54 |
 
-Per-split val surface-p MAE at best checkpoint (single seed, epoch 25):
+Per-split val surface-p MAE at best checkpoint (single seed, epoch 42):
 
-| Split | mae_surf_p | Δ vs prev (45.07) |
+| Split | mae_surf_p | Δ vs prev (43.82) |
 |-------|------------|-----------|
-| `val_single_in_dist`     |  47.39 | -2.87% |
-| `val_geom_camber_rc`     |  55.44 | -5.35% |
-| `val_geom_camber_cruise` |  26.97 | +0.94% (tied) |
-| `val_re_rand`            |  45.50 | -1.55% |
-| **avg** | **43.82** | **-2.78%** |
+| `val_single_in_dist`     |  37.19 | -21.5% |
+| `val_geom_camber_rc`     |  50.50 | -8.9% |
+| `val_geom_camber_cruise` |  21.48 | -20.4% |
+| `val_re_rand`            |  40.09 | -11.9% |
+| **avg** | **37.31** | **-14.9%** |
 
-Artifact: `models/model-slice-num-8-on-bf16-geglu-20260516-215247/metrics.jsonl`
+Artifact: `models/model-charliepai2i48h1-nezuko-torch-compile-on-sf-geglu-bf16-20260516-235435/metrics.jsonl`
 
-Note: slice_num=8 reduces the slice-attention projection cost (O(N·S²)) by 33% relative to slice=12. The halving trajectory (64→32→16→12→8) has gained on every step. On bf16+GEGLU+SF, the per-epoch saving (-8.7%, 79.2→72.3s) translates to +2 epochs (23→25) of training; SF keeps full LR on those extra epochs. Critical validation: the rc-split that *regressed* on the bf16-only baseline (+3.93% test) now *improves* on the full stack (-2.09% test) — GEGLU + SF give enough capacity headroom that the slice budget reduction is tolerated even on the hardest OOD geometry. Run still descending at epoch 25 (-0.71 pts/epoch at terminal).
+**torch.compile on the full stack (bf16+GEGLU+SF+slice=8):**
+- Per-epoch wall-clock: 72.3s → **42.4s** (−41.3%)
+- Epochs in 30-min cap: 25 → **42** (+17 epochs)
+- Peak VRAM: 25.96 GB → **18.88 GB** (−27% — compile memory-friendly on this graph)
+- n_params: unchanged (736,831 — compile is a code transformation, not an architecture change)
+- All 4 val splits + all 4 test splits improved (OOD cruise: −21.4% test; re_rand: −16.5% test)
+- Val still descending at epoch 42 (−0.12 pts/epoch); more compute would push further
 
-slice_num halving trajectory (every step a merge):
-- 64→32 (PR #3533): -5.81%
-- 32→16 (PR #3602): -6.78%
-- 16→12 (PR #3950): -0.34%
-- **12→8 (PR #4107): -2.78%**
+**Why compile gains +39% on this stack:** GEGLU doubles small elementwise ops per block (gate + GELU + multiply + projection-back); bf16 already shrinks kernel work, so Python dispatch becomes a larger fraction of per-step wall time — exactly where compile wins most. The absolute saving (~30 s/epoch) is roughly the same as on earlier stacks but the percentage is larger because the baseline wall-clock is shorter.
 
-12→8 out-improved 16→12 — suggests optimum is below 8 (slice_num=6 is the next probe).
+**Compile + SF coexistence:** SF's `optimizer.train()`/`optimizer.eval()` switches sit on the optimizer object, not the model graph, so the compile wrapper does not see them. EMA is built before compile — `ema_model.module` is the uncompiled model; validation runs in eager, which is fine (smaller share of per-epoch time).
 
-Note: Schedule-Free AdamW (Defazio et al. 2024, arXiv:2405.15682) replaces cosine annealing with an optimizer that maintains its own iterate average — no `T_max` required. The key insight: with `T_max=50` and only 23 effective epochs, cosine LR at epoch 23 is at ~59% of peak (i.e. `0.5*(1+cos(23/50*π))*lr ≈ 0.59*lr`), so the last ~10 epochs of the GEGLU baseline were making under-powered gradient steps. Schedule-Free keeps the effective LR at full strength right up to the timeout, giving late epochs ~1.5-2× larger updates. Zero compute overhead: 79.2 s/epoch vs 78.9 s baseline (+0.4%); peak VRAM 25.96 GB (+0.3% vs GEGLU baseline's 25.7 GB). All 8 val+test splits improved. EMA (decay=0.997) and SF coexist cleanly — SF operates on the optimizer iterate, EMA on shadow model parameters, no competition. Run was still descending at epoch 23 (-0.79 pts/epoch at terminal), so there remains headroom.
+**Key implementation notes:**
+```python
+# After EMA wrap, before training loop:
+try:
+    model = torch.compile(model, dynamic=True, mode="default")
+except Exception as e:
+    print(f"torch.compile: FAILED, falling back to eager — {e}")
 
-Why it works: the cosine T_max fragility grows with each compute-saving win (bf16, n_layers, compile each silently shrink effective epochs vs the T_max budget). Schedule-Free eliminates this hidden coupling by construction — the optimizer is portable across compute budgets. The LR schedule was the hidden bottleneck limiting late-epoch gradient quality.
+# On checkpoint reload for test eval:
+load_target = getattr(model, "_orig_mod", model)
+load_target.load_state_dict(torch.load(model_path, ...))
 
-**SF key implementation detail:** call `optimizer.train()` before each training step and `optimizer.eval()` before val/test evaluation; omitting these switches silently evaluates at the wrong iterate and negates the win.
+# SF mode switches still required:
+optimizer.train()   # before each training step
+optimizer.eval()    # before val/test (including after checkpoint load)
+```
 
 Reproduce:
 ```bash
 cd target/
 pip install schedulefree
-python train.py --experiment_name sf-repro --agent <name>
-# SF: optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=5e-4, weight_decay=1e-4, warmup_steps=200)
-# Remove cosine scheduler entirely. Add optimizer.train()/optimizer.eval() around train/val steps.
+python train.py --experiment_name torch-compile-repro --agent <name>
 ```
 
 ### Note on val variance
@@ -124,4 +136,5 @@ After every merged winner, the advisor:
 | 2026-05-16 | #4064 | bf16 autocast: -27% sec/epoch, 18→25 epochs in 30-min cap | 59.08 | -14.1% |
 | 2026-05-16 | #4105 | GEGLU FFN: gating projection replaces vanilla MLP, all 4+4 splits improved 9-19% | 50.57 | -14.4% |
 | 2026-05-16 | #4071 | Schedule-Free AdamW: eliminates cosine T_max fragility, all 8 splits improved 7-18% | 45.07 | -10.9% |
-| 2026-05-16 | #4107 | slice_num 12→8 on bf16+GEGLU+SF: -8.7% sec/epoch → +2 epochs, 3/4 splits improved, rc-split flip from regress to win | **43.82** | **-2.78%** |
+| 2026-05-16 | #4107 | slice_num 12→8 on bf16+GEGLU+SF: -8.7% sec/epoch → +2 epochs, 3/4 splits improved, rc-split flip from regress to win | 43.82 | -2.78% |
+| 2026-05-17 | #4069 | torch.compile(dynamic=True) on bf16+GEGLU+SF+slice=8: -41.3% sec/epoch (72→42s), 25→42 epochs, all 8 splits improved | **37.31** | **-14.9%** |
