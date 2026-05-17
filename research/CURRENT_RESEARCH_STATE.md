@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 00:00
+- **Date:** 2026-05-17 01:40
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
@@ -21,7 +21,7 @@
 | A | bs=2+n=8+lr=7e-4 (#4146) | 57.11 | 49.24 | n=8 aliasing reduction + larger steps |
 | **B (current best)** | bs=2+n=10+δ=0.10 (#4103) | **56.92** | 49.32 | Tight Huber (L1-like) on late residuals |
 
-**4-way merger (both lineages)**: bs=2+n=8+lr=7e-4+δ=0.10 → **tanjiro #4220 arm-1 is testing this.** If additive, predicted val ~54-55.
+**4-way merger (both lineages)**: bs=2+n=8+lr=7e-4+δ=0.10 → **tanjiro #4220 arm-1 is testing this.**
 
 ## Improvement history
 
@@ -39,53 +39,61 @@
 
 | Student | PR | Hypothesis | Status |
 |---|---|---|---|
-| tanjiro | #4220 | 4-way merge (n=8+lr=7e-4+δ=0.10) + δ=0.05 | wave-14 NEW (just assigned) |
-| thorfinn | #4221 | slice_num lower bracket {32, 48} on new best | wave-14 NEW (just assigned) |
-| frieren | #4222 | lr=7e-4+clip=1.0 on bs=2+n=10+δ=0.10 (5-way compound) | wave-14 NEW (just assigned) |
-| nezuko | #4223 | clip=1.0 + surf_weight=5 on bs=2+n=10+δ=0.10 | wave-14 NEW (just assigned) |
+| edward | #4279 | n_hidden capacity {160, 192} on new best (bs=2+n=10+δ=0.10) | wave-15 NEW (just assigned) |
+| tanjiro | #4220 | 4-way merge (n=8+lr=7e-4+δ=0.10) + δ=0.05 | wave-14 WIP (long-running, multiple arms) |
+| thorfinn | #4221 | slice_num lower bracket {32, 48} on new best | wave-14 WIP |
+| frieren | #4222 | lr=7e-4+clip=1.0 on bs=2+n=10+δ=0.10 (5-way compound) | wave-14 WIP |
+| nezuko | #4223 | clip=1.0 + surf_weight=5 on bs=2+n=10+δ=0.10 | wave-14 WIP |
 | alphonse | #4198 | LR upper search {9e-4, 1.2e-3} on bs=2+n=8 | wave-14 WIP |
-| edward | #4199 | 4-way Huber δ={0.15, 0.20} on bs=2+n=8+lr=7e-4 | wave-14 WIP |
 | askeladd | #4179 | bs=2+n=8 + Huber δ={0.15, 0.20} — 3-way compound | wave-14 WIP |
-| fern | #4130 | EMA re-test at bs=2 (τ={0.998, 0.995}) | wave-14 WIP |
+| fern | #4130 | EMA re-test at bs=2 (τ={0.998, 0.995}) | wave-14 WIP (delayed by rate limit) |
 
 ## Current research themes
 
-### Wave-14: Merging the two lineages + pushing the δ floor
+### Wave-14/15: Lineage merger + capacity expansion
 
-Key insight this round: TWO competing stacks at val~57. The highest-value experiments now test whether these stacks can be merged:
+**Settled knowledge from PR #4199 (edward, closed):**
+- At the **n=8+lr=7e-4 lineage, δ optimum = 0.30** (NOT lower). δ=0.15 essentially flat (+0.42%), δ=0.20 regresses (+3.95%). Opposite of n=10 lineage. Mechanism: residual saturation + clip-saturation absorb any benefit from tighter Huber knee.
+- **Per-split signature**: δ=0.15 helps cruise (-2.75%) and re_rand (-0.81%) but hurts single/rc — partial split benefit but no avg gain.
+- **δ is now settled for lineage A**: do not sweep δ below 0.30 on n=8+lr=7e-4 stack without a new mechanism.
 
-1. **tanjiro #4220** (highest priority): 4-way merge (bs=2+n=8+lr=7e-4+δ=0.10) vs δ=0.05 on n=10. If the 4-way compound works, val should drop to ~54-55.
-2. **frieren #4222**: 4-way (bs=2+n=10+δ=0.10+lr=7e-4) + 5-way (+ clip=1.0). Tests whether the n=10+δ=0.10 stack absorbs lr=7e-4 and clip=1.0.
-3. **edward #4199**: 4-way δ={0.15, 0.20} on the n=8+lr=7e-4 stack. Note: δ=0.10 (from #4103) now has a new claim — edward should ideally see if δ=0.15 beats the new baseline 56.92.
-4. **alphonse #4198**: LR ceiling on n=8 stack — does 9e-4 or 1.2e-3 beat 7e-4?
-5. **askeladd #4179**: 3-way δ on n=8 (without lr) — completes the δ×n=8 interaction matrix.
+**Active highest-priority experiments:**
 
-### Critical findings from this round
+1. **tanjiro #4220** (highest priority): 4-way merge (bs=2+n=8+lr=7e-4+δ=0.10) + δ=0.05 on n=10. Multiple arms running, val unknown — potential breakthrough.
+2. **edward #4279** (new): n_hidden capacity expansion {160, 192} on new best stack. Memory budget is 80 GB — capacity may be the binding constraint.
+3. **alphonse #4198**: LR upper search {9e-4, 1.2e-3} on bs=2+n=8 lineage.
+4. **askeladd #4179**: 3-way δ={0.15, 0.20} on n=8 without lr — completes the δ×n=8 interaction matrix (complement to edward #4199).
+5. **frieren #4222**: lr=7e-4+clip=1.0 on n=10+δ=0.10 (5-way compound test).
 
-- **Monotonic Huber tightening**: δ=0.3 → 0.15 → 0.10 → each step profitable at bs=2. L1 floor still not found; δ=0.05 (tanjiro arm-2) and δ=0.10 on n=8 lineage (#4199) are next.
-- **n=8 × clip=1.0 SUBSTITUTES** (nezuko #4095): These two levers attack the same DOF (gradient noise). Do NOT combine. Use clip=1.0 on n=10 or n=8 on clip=0.25.
-- **bs=1 ceiling found** (frieren #4125): bs=1 is neutral vs bs=2 on val at the current best. The lever is exhausted. Memory headroom (9.25 GB) opens capacity experiments.
-- **slice_num>64 fails hard** (#4131): Step-count loss + routing softmax flattening. Direction reversal to slice_num=32/48 (thorfinn #4221).
+### Critical findings accumulated this round
+
+- **δ=0.30 confirmed optimal for lineage A** (n=8+lr=7e-4). Settling this knob — closed edward #4199.
+- **n=8 × clip=1.0 SUBSTITUTES**: Do NOT combine. clip=1.0 on n=10, n=8 on clip=0.25.
+- **bs=1 ceiling found**: bs=2 is step-count optimum for 30-min budget.
+- **slice_num>64 fails hard**: routing softmax flattening. Testing {32, 48} with thorfinn.
+- **Monotonic Huber**: δ=0.10 profitable on n=10 stack; δ floor not yet found (δ=0.05 in tanjiro #4220).
+- **EMA dead on BF16**: 3+ tests. Fern re-testing at bs=2.
+- **Memory headroom**: 18.43 GB peak at bs=2 vs 96 GB. n_hidden expansion is viable.
 
 ## Key insights accumulated
 
-- **Monotonic Huber: δ=0.10 is profitable** (confirmed BS2+n10). δ=0.05 still untested.
-- **n=8 and clip=1.0 are substitutive** (#4095). Do NOT combine.
 - **Current best stack**: BF16 + LS + n10 + bs=2 + δ=0.10 (val=56.92/test=49.32)
 - **Alternative strong stack**: BF16 + LS + n8 + bs=2 + lr=7e-4 (val=57.11/test=49.24)
-- **bs lever exhausted** at bs=1. bs=2 is the step-count optimum for 30-min budget.
-- **Memory headroom: 9.25 GB at bs=1** (vs 96 GB available) — capacity expansion possible
-- **Memory headroom: 18.43 GB at bs=2** — still plenty for wider models
-- **T_max=20 confirmed optimal** — T_max=18, 22 both regress.
-- **lr=7e-4 confirmed** on n=8+bs=2 stack. Effect sub-additive (-1.99% vs -8.75% at bs=8). LR ceiling above 7e-4 unknown.
-- **clip_frac=0.988 at ep18** for bs=2 — approaching but not reaching saturation escape.
-- **EMA dead on BF16 stack**: 3+ tests confirm. Being re-tested at bs=2 with 13,500 steps (fern #4130).
+- **δ=0.30 is optimal for lineage A** (n=8+lr=7e-4); **δ=0.10 for lineage B** (n=10)
+- **n=8 and clip=1.0 are substitutive**. Do NOT combine.
+- **bs lever exhausted** at bs=1. bs=2 is the step-count optimum.
+- **Memory headroom: 18.43 GB at bs=2** — n_hidden=192 (~41 GB) and n_hidden=256 (~74 GB) viable.
+- **T_max=20 confirmed optimal** for both lineages.
+- **lr=7e-4 confirmed optimal** for lineage A. LR ceiling still unknown (testing {9e-4, 1.2e-3}).
+- **EMA dead on BF16 stack**: 3+ tests confirm. Final check at bs=2 running (fern #4130).
+- **Capacity expansion**: n_hidden={160, 192} first screen (edward #4279), then wider if it wins.
 
 ## Potential next research directions
 
-- **5-way compound**: bs=2+n=10+δ=0.10+lr=7e-4+clip=1.0 — theoretically justified (n=10 × clip=1.0 compounds, δ × clip orthogonal). Frieren #4222 arm-2 testing this.
-- **δ=0.05 or L1**: monotonic trend through δ=0.10, next is 0.05 (tanjiro #4220 arm-2) or pure L1 (Huber δ→0).
-- **LR above 7e-4**: alphonse #4198 testing {9e-4, 1.2e-3}.
-- **LR warmup**: 5-epoch warmup on the new best stack — untested.
-- **Capacity expansion at bs=1**: n_hidden=192, n_layers=6 (requires code change). 80 GB headroom available.
-- **Lower slice_num {32, 48}**: thorfinn #4221 testing — coarser routing may reduce slot redundancy in smooth flow regions.
+- **n_hidden > 192**: if edward #4279 confirms capacity helps, push to 224/256.
+- **δ=0.05 or L1**: tanjiro #4220 arm-2 testing. If monotonic, push lower.
+- **LR warmup**: 5-epoch warmup on new best — untested.
+- **weight_decay sweep**: current 0.0001 default, never explored. {0.001, 0.01} possible.
+- **Per-domain loss weighting**: cruise responds to δ=0.15 distinctly (−2.75%). A domain-specific δ or surf_weight could exploit this.
+- **Lower slice_num {32, 48}**: thorfinn #4221 testing.
+- **5-way compound (n=10+δ=0.10+lr=7e-4+clip=1.0)**: frieren #4222 testing.

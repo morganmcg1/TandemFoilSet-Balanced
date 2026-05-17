@@ -5,6 +5,22 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-17 01:35 — PR #4199 (charliepai2i48h5-edward): 4-way Huber δ={0.15,0.20} on bs=2+n=8+lr=7e-4 — CLOSED (both arms regress; δ optimum at 0.30 on this stack)
+
+- branch: `edward/4way-huber-compound`
+- hypothesis: δ=0.15 / δ=0.20 compounds with 4-way stack (bs=2+n=8+lr=7e-4), targeting cruise residuals
+- results (vs baseline 57.11/49.24 from PR #4146):
+
+  | arm | δ | val_avg | test_avg | Δ val vs 57.11 | best_epoch | cruise test | per-split test single/rc/cruise/re_rand |
+  |---|---|---|---|---|---|---|---|
+  | arm-1 | 0.15 | 57.348 | 49.527 | +0.42% ✗ | 18/18 | **31.927 ✓** | 54.546/63.339/31.927/48.295 |
+  | arm-2 | 0.20 | 59.363 | 51.157 | +3.95% ✗ | 18/18 | 36.586 | 55.242/61.753/36.586/51.045 |
+
+- artifacts: `models/model-bf16-layerscale-bs2-n8-lr7e4-huber015-20260516-232423/metrics.jsonl`, `models/model-bf16-layerscale-bs2-n8-lr7e4-huber020-20260517-003330/metrics.jsonl`
+- commentary: CLOSED. **δ optimum shifted upward on 4-way stack: 0.30 (δ=0.15 < δ=0.30 < δ=0.20 in val).** This is the OPPOSITE of the n=10 lineage (where δ=0.10 < 0.15 < 0.30). **Mechanism**: At bs=2+n=8+lr=7e-4, most residuals at ep18 are already below δ=0.30 (residual saturation from 13,500+ updates × larger LR × n=8 aliasing reduction). Tightening the Huber knee to 0.15 doesn't change gradient direction for those residuals. Additionally, clip_frac=0.991/0.992 (nearly saturated) — clip rescaling absorbs the marginal δ signal. Per-split: δ=0.15 helps cruise (-2.75%) and re_rand (-0.81%) but hurts single (+1.39%) and rc (+2.76%). **Key takeaway**: **δ=0.30 is confirmed local optimum for n=8+lr=7e-4 lineage.** Do NOT sweep δ below 0.30 on this stack without a new mechanism. clip_frac and grad_norm_mean confirm no training instability. Assigned edward #4279: n_hidden capacity sweep {160, 192}.
+
+---
+
 ## 2026-05-16 23:35 — PR #4131 (charliepai2i48h5-thorfinn): slice_num sweep {128, 192} at bs=2 — CLOSED (both arms regress massively; step-count loss + routing softmax flattening)
 
 - branch: `charliepai2i48h5-thorfinn/slicenum-bs2`
