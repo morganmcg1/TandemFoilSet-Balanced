@@ -227,3 +227,46 @@ cd "target/" && python train.py \
 ```
 
 **Mechanism**: On our 30-min/~6300-step budget, k=3 delivers ~2100 slow-weight updates vs k=5's ~1260 — 67% more variance-reduction events under the same wall-clock constraint. The k=10 arm (only ~630 updates) regressed +5.91%. The monotone ranking k=3 < k=5 << k=10 is confirmed across every val split and every epoch checkpoint — not a noise artifact. k-axis is a stronger lever than the β2-axis at this budget. NOTE: this run uses β2=0.999 (default); the k=3+β2=0.95 compound is the next priority.
+
+---
+
+## 2026-05-17 08:32 — PR #4401: Optimizer — AdamW eps=1e-9 on Lookahead k=3 baseline
+
+**NEW BEST BASELINE** — eps=1e-9 (tighter adaptive scaling) beats eps=1e-8 default by −2.2% val / −3.0% test. First improvement since k=3 merge.
+
+- **val_avg/mae_surf_p:** **50.1657** (run `hpjl79he`)
+- **test_3split/mae_surf_p:** **50.3401** (run `hpjl79he`)
+- **W&B runs:** `hpjl79he` (eps=1e-9, winner), `k9mspshy` (eps=1e-7, flat/regress)
+
+Per-split val (run `hpjl79he`, vs prior k=3 baseline 51.3066):
+| Split | mae_surf_p | Δ vs prior baseline |
+|---|---|---|
+| val_single_in_dist | 57.870 | +0.07 (flat) |
+| val_geom_camber_rc | **62.561** | **−1.293 (−2.0%)** ← dominant residual improved |
+| val_geom_camber_cruise | 31.988 | −0.421 (−1.3%) |
+| val_re_rand | **48.243** | **−2.916 (−5.7%)** |
+| **val_avg** | **50.1657** | **−1.141 (−2.2%)** |
+
+Per-split test (run `hpjl79he`):
+| Split | mae_surf_p |
+|---|---|
+| test_single_in_dist | 53.480 |
+| test_geom_camber_rc | **56.131** (−3.943 vs k=3 baseline) |
+| test_geom_camber_cruise | NaN (fleet-wide data/scoring.py bug) |
+| test_re_rand | **41.410** (−1.597 vs k=3 baseline) |
+| **test_3split** | **50.3401** |
+
+- **Reproduce:**
+```bash
+cd "target/" && python train.py \
+  --grad_clip 5.0 --huber_delta 0.5 --ema_decay 0.99 --asinh_p_scale 1.0 \
+  --use_swiglu --mlp_ratio 1.333 --n_head 2 --asinh_vel_scale 0.5 \
+  --slice_num 8 \
+  --use_lookahead --lookahead_k 3 --lookahead_alpha 0.5 \
+  --adamw_eps 1e-9 \
+  --agent <student>
+```
+
+**Mechanism**: With `asinh_p_scale=1.0` compressing the pressure target, the per-parameter v̂ disparity is mild. The default eps=1e-8 sets an unnecessarily large stability floor, flattening per-parameter adaptive step sizes. eps=1e-9 allows tighter adaptive control on geometry-OOD splits (camber_rc, cruise, re_rand) while Lookahead k=3 handles trajectory-level variance reduction. Zero NaN/Inf events across 6750 steps confirms the stability cliff is not crossed. Test directional confirmation: eps=1e-7 hurt performance, eps=1e-9 helped — lever direction monotone.
+
+**Note**: eps=1e-9 follow-up (sharper grid: {3e-10, 1e-10, 3e-9}) assigned to edward as next experiment.
