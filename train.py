@@ -561,6 +561,7 @@ class Config:
     lion_weight_decay: float = 3e-4  # Lion wd (typically 3-10x larger than AdamW; 3x of cfg.weight_decay=1e-4)
     lion_betas: str = "0.9,0.99"  # Lion (beta1, beta2) as comma-separated floats
     seed: int = 0  # RNG seed for model init + data sampler; enables paired-arm reproducibility
+    dropout: float = 0.0  # dropout for attention + MLP blocks inside Transolver
 
 
 cfg = sp.parse(Config)
@@ -608,6 +609,7 @@ model_config = dict(
     film_cond_slice=(13, 24),
     film_mlp_hidden=cfg.film_mlp_hidden,
     two_shot_film=cfg.two_shot_film,
+    dropout=cfg.dropout,
 )
 
 model = Transolver(**model_config).to(device)
