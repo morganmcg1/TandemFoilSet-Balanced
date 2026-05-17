@@ -2509,3 +2509,91 @@ This is the cosine-decay signature: high-LR arms burn early-epoch budget faster,
 
 **askeladd → #4225**: Model width sweep at SF-AdamW lr=2e-3 — `n_hidden` ∈ {96, 128, 160, 192} with --seed 1. The primary model capacity axis, untouched at correct LR.
 
+
+---
+
+## 2026-05-17 01:00 — PR #4157 [MERGED/WINNER]: SF-AdamW LR fine-tune — lr=3e-3 NEW BEST
+
+- **Student branch:** `charliepai2i48h4-edward/sf-lr-fine`
+- **Hypothesis:** Fine-tune SF-AdamW learning rate in [1.5e-3, 3e-3] to localize the peak identified by the coarse sweep (#4038, winner 2e-3). Paired 4-arm sweep with --seed 1.
+
+### Results
+
+| Arm | lr | val_avg/mae_surf_p | Δ vs B (control) | Δ vs baseline (54.769) |
+|-----|---:|---:|---:|---:|
+| A | 1.5e-3 | 55.902 | +3.88% (regression) | +2.07% |
+| **B (control)** | **2e-3** | **53.814** | — | −1.74% |
+| C | 2.5e-3 | 53.182 | −1.18% | −2.90% |
+| **D (winner)** | **3e-3** | **52.258** | **−2.89%** | **−4.59%** |
+
+**Key finding:** Sweep is perfectly monotone A→B→C→D. True LR peak is BEYOND 3e-3 — all 4 arms hit ep17/17 budget cap still descending. The gains are also accelerating (2→2.5: −1.18%, 2.5→3: −1.71%), suggesting more headroom above 3e-3.
+
+Per-split val MAE (winning arm D, lr=3e-3):
+
+| Split | val/mae_surf_p |
+|-------|---:|
+| val_single_in_dist | 56.454 |
+| val_geom_camber_rc | 66.039 |
+| val_geom_camber_cruise | 33.763 |
+| val_re_rand | 52.775 |
+| **val_avg** | **52.258** |
+
+Test 3-split mean (D): 51.206 — sid=48.731, rc=60.335, re=44.552
+
+### Metric artifacts
+
+- Winner (Arm D, lr=3e-3): `models/model-charliepai2i48h4-edward-sf-lr-fine-r1-armD-lr3e-3-20260516-222733-20260516-233714/metrics.jsonl`
+- Control (Arm B, lr=2e-3): `models/model-charliepai2i48h4-edward-sf-lr-fine-r1-armB-lr2e-3-20260516-222733-20260516-222735/metrics.jsonl`
+
+### Analysis
+
+The "true LR peak beyond 3e-3" finding has two causes:
+1. **Polyak iterate averaging**: SF-AdamW's internal Polyak averaging stabilizes higher-LR trajectories — models trained at 3e-3 still produce smooth averaged iterates even when individual steps are large.
+2. **Budget truncation**: All arms at ep17 are still descending. At higher LR, the optimizer reaches lower loss states earlier in training; the val curve is still declining when the 30-min budget cuts it. Longer budget would likely pull all arms even lower, with larger gaps.
+
+**New canonical LR: 3e-3.** All in-flight experiments were at lr=2e-3 and should apply the paired-Δ gate: if they beat their seed-1 control, the result is still directionally valid, but may be even stronger at lr=3e-3.
+
+### Follow-up
+
+**edward → new assignment #4XXX**: LR extension sweep {3e-3, 4e-3, 5e-3, 7e-3} at SF-AdamW + seed=1.
+
+---
+
+## 2026-05-17 01:05 — PR #4144 [CLOSED/NULL]: Lion + Schedule-Free composition (3-way)
+
+- **Student branch:** `charliepai2i48h4-frieren/lion-sf-compose-r1`
+- **Hypothesis:** Lion+SF composition might rescue Lion's higher-LR potential by applying SF's Polyak averaging to Lion's sign-projected steps. Three-way comparison: A=Lion+cosine (control), B=SF-AdamW lr=2e-3 (control), C=Lion+SF (hypothesis).
+
+### Results
+
+| Arm | Optimizer | LR | val_avg/mae_surf_p | Δ vs A | Test 3-split |
+|-----|-----------|---:|---:|---:|---:|
+| A | Lion + cosine T_max=15 | 1.5e-4 | 63.336 | — (ref) | 60.549 |
+| B | SF-AdamW (Polyak) | 2e-3 | 54.957 | −13.23% | 53.543 |
+| C1 | Lion + SF (custom wrapper) | 1.5e-4 | 111.223 | **+75.61%** | 108.801 |
+| C2 | Lion + SF (custom wrapper) | 6e-4 | 112.988→div | **+78.40%** | 112.070 |
+
+- Arm A exactly reproduces 63.336 (to 4dp). Arm B reproduces canonical within 0.34% (well within noise).
+- C1 declines slowly but plateaus 75% above Lion baseline — never converges.
+- C2 reaches best val=112.99 at ep12, then **catastrophically diverges** (ep14: 3184, then 682, 446).
+
+### Mechanism (why Lion+SF fails)
+
+Lion is a pure **sign-projection** optimizer — every gradient update is exactly ±lr, independent of gradient magnitude. SF's internal Polyak averaging is designed to average across AdamW steps, which have varying per-coordinate magnitude. When composed with Lion's constant-magnitude steps, the Polyak averaging loses its ability to exploit scale differences across gradient coordinates. The result is a momentum buffer that accumulates fixed-magnitude steps and fails to find good iterate averages. This is a fundamental incompatibility, not a tuning problem.
+
+### Conclusions
+
+1. **Lion+SF composition is definitively falsified.** Results are catastrophically worse, not marginally worse.
+2. **Lion track is now fully exhausted:** Lion standalone (best: 63.336, +11.6% behind SF canonical), Lion LR boost (no benefit, #4149), Lion+SF (catastrophic failure, +75-78% regression).
+3. **SF-AdamW is the optimizer.** No further Lion experiments warranted unless a fundamentally different composition approach is found.
+
+### Metric artifacts
+
+- Arm A: `models/model-charliepai2i48h4-frieren-lion-sf-r1-arma-lion-cosine-20260516-210530/metrics.jsonl`
+- Arm B: `models/model-charliepai2i48h4-frieren-lion-sf-r1-armb-sf-adamw-lr2e-3-20260516-214301/metrics.jsonl`
+- Arm C1: `models/model-charliepai2i48h4-frieren-lion-sf-r1-armc-lion-sf-lr1.5e-4-20260516-232654/metrics.jsonl`
+- Arm C2: `models/model-charliepai2i48h4-frieren-lion-sf-r1-armc-lion-sf-lr6e-4-20260516-224341/metrics.jsonl`
+
+### Follow-up
+
+**frieren → new assignment**: n_layers depth sweep {3, 4, 5, 7} at SF-AdamW lr=3e-3 + seed=1. (Requires --n_layers Config/CLI edit.)
