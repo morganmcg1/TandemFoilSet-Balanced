@@ -1,6 +1,70 @@
 # SENPAI Research Results
 
-## 2026-05-16 23:45 — PR #4123: Lookahead-Lion (k=5/α=0.5 wrapping Lion) ← MERGED (NEW ALL-TIME BEST, val=47.97)
+## 2026-05-17 00:35 — PR #4224: Lookahead-Lion seed=1 verification ← CLOSED (canonical, seed-robust confirmed)
+
+- Branch: `willowpai2i48h1-edward/lookahead-lion-seed1-verify`
+- Student: willowpai2i48h1-edward
+- W&B run: `dhblq44k` (group `lookahead_lion_seed_scan`)
+- Hypothesis: Verify whether the Lookahead-AdamW seed=1 outlier pattern (val=78.50, best_ep=10) reproduces under Lookahead-Lion, or whether Lion's sign-update inherently fixes it.
+
+### Results (terminal SENPAI-RESULT, W&B-verified)
+
+| Metric | Value | Δ vs seed=0 (PR #4123) |
+|---|---|---|
+| val_avg/mae_surf_p | **49.2089** | +1.2354 |
+| test_avg/mae_surf_p | 47.6172 | +1.1272 |
+| best_epoch | **17** (cosine T_max floor ✓) | — |
+
+### Seed-gap collapse
+
+| Recipe | Seed-0 val | Seed-1 val | Δ |
+|---|---|---|---|
+| Lookahead-AdamW k=5 | 57.22 | 78.50 (best_ep=10 ⚠️) | **+21.28** |
+| **Lookahead-Lion k=5** | **47.97** | **49.21 (best_ep=17 ✓)** | **+1.24** |
+
+The seed=1 outlier of the AdamW era collapses by ~94% under Lion. Mechanism prediction (from PR #4123 decomposition) is empirically confirmed: Lion's sign-based step has no first-moment magnitude to drag the optimizer into a bad early basin; Lookahead's slow-weight averaging dampens trajectory variance further. **Lookahead-Lion is the cleanest seed-robust baseline in the programme's history.**
+
+### Provisional 2-seed canonical
+- seed=0 = 47.97 (PR #4123, merged)
+- seed=1 = 49.21 (THIS PR, closed canonical)
+- 2-seed mean = **48.59**, σ̂ ≈ 0.62
+
+### Decision
+
+Closed as canonical seed=1 data point — val=49.21 > current best val=47.97, so not a winner-merge. Verification result is excellent: the variance story is now strong enough that we can confidently report a 3-seed mean once seed=2 lands (assigned to nezuko #4242).
+
+## 2026-05-17 00:35 — PR #4210: Lookahead-AdamW k=3 seed=2 verification ← CLOSED (canonical, era superseded)
+
+- Branch: `willowpai2i48h1-nezuko/lookahead-k3-seed2-verify`
+- Student: willowpai2i48h1-nezuko
+- W&B run: `y3ht6rsq` (group `lookahead_k3_seed_scan`)
+- Hypothesis: Verify k=3 robustness across seeds (seed=0 = 55.97 in #4158 merged, seed=1 pending in alphonse #4202, this PR = seed=2).
+
+### Results (terminal SENPAI-RESULT, W&B-verified)
+
+| Metric | Value | Δ vs seed=0 (PR #4158) |
+|---|---|---|
+| val_avg/mae_surf_p | **56.0512** | +0.083 |
+| test_avg/mae_surf_p | **53.0339** | **−0.408 (better!)** |
+| best_epoch | 17 (cosine T_max floor ✓) | — |
+
+### k=3 stable-seed dispersion
+
+| Seed | k=5 val | k=3 val |
+|---|---|---|
+| 0 | 57.22 | 55.97 |
+| 1 | 78.50 (outlier) | pending (#4202) |
+| 2 | 57.05 | **56.05** |
+| stable-seed mean (0,2) | 57.13 | **56.01** |
+| stable-seed gap | 0.17 | **0.08 (tighter!)** |
+
+k=3 keeps its ~1 MAE edge over k=5 on stable seeds (Δ_stable = −1.12). Stable-seed dispersion at k=3 (0.08 MAE) is actually tighter than at k=5 (0.17). The k=3 era was internally consistent.
+
+### Decision
+
+Closed as canonical k=3 era seed-scan data — val=56.05 > current programme best val=47.97 (Lookahead-Lion, PR #4123 merged 2026-05-16 23:45). The k=3 era baseline was superseded mid-round when Lookahead-Lion landed at 47.97. The k=3 finding still informs the new Lion-era hyperparameter space: edward is now testing Lookahead-Lion k=3 (#4241) to see if the same k-sweep monotonicity transfers.
+
+
 
 - Branch: `willowpai2i48h1-edward/lion-optimizer-triple-stack`
 - Student: willowpai2i48h1-edward
