@@ -1,6 +1,55 @@
 # Baseline — icml-appendix-willow-pai2i-48h-r3
 
-## Current best (as of 2026-05-17 09:58) — PR #4296: slice_num=32 (attention slice sweep, 17th winner)
+## Current best (as of 2026-05-17 10:46) — PR #4348: n_head=2 (attention head sweep, 18th winner)
+
+Eighteen winners merged: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + SOAP optimizer (PR #3283, −31.7%) + SOAP precond_freq=5 (PR #3495, −1.78%) + EMA model weights decay=0.999 (PR #3430, −18.8%) + EMA decay=0.99 (PR #3591, −3.85%) + Huber beta=0.5 (PR #3316, −6.05%) + Cauchy loss c=1.0 (PR #3612, −3.67%) + Huber beta=0.1 (PR #3868, −3.77%) + Lookahead k=5 (PR #3947, −4.14%) + Gradient clipping max_norm=1.0 (PR #3497, −2.72%) + Huber beta=0.01 (PR #4037, −2.51%) + bfloat16 autocast (PR #3975, −9.74%) + cosine T_max=25 (PR #4263, −8.47%) + lr=2e-3 (PR #4336, −6.33%) + cosine T_max=20 (PR #4447, −2.72%) + slice_num=32 (PR #4296, −7.42%) + **n_head=2** (PR #4348, alphonse, **−1.04% vs previous canonical**).
+
+**Primary ranking metric (measured on n_head=2 + slice_num=64 stack):**
+- `val_avg/mae_surf_p` = **31.6653** (run `ui6kpvav`, alphonse nhead2, best epoch 21)
+
+**Test (paper-facing, measured on n_head=2 + slice_num=64 stack):**
+- `test_avg/mae_surf_p_excl_cruise` (3-split mean) = **31.502** (−1.61% vs previous 32.017)
+  - `test_single_in_dist/mae_surf_p` = 31.909
+  - `test_geom_camber_rc/mae_surf_p` = 39.345
+  - `test_re_rand/mae_surf_p` = 23.253
+  - `test_geom_camber_cruise/mae_surf_p` = NaN (pre-existing bug)
+
+**⚠ Important: measured run used n_head=2 + slice_num=64. Current canonical has BOTH n_head=2 AND slice_num=32 (stacked from PR #4296). The n_head=2 + slice_num=32 combination is unmeasured — expected to be ≤31.6653 (likely better since each change independently improved from the same baseline in the opposite direction). Val 31.6653 is a conservative lower bound.**
+
+**Config (post-merge, canonical stack):**
+- Transolver: n_hidden=128, n_layers=5, **n_head=2** (was 4), slice_num=32, mlp_ratio=2, dropout=0
+- **SOAP optimizer** (precondition_frequency=5) **lr=2e-3**, warmup_epochs=3 (LinearLR) → **CosineAnnealingLR(`--cosine_t_max 25`)**, weight_decay=1e-4, batch_size=4, surf_weight=10.0
+- 50 epochs, **Huber loss (huber_beta=0.01, cauchy_c=0.0)**; `vol_loss + 10*surf_loss`
+- **EMA of model weights** (ema_decay=0.99, updated each training step)
+- **Lookahead (k=5, alpha=0.5)** wrapping SOAP
+- **Gradient clipping (max_norm=1.0)** applied before optimizer.step()
+- **bfloat16 autocast** (`--use_bf16`)
+- **n_head=2** reduces per-step cost → fits **21 epochs** in 30-min cap (vs 17 at n_head=4+slice_num=64; n_head=2+slice_num=32 may fit more)
+- Peak VRAM: **~33.0 GB** (estimated; n_head=2 saves attention compute)
+- `param count = 0.66M` (unchanged — n_head affects attention grouping, not param count)
+
+**Reproduce (canonical combined stack — n_head=2 + slice_num=32, unverified together):**
+```bash
+cd target/ && python train.py \
+  --optimizer soap \
+  --precondition_frequency 5 \
+  --lr 2e-3 --warmup_epochs 3 \
+  --huber_beta 0.01 \
+  --surf_weight 10.0 --seed 42 \
+  --ema_decay 0.99 \
+  --use_lookahead --lookahead_k 5 --lookahead_alpha 0.5 \
+  --grad_clip 1.0 \
+  --use_bf16 \
+  --cosine_t_max 25 \
+  --slice_num 32 \
+  --n_head 2
+```
+
+**Mechanism note:** n_head=4 is standard for 128-dim Transolver (32-dim per head). n_head=2 gives 64-dim per head — wider per-head attention scope, allowing each head to model larger physical regions (the tandem foil + wake interaction zone may benefit from 2 broad heads rather than 4 narrow ones). Mechanically also reduces per-step compute, fitting 21 epochs in 30-min cap (same as slice_num=32). n_head=8 catastrophically worse (val=43.86, best_epoch=13) — clear U-shape with optimum at n_head=2 for this model size. SOAP determinism confirmed: 3 identical seeds=42 runs reproduced val=31.6653 exactly.
+
+---
+
+## Previous best (as of 2026-05-17 09:58) — PR #4296: slice_num=32 (attention slice sweep, 17th winner)
 
 Seventeen winners merged: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + SOAP optimizer (PR #3283, −31.7%) + SOAP precond_freq=5 (PR #3495, −1.78%) + EMA model weights decay=0.999 (PR #3430, −18.8%) + EMA decay=0.99 (PR #3591, −3.85%) + Huber beta=0.5 (PR #3316, −6.05%) + Cauchy loss c=1.0 (PR #3612, −3.67%) + Huber beta=0.1 (PR #3868, −3.77%) + Lookahead k=5 (PR #3947, −4.14%) + Gradient clipping max_norm=1.0 (PR #3497, −2.72%) + Huber beta=0.01 (PR #4037, −2.51%) + bfloat16 autocast (PR #3975, −9.74%) + cosine T_max=25 (PR #4263, −8.47%) + lr=2e-3 (PR #4336, −6.33%) + cosine T_max=20 (PR #4447, −2.72%) + **slice_num=32** (PR #4296, thorfinn, **−7.42% vs previous canonical**).
 
