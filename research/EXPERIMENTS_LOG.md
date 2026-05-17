@@ -1,5 +1,38 @@
 # SENPAI Research Results
 
+## 2026-05-17 ~11:50 UTC — Round 43: Close #4469 (surf_weight null) + Assign #4595 (asinh_p_scale bracket)
+
+### Closed: PR #4469 (frieren) — surf_weight bracket (5, 20) on k=3 baseline ✗
+
+**Both arms regress significantly vs current baseline.**
+
+| Arm | surf_weight | val_avg | Δ vs n4 baseline | test_3split | Δ vs n4 baseline | W&B |
+|-----|-------------|---------|------------------|-------------|------------------|-----|
+| Baseline n4 (PR #4453) | 10 (default) | **50.119** | — | **50.210** | — | `uiy4eks9` |
+| Arm A | 20 (surface emphasis) | 52.220 | +4.19% | 52.761 | +5.08% | `i84tovws` |
+| Arm B | 5 (volume regularization) | 52.236 | +4.22% | 51.924 | +3.41% | `d1vchkvn` |
+
+**Key OOD-vs-in-dist finding (Arm B sw=5, per-split val)**:
+- val_single_in_dist: +8.16% (BIG regression in-distribution)
+- val_geom_camber_cruise: −1.18% (OOD WIN)
+- val_re_rand: −1.87% (OOD WIN)
+- test_geom_camber_rc: −1.68% (held-out WIN)
+
+**Decision**: Closed. **surf_weight axis FULLY CLOSED at default 10** on the k=3 stack. The OOD pattern in Arm B is real and consistent (camber_cruise and re_rand both improve), but the in-distribution cost is too high on equal-weighted val_avg. Capturing the OOD win would require per-sample/per-domain loss weighting — a code-change experiment, deferred.
+
+Notable observation: the asymmetric per-split regressions (Arm A best on test_geom_camber_rc, Arm B best on cruise/re_rand) hint that the loss-rebalancing axis interacts with split-specific physics, but the global scalar `surf_weight` is too coarse a knob to exploit this.
+
+### Assigned: PR #4595 (frieren) — asinh_p_scale bracket (0.5, 2.0) on n_layers=4
+
+Different target-side axis from surf_weight: `asinh_p_scale` controls the transition point of the asinh(p/scale) target-normalization, NOT the L1/L2 boundary of the Huber loss. Currently 1.0 (default). At less depth (n=4), the loss-curvature signal-to-noise ratio may have shifted from the default tuning baseline.
+
+- Arm A: asinh_p_scale=0.5 (more compression of small/medium pressures, less for outliers)
+- Arm B: asinh_p_scale=2.0 (less compression, more linear treatment of small/medium pressures)
+
+No code changes needed.
+
+---
+
 ## 2026-05-17 ~11:40 UTC — Round 42: Close #4490 (eps fine grid null — axis fully closed) + Assign #4585 (grad_clip bracket)
 
 ### Closed: PR #4490 (edward) — eps fine grid (3e-9, 3e-10, 1e-10) on eps=1e-9 baseline ✗

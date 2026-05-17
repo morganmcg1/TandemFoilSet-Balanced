@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-17 ~11:40 UTC
+- **Last updated:** 2026-05-17 ~11:50 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
 - **Most recent direction from human researcher team:** None (no open issues at 11:05 UTC)
 
@@ -63,11 +63,11 @@ Total improvement since raw seed: **−64.9%** on val.
 | **#4573** | **tanjiro** | n_head bracket (1, 4) on n_layers=4 — architecture axis | n_layers=4 baseline | Assigned R41 after closing #4491 (β1 null) |
 | **#4585** | **edward** | grad_clip bracket (2.0, 10.0) on n_layers=4 — dynamics axis | n_layers=4 baseline | NEW — Assigned R42 after closing #4490 (eps fine grid null) |
 | **#4534** | **nezuko** | Lookahead k=4 retest on eps=1e-9 (2 seeds) | eps=1e-9+n_layers=5 | WIP |
-| **#4469** | **frieren** | surf_weight bracket (5, 20) on k=3 baseline | old k=3 (pre-eps, n_layers=5) | WIP (now actively training, rate-limit cleared) |
+| **#4595** | **frieren** | asinh_p_scale bracket (0.5, 2.0) on n_layers=4 — target normalization | n_layers=4 baseline | NEW — Assigned R43 after closing #4469 (surf_weight null) |
 | **#4570** | **thorfinn** | lr bracket (3e-4, 7e-4) on n_layers=4 baseline | n_layers=4 baseline | lr axis untested on current config |
 | **#4569** | **fern** | T_max-matched cosine (epochs=20) + eta_min bracket | n_layers=4 baseline | Schedule-fix from #4400 T_max discovery |
 
-**Note on pre-n_layers=4 PRs**: #4534, #4469 were assigned against older baselines (val=50.17 or 51.31). They now need to beat **50.12** to merge. Most will still provide axis characterization even if they don't clear the new bar.
+**Note on pre-n_layers=4 PRs**: #4534 was assigned against older baselines (val=50.17). It now needs to beat **50.12** to merge. Most will still provide axis characterization even if they don't clear the new bar.
 
 ## Recent closures (rounds 40–41)
 
@@ -79,6 +79,7 @@ Total improvement since raw seed: **−64.9%** on val.
 | ✗ **#4404** | **thorfinn** | **mlp_ratio bracket (1.0, 1.667)** | **54.54 mean** | ✗ **Closed — throughput noise dominates; best run 50.06 is cherry-pick. FFN-width axis CLOSED at 1.333.** |
 | ✗ **#4491** | **tanjiro** | **β1 bracket (0.85, 0.95) on eps=1e-9 stack** | **51.10 (best arm)** | ✗ **Closed R41 — both arms regress. β1-axis CLOSED at default 0.9 on full stack. Architecture axis (n_head) assigned as #4573.** |
 | ✗ **#4490** | **edward** | **eps fine grid (3e-9, 3e-10, 1e-10) on eps=1e-9 stack** | **50.73 (best arm B)** | ✗ **Closed R42 — eps=1e-9 is a SHARP PEAK, not a transition. bf16 cliff falsified at 1e-10. val-test decorrelate (Arm B best val/worst test). eps-axis FULLY CLOSED at 1e-9. Dynamics axis (grad_clip) assigned as #4585.** |
+| ✗ **#4469** | **frieren** | **surf_weight bracket (5, 20) on k=3 baseline** | **52.22/52.24** | ✗ **Closed R43 — both arms regress ~4% vs current baseline. Notable OOD-vs-in-dist tradeoff in Arm B (sw=5): cruise −1.18%, re_rand −1.87%, in_dist +8.16%. surf_weight axis CLOSED at default 10. Target-normalization axis (asinh_p_scale) assigned as #4595.** |
 
 ## Prior closures (rounds 37/32)
 
