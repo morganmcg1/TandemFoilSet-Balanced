@@ -1,5 +1,38 @@
 # SENPAI Research Results
 
+## 2026-05-17 ~05:30 UTC — Round 25: Close #4313 (n_hidden=192 regression) + 1 new assignment (#4387 frieren slice_num bracket on k=3)
+
+### Closed: PR #4313 (frieren) — n_hidden=192 model capacity on Lookahead+β2=0.95
+
+Run `yrlpex4r`: val=60.2443, test=58.6437. Clear regression vs NEW k=3 baseline (51.31/51.89): **+17.4% val WORSE, +13.0% test WORSE.** A prior identical-config run `t6oirjhc` confirmed (val=59.10, test=58.34 — same conclusion).
+
+| Metric | n_hidden=192 (this) | k=3 baseline (#4266) | Δ |
+|---|---|---|---|
+| val_avg | 60.244 | 51.307 | +17.4% WORSE |
+| test_3split | 58.644 | 51.886 | +13.0% WORSE |
+| epoch time | ~160s | ~80s | +100% |
+| epochs in budget | 12 | 22 | −45% |
+| model params | 1.56M | 0.70M | +123% |
+| peak GPU GB | 53.6 | ~36 | well within cap |
+
+**Key mechanism (frieren's analysis confirmed)**: This is a **compute-budget regression, NOT a representation failure**. The 2.23× param count doubles epoch time; only 12 epochs complete vs ~22 at baseline. Loss curve was still on steep descent at cutoff (slope −0.64/epoch at epoch 11) — the model needed ~20 more epochs to converge. **Memory is fine (53.6 GB vs 97 GB cap) — the ceiling is wall-clock, not VRAM.**
+
+**Critical finding for paper axis**: val_geom_camber_rc WORSENED (74.69 vs 63.85 baseline = +16.9%) under n_hidden=192. This **refutes the capacity hypothesis** for the dominant residual: camber_rc is **compute-budget-limited, NOT representation-capacity-limited** at n_hidden=128. Larger models would need 2× the training time to compete.
+
+**Capacity axis CLOSED upward** at 30-min budget for n_hidden ∈ {128, 192} — all values ≥ 192 will regress unless wall-clock budget grows. Better-leverage camber_rc interventions: data-side (fern #4347 mixup) or architecture-level (different attention mechanism, not just wider hidden dims).
+
+### New assignment: PR #4387 (frieren) — slice_num bracket (4, 12) on new k=3 baseline
+
+**Hypothesis**: `slice_num` controls attention-slice granularity for physics-aware attention. Current stack optimised at slice=8 on OLD Lookahead+β2=0.95 baseline. With k=3's 67% higher slow-weight update frequency, the geometry-resolution axis under k=3 dynamics is completely untested. Known: slice=16 anti-compounds on camber_rc under Lookahead+β2=0.95 (closed PR #4283). But slice=4 (finer, never tested under Lookahead) and slice=12 (intermediate, never tested) remain open.
+
+Two arms, no code change needed:
+- **slice=4**: finer geometry resolution, possibly faster epochs (less attention compute)
+- **slice=12**: intermediate between proven 8 and broken 16; tests whether 16's failure generalises
+
+Key diagnostic: whether val_geom_camber_rc (currently 63.85 — the dominant residual) responds to slice granularity changes. If camber_rc improves at slice=4, finer geometric partitioning helps high-curvature extrapolation. If both arms regress, the slice axis is orthogonal to the camber_rc residual (which would point firmly toward data-side interventions as the only remaining lever on camber_rc).
+
+---
+
 ## 2026-05-17 ~04:50 UTC — Round 24: MERGE #4266 (k=3) + Close #4334 (LR warmup) + 2 new assignments (#4369 alphonse k=3+β2, #4370 tanjiro k=2+k=4)
 
 ### MERGED: PR #4266 (alphonse) — Lookahead k=3 (β2=0.999) — NEW BASELINE val=51.31/test=51.89
