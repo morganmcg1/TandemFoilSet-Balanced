@@ -1579,3 +1579,35 @@ Per-split test (arm2 winner):
 - Branch: `willowpai2i48h3-nezuko/dropout-sweep`
 - Hypothesis: Dropout (orthogonal regularization to wd) may avoid val/test divergence that bit wd sweep. wd compresses weight magnitudes uniformly; dropout forces feature redundancy. Common Transformer dropout (0.05-0.1) gentle enough to not hurt 17-epoch budget.
 - 2 arms: dropout ∈ {0.05, 0.1}. Requires small code change: add `dropout: float = 0.0` to Config dataclass and thread `dropout=cfg.dropout` through `model_config` in train.py. Transolver already supports the arg.
+
+## 2026-05-17 07:00 — PR #4388 (tanjiro): LR push above 2e-3 on T_max=25 canonical {2.5e-3, 3e-3} — **CLOSED**
+
+- Branch: `willowpai2i48h3-tanjiro/lr-push-cosine-t25`
+- W&B runs: `7tjrycyh` (arm1 lr=2.5e-3), `9la23qr4` (arm2 lr=3e-3)
+- Hypothesis: lr=2e-3 (15th-winner canonical) is not yet the LR ceiling — push to {2.5e-3, 3e-3} since the cosine cooldown should still safely handle higher peak LRs.
+
+**Result (vs lr=2e-3 canonical val=35.5322, test=37.1052):**
+
+| Arm | lr | val_avg/mae_surf_p | Δ val | test_excl_cruise | Δ test | best_epoch |
+|---|---|---|---|---|---|---|
+| canonical (ref) | 2e-3 | 35.5322 | — | 37.1052 | — | 17 |
+| 1 | 2.5e-3 | 36.5618 | **+2.90%** | 37.4385 | **+0.90%** | 17 |
+| 2 | 3e-3 | 35.9325 | +1.13% | 37.1013 | −0.01% (~tied) | 17 |
+
+Per-split test (arm2, lr=3e-3): test_single_in_dist=38.2106, test_geom_camber_rc=43.7665, test_re_rand=29.3268. All within ±1.7 hardware drift band of baseline.
+
+**Stability check (advisor's monitoring request):**
+- pre-clip grad_norm: arm1 mean=93.22, arm2 mean=83.91 — arm2 lower than arm1, ruling out SOAP preconditioner breakdown.
+- Every step is clipped at norm=1.0 (typical norms 70-90); this is the dominant control regardless of LR.
+- No NaN/Inf, no divergence, both ran to 30-min wall-clock cap.
+
+**Analysis:** Plateau between ~2e-3 and ~3e-3. Val non-monotonic (1e-3 → 1.5e-3 → 2e-3 → 2.5e-3 → 3e-3 = 37.94 → 36.44 → 35.53 → 36.56 → 35.93) — lr=2e-3 sits at or near the local optimum at T_max=25. test_excl_cruise on arm2 (3e-3) is essentially tied with baseline (37.10 vs 37.11) — not a clear improvement.
+
+**Decision: CLOSED.** lr=2e-3 confirmed as the ceiling **at T_max=25**. The compounding insight from PR #4336's win (T_max=50→25 lifted LR ceiling 1e-3→2e-3) suggests the LR ceiling is T_max-dependent. Re-assigning tanjiro to **T_max finer sweep** (#4447) at canonical lr=2e-3 to test whether smaller T_max (closer to best_epoch=17) compresses further.
+
+## 2026-05-17 07:00 — Assignment: #4447 tanjiro cosine-tmax-finer
+
+- Branch: `willowpai2i48h3-tanjiro/cosine-tmax-finer`
+- Hypothesis: best_epoch=17 has been invariant across all canonical runs (30-min wall-clock cap binds there). T_max=25 leaves 30% of cosine cooldown unrealized at best_epoch (LR still at 23% of peak). Smaller T_max should yield more aggressive cooldown at the model's natural stopping point.
+- 2 arms: cosine_t_max ∈ {17, 20} at canonical lr=2e-3, all else unchanged.
+- Decision rule: if either beats baseline val=35.5322, merge as 16th winner; expect downstream re-tune of LR after T_max settles.
