@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import copy
+import math
 import os
 import subprocess
 import time
@@ -333,6 +334,68 @@ class Lookahead(torch.optim.Optimizer):
 
 
 # ---------------------------------------------------------------------------
+# Physics-consistent AoA rotation augmentation (data, not model)
+# ---------------------------------------------------------------------------
+
+def apply_aoa_rotation_batch(
+    x: torch.Tensor, y: torch.Tensor, mask: torch.Tensor, max_deg: float
+):
+    """Rotate node positions + velocity targets by R(θ) and shift AoA scalars by −θ.
+
+    Per-sample θ ~ Uniform(-max_deg, +max_deg). Matches advisor's PR pseudocode:
+    rot = [[c, -s], [s, c]] applied as ``pos @ rot.T`` (CCW by θ on column vec).
+    AoA1 (x[..., 14]) always shifts; AoA2 (x[..., 18]) shifts only for tandem
+    samples (detected by any nonzero NACA2 feature, dims 19..21).  Pressure
+    (y[..., 2]) and the rotation-derived geom features (saf, dsdf at dims 2..11)
+    are left unchanged; at ±5° the dsdf/saf inconsistency is O(θ) and tolerable.
+
+    Args
+        x: [B, N, 24] pre-normalization input features
+        y: [B, N, 3]  pre-normalization targets (Ux, Uy, p)
+        mask: [B, N]  True for real nodes; padding restored to original zeros
+        max_deg: max augmentation angle (degrees); 0 → no-op (still uses θ=0
+            samples so identity check is exercised)
+
+    Returns
+        (x_aug, y_aug, theta_deg)  where theta_deg is [B] (sampled per sample).
+    """
+    B = x.shape[0]
+    theta_deg = (torch.rand(B, device=x.device) * 2.0 - 1.0) * max_deg  # [B]
+    theta_rad = theta_deg * (math.pi / 180.0)  # [B]
+    c = torch.cos(theta_rad).view(B, 1)
+    s = torch.sin(theta_rad).view(B, 1)
+
+    # pos @ rot.T with rot = [[c, -s], [s, c]] expands to (c·px - s·py, s·px + c·py)
+    px, py = x[..., 0], x[..., 1]
+    ux, uy = y[..., 0], y[..., 1]
+    new_px = c * px - s * py
+    new_py = s * px + c * py
+    new_ux = c * ux - s * uy
+    new_uy = s * ux + c * uy
+
+    x_new = x.clone()
+    y_new = y.clone()
+    x_new[..., 0] = new_px
+    x_new[..., 1] = new_py
+    x_new[..., 14] = x[..., 14] - theta_rad.view(B, 1)
+    # AoA2 only for tandem samples (NACA2 features are exactly 0 for single-foil)
+    is_tandem_per_node = (x[..., 19:22] != 0).any(dim=-1)
+    x_new[..., 18] = torch.where(
+        is_tandem_per_node, x[..., 18] - theta_rad.view(B, 1), x[..., 18]
+    )
+    y_new[..., 0] = new_ux
+    y_new[..., 1] = new_uy
+
+    # Restore zero-padded entries — pad_collate fills padding with zeros across
+    # all channels; rotation maps (0,0)→(0,0) but the AoA shift would leak −θ
+    # into padded x[..., 14] and x[..., 18]. Use the mask to undo that.
+    m = mask.unsqueeze(-1)
+    x_new = torch.where(m, x_new, x)
+    y_new = torch.where(m, y_new, y)
+    return x_new, y_new, theta_deg
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
@@ -530,6 +593,7 @@ class Config:
     use_lookahead: bool = False  # wrap AdamW with Lookahead (Zhang et al. 2019)
     lookahead_k: int = 5  # Lookahead inner steps before slow-weights sync
     lookahead_alpha: float = 0.5  # Lookahead slow-weights interpolation factor
+    aoa_rot_aug_deg: float = 0.0  # physics-consistent AoA rotation aug max angle (deg); 0 disables
 
 
 cfg = sp.parse(Config)
@@ -634,6 +698,7 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
+aoa_aug_diag_logged = False
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -650,6 +715,42 @@ for epoch in range(MAX_EPOCHS):
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        aoa_aug_diag: dict = {}
+        if cfg.aoa_rot_aug_deg > 0:
+            log_diag = not aoa_aug_diag_logged
+            if log_diag:
+                with torch.no_grad():
+                    aoa1_before = x[..., 14][mask]
+                    aoa_aug_diag["debug/aoa_mean_before"] = aoa1_before.mean().item()
+                    aoa_aug_diag["debug/aoa_std_before"] = aoa1_before.std(unbiased=False).item()
+                # Identity check: theta=0 must return identical tensors.
+                x_chk, y_chk, _ = apply_aoa_rotation_batch(x, y, mask, 0.0)
+                x_diff = (x_chk - x).abs().max().item()
+                y_diff = (y_chk - y).abs().max().item()
+                assert x_diff < 1e-6 and y_diff < 1e-6, (
+                    f"[AOA-AUG] θ=0 identity check failed: x_max_diff={x_diff:.2e}, "
+                    f"y_max_diff={y_diff:.2e}"
+                )
+                print(f"[AOA-AUG] Identity check passed (x_max_diff={x_diff:.2e}, "
+                      f"y_max_diff={y_diff:.2e}).")
+            x, y, theta_deg_used = apply_aoa_rotation_batch(x, y, mask, cfg.aoa_rot_aug_deg)
+            if log_diag:
+                with torch.no_grad():
+                    aoa1_after = x[..., 14][mask]
+                    aoa_aug_diag["debug/aoa_mean_after"] = aoa1_after.mean().item()
+                    aoa_aug_diag["debug/aoa_std_after"] = aoa1_after.std(unbiased=False).item()
+                    aoa_aug_diag["debug/aoa_rot_theta_min_deg"] = theta_deg_used.min().item()
+                    aoa_aug_diag["debug/aoa_rot_theta_max_deg"] = theta_deg_used.max().item()
+                print(
+                    f"[AOA-AUG] AoA1 mean/std before=({aoa_aug_diag['debug/aoa_mean_before']:.4f},"
+                    f"{aoa_aug_diag['debug/aoa_std_before']:.4f}) "
+                    f"after=({aoa_aug_diag['debug/aoa_mean_after']:.4f},"
+                    f"{aoa_aug_diag['debug/aoa_std_after']:.4f}) "
+                    f"θ_deg∈[{aoa_aug_diag['debug/aoa_rot_theta_min_deg']:.3f},"
+                    f"{aoa_aug_diag['debug/aoa_rot_theta_max_deg']:.3f}]"
+                )
+                aoa_aug_diag_logged = True
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
@@ -697,6 +798,8 @@ for epoch in range(MAX_EPOCHS):
         step_log = {"train/loss": loss.item(), "global_step": global_step}
         if grad_norm_preclip is not None:
             step_log["train/grad_norm_preclip"] = grad_norm_preclip
+        if aoa_aug_diag:
+            step_log.update(aoa_aug_diag)
         wandb.log(step_log)
 
         epoch_vol += vol_loss.item()
