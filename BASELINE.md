@@ -5,7 +5,63 @@ Primary metric: `val_avg/mae_surf_p` (lower is better)
 
 ---
 
-## 2026-05-17 04:30 — PR #4269: Lookahead-Lion α=0.7 at k=5 ← NEW PROGRAMME ALL-TIME BEST
+## 2026-05-17 08:00 — PR #4373: Lookahead-Lion α=0.7 + Lion β2=0.995 ← NEW PROGRAMME ALL-TIME BEST
+
+- **Student:** willowpai2i48h1-fern
+- **Branch:** `willowpai2i48h1-fern/lookahead-lion-b2-0995-alpha07`
+- **W&B run:** `3k6hob38`
+- **Epochs:** 17/17 (best at epoch 17, cosine LR→0)
+- **Config:** Lookahead(k=5, α=0.7) wrapping Lion(lr=cfg.lr/3, betas=(0.9, **0.995**), wd=1e-4) + GeGLU FFN + T_max=17, seed=0
+
+### Validation metrics (best checkpoint, epoch 17)
+
+| Metric | Value | Δ vs prior best (#4269 β2=0.99) |
+|--------|-------|-------------------------------|
+| **val_avg/mae_surf_p** | **46.8383** ← NEW ALL-TIME BEST | **−0.7510** |
+
+### Test metrics (best checkpoint, all 4 splits valid)
+
+| Split | mae_surf_p | Δ vs #4269 |
+|-------|-----------|------------|
+| test_single_in_dist | 44.3389 | −2.1697 |
+| test_geom_camber_rc | 55.1547 | −0.8143 |
+| test_geom_camber_cruise | 42.0024 | −0.3967 |
+| test_re_rand | 39.7823 | +0.6199 |
+| **test_avg/mae_surf_p** | **45.3196** | **−0.6902** |
+
+- **Δ vs prior best (#4269 val=47.5894 / test=46.0098):** val −0.751, test −0.690
+- **Peak VRAM:** 35.86 GB | **Wall time:** 31.1 min
+
+### β2 frontier — fully resolved (bowl at 0.995, narrow)
+
+| β2 | val_avg | Status |
+|---|---|---|
+| 0.95 | 54.62 | catastrophic (#4264 closed) |
+| 0.99 (default) | 47.5894 | prior baseline (#4269) |
+| **0.995 (THIS PR WINNER)** | **46.8383** | NEW BEST |
+| 0.999 | 52.79 | catastrophic (#4356 closed) |
+
+**β2 has a narrow bowl around 0.995** — NOT a monotone toward 1.0. m-buffer half-life at β2=0.995 ≈ 138 steps (vs ~69 at β2=0.99, ~692 at β2=0.999). Sweet spot lies in the regime where m-buffer smoothing is "within-basin" but does not span the entire training run.
+
+### Mechanism summary
+
+Composed with the prior winner (α=0.7 at k=5, PR #4269), the longer m-buffer half-life (138 steps) lets the slow-weight basin-averaging absorb each Lookahead sync more gracefully. This is the **first compound winner**: α=0.7 + β2=0.995 stack on top of the prior baseline. test_single_in_dist gains −2.17 (largest improvement); test_re_rand regresses +0.62 (mild generalization tradeoff to monitor).
+
+### Reproduce
+
+```bash
+cd target/ && python train.py \
+  --agent willowpai2i48h1-fern \
+  --wandb_name "willowpai2i48h1-fern/lookahead_lion_b2_0995_a07_seed0" \
+  --wandb_group lookahead_lion_b2_high \
+  --use_lion --use_geglu --seed 0 \
+  --lookahead_alpha 0.7 \
+  --lion_b2 0.995
+```
+
+---
+
+## 2026-05-17 04:30 — PR #4269: Lookahead-Lion α=0.7 at k=5 ← SUPERSEDED BY #4373
 
 - **Student:** willowpai2i48h1-askeladd
 - **Branch:** `willowpai2i48h1-askeladd/lookahead-lion-alpha-sweep`
