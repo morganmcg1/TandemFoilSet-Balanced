@@ -1,21 +1,21 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 ~23:55 UTC
+- **Last updated:** 2026-05-17 ~00:20 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
 
 ## Current baseline
 
-**val_avg/mae_surf_p = 50.9008, test_avg/mae_surf_p = 43.8989** — from PR #4082 (fern, **n_hidden=176 + bf16 + epochs=18**), merged 2026-05-16 ~19:32 UTC. See `BASELINE.md` for full details.
+**val_avg/mae_surf_p = 48.8400, test_avg/mae_surf_p = 42.5895** — from PR #4106 (fern, **n_hidden=192 + bf16 + epochs=20**), merged 2026-05-17 ~00:05 UTC. See `BASELINE.md` for full details.
 
-Per-split test (mgu3m5v2): single_in_dist=48.97, geom_camber_rc=55.45, geom_camber_cruise=28.27, re_rand=42.91.
+Per-split test (or5uq1id): single_in_dist=46.41, geom_camber_rc=55.51, geom_camber_cruise=27.14, re_rand=41.30.
 
-ALL four test splits improve vs #3981. Largest gain: single_in_dist (54.72→48.97, −10.5%). Val curve still descending at ep18 cut (ep17=52.28, ep18=50.90, Δ=−1.38).
+**Mild-overfitting hypothesis refuted at ep20:** the OOD splits that regressed at ep18 (rc/cruise/re_rand) now improve or hold flat at ep20. The wider model was compute-starved, not overfitting. **geom_camber_rc remains the structural hard split** (~55 across all variants tested) — moving it requires something other than width/budget.
 
-**Width frontier finding:** n_hidden=160 → 176 (+18% params) wins +5.4% val / +7.1% test on the bf16+ep18 stack. The earlier n_hidden=176 regress (on mlp_ratio=3+fp32+ep12) was a joint budget+capacity artifact — bf16 unlocked it. Peak VRAM at n_hidden=176 was 44.6 GB; ~50 GB headroom remains.
+**Width+epochs frontier finding:** n_hidden=176/ep18 → 192/ep20 (+18% params, +2 epochs) wins +4.05% val / +2.98% test. Val curve still descending but decelerating at ep20 (−0.97% in final epoch). Peak VRAM at n_hidden=192 was 47.6 GB; ~50 GB headroom remains. **Width frontier still unsaturated; ep20 nearly converged.**
 
-New reproduce command: `cd target/ && SENPAI_TIMEOUT_MINUTES=45 python train.py --n_hidden 176 --epochs 18 --use_bf16`
+New reproduce command: `cd target/ && SENPAI_TIMEOUT_MINUTES=50 python train.py --n_hidden 192 --epochs 20 --use_bf16`
 
 Baseline progression (val_avg/mae_surf_p):
 - #3091: 109.42 (warmup + clip + lr=1e-3, MSE)
@@ -30,7 +30,8 @@ Baseline progression (val_avg/mae_surf_p):
 - #4002: 57.35 (SwiGLU + mlp_ratio=3 + epochs=14, −2.80% vs #3908)
 - #3969: 56.44 (SwiGLU + mlp_ratio=2 + epochs=14, −1.60% vs #4002; inner_dim=216)
 - #3981: 53.82 (bf16 mixed-precision + epochs=18 cut at ep16; ALL 4 test splits improve; 1.47× speedup)
-- **#4082: 50.90 (n_hidden=176 + bf16 + epochs=18; +18% params over #3981; ALL 4 splits improve; curve still descending) ← CURRENT**
+- #4082: 50.90 (n_hidden=176 + bf16 + epochs=18; +18% params over #3981; ALL 4 splits improve; curve still descending)
+- **#4106: 48.84 (n_hidden=192 + bf16 + epochs=20; +18% params over #4082, +2 epochs; ALL 4 splits improve or flat; curve decelerating at ep20) ← CURRENT**
 
 ## Winning stack (all additive, all merged)
 
@@ -47,9 +48,10 @@ Baseline progression (val_avg/mae_surf_p):
 | **SwiGLU + mlp_ratio=3 + epochs=14** | **#4002** | **−2.80%** | Even longer training on wider model; best_epoch=14/14; still descending |
 | **SwiGLU + mlp_ratio=2 + epochs=14** | **#3969** | **−1.60%** | Narrower model (inner_dim=216) with longer training beats wider (inner_dim=320) |
 | **bf16 + epochs=18 (cut at ep16)** | **#3981** | **−4.64%** | bf16 autocast unlocks 1.47× speedup; same wall clock budget → 50% more epochs; ALL 4 test splits improve |
-| **n_hidden=176 + bf16 + epochs=18** | **#4082** | **−5.43%** | +18% params (1.035M→1.23M); ALL 4 splits improve; curve still descending at ep18; 44.6 GB peak VRAM (50 GB headroom); CURRENT BEST |
+| **n_hidden=176 + bf16 + epochs=18** | **#4082** | **−5.43%** | +18% params (1.035M→1.23M); ALL 4 splits improve; curve still descending at ep18; 44.6 GB peak VRAM (50 GB headroom) |
+| **n_hidden=192 + bf16 + epochs=20** | **#4106** | **−4.05%** | +18% params (1.23M→1.47M), +2 epochs; ALL 4 splits improve or flat; mild-overfit-hypothesis from ep18 retest refuted; geom_camber_rc remains structural hard split; 47.6 GB peak VRAM; CURRENT BEST |
 
-**Total improvement from baseline:** 109.42 → 50.90 (−53.5%)
+**Total improvement from baseline:** 109.42 → 48.84 (−55.4%)
 
 ## Critical mlp_ratio finding
 
@@ -71,35 +73,37 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 4. **Fourier PE num_freq=4 is the default** — confirmed sweet spot.
 5. **coord_noise_std=0.01 is the default** (merged in #3632).
 6. **lr=5e-4 is the default** — lr=1e-3 + coord noise regressed in 3-seed test (#3690).
-7. **--epochs 18 + --use_bf16 + --n_hidden 176** is the new default training recipe (post-#4082). Val curve still descending at ep18 — more epochs likely helps.
+7. **--epochs 20 + --use_bf16 + --n_hidden 192** is the new default training recipe (post-#4106). Val curve still descending but decelerating at ep20 — width frontier unsaturated; ep20 nearly converged.
 8. **Grad clip max_norm=1.0**, warmup 2 epochs, batch=4.
 9. **SwiGLU key detail:** `mlp2` (output head) is left as standard MLP; only `self.mlp` in TransolverBlock is replaced. inner_dim=216 for mlp_ratio=2; 320 for mlp_ratio=3.
 10. **mlp_ratio=2 beats mlp_ratio=3 at epochs=14** — narrower model wins; default is mlp_ratio=2.
 11. **DSDF distribution finding (nezuko #3836):** normalized DSDF max abs=2.88 → clip=3.0 is a no-op. Clip=2.0 or 2.5 would actually touch 0.33-1.37% of values.
 
-## Active in-flight PRs (status as of ~19:45 UTC)
+## Active in-flight PRs (status as of ~00:20 UTC 2026-05-17)
 
-### Round-8 active (assigned 19:35–22:45 UTC, all on bf16 stack)
+### Round-8 active (all WIP)
 | # | Student | Hypothesis | State |
 |---|---|---|---|
-| **#4106** | fern | Push wider: n_hidden=192 + bf16 + ep18 → **sent back for ep20 retest** | WIP (sent back ~22:55; val=50.92 borderline, curve still descending −1.93%/ep at cut, single_in_dist −3.6% wins but OOD splits slight regress) |
-| **#4129** | askeladd | AdamW beta2 sweep (0.95, 0.98) on n_hidden=176+bf16+ep18 | WIP — started training 22:30 |
-| **#4165** | alphonse | slice_num=48 retest (other side of curve) | WIP |
-| **#4178** | thorfinn | EMA of weights (decay=0.999) for val/test eval | WIP |
-| **#4187** | frieren | Pressure-magnitude weighted L1 loss (top-decile \|p_true\|, alpha=1.0) → **CLOSED 23:45** (val=53.17 +4.5%, all OOD splits regress) |
+| **#4129** | askeladd | AdamW beta2 sweep (0.95, 0.98) on n_hidden=176+bf16+ep18 | WIP — actively training (99% GPU) |
+| **#4165** | alphonse | slice_num=48 retest (other side of curve) | WIP — actively training (99% GPU) |
+| **#4178** | thorfinn | EMA of weights (decay=0.999) for val/test eval | WIP — actively training |
+| **#4205** | edward | RMSNorm swap for LayerNorm on n_hidden=176+bf16+ep18 baseline | WIP (assigned 23:15) |
 | **#4227** | frieren | AdaBelief optimizer swap for AdamW on n_hidden=176+bf16+ep18 baseline | WIP (assigned 23:55) |
-| **#4190** | tanjiro | Capacity-vs-epochs at 30-min budget: n_hidden=144 + bf16 + ep18 | WIP (assigned 22:45) |
+| **#4043** | nezuko | AdamW weight_decay sweep + eta_min (pivoted to ep14 for 30-min cap, 3 arms) | WIP (redirected 23:30) |
+| **#4232** | fern | Push width frontier further: n_hidden=208 + bf16 + ep18 | WIP (assigned 00:15) |
+| **#4233** | tanjiro | AGC (Adaptive Gradient Clipping) screening at nh=176+bf16+ep14 (30-min cap) | WIP (assigned 00:20) |
 
-### Round-7 still in-flight (assigned earlier, results pending)
-| # | Student | Hypothesis | State |
-|---|---|---|---|
-| **#4205** | edward | RMSNorm swap for LayerNorm on n_hidden=176+bf16+ep18 baseline (round-8) | WIP — assigned 23:15 after #4039 closed |
-| **#4043** | nezuko | AdamW weight_decay sweep + eta_min | WIP (redirected 20:08 to new baseline stack) |
+**Note:** All in-flight nh=176+ep18 experiments (#4129, #4165, #4178, #4205, #4227) were assigned against the prior baseline #4082 (val=50.90). Since #4106 merged as new baseline (val=48.84), the decision criteria when their results post will be:
+- **Merge** if result beats new baseline (val < 48.84 AND test < 42.59) — direct best-update
+- **Send back** for stack-with-width test if result beats #4082 (val < 50.90) but not new baseline — promote to nh=192+ep20 stack test
+- **Close** if result regresses vs #4082 (val ≥ 52)
 
-### Round-7/8 results (resolved 19:30–20:35 UTC)
+### Round-7/8 results (resolved 19:30 UTC – 00:10 UTC)
 | # | Student | Hypothesis | Outcome |
 |---|---|---|---|
-| **#4082** | fern | n_hidden=176 + bf16 + ep18 | **MERGED ~19:32** → new baseline val=50.90 / test=43.90 |
+| **#4106** | fern | n_hidden=192 + bf16 + ep20 retest | **MERGED ~00:05 UTC** → new baseline val=48.84 / test=42.59; ALL 4 splits improve or flat; mild-overfit-hypothesis from ep18 refuted |
+| **#4190** | tanjiro | Capacity-vs-epochs at 30-min budget: n_hidden=144 + bf16 + ep18 | **CLOSED ~00:10 UTC** (val=57.05 +12.1%, all 4 splits regress +4.81 to +6.25; capacity dominates at 30-min budget; nh<176 not viable for 30-min pods; throughput 116.9 s/ep vs 95-105 prediction) |
+| **#4082** | fern | n_hidden=176 + bf16 + ep18 | **MERGED ~19:32** → prev baseline val=50.90 / test=43.90 |
 | **#4054** | thorfinn | mlp_ratio=3 + bf16 + ep18 | CLOSED — disconfirmed; mlp_ratio=2 wins on bf16 too (val=56.49) |
 | **#4047** | tanjiro | ep16/18 fp32 probe | CLOSED — under-trained; moot under bf16 (val=76.04) |
 | **#4042** | frieren | Curvature-weighted surface loss | CLOSED — real within-arm signal but absolute regress; retest assigned (#4110) |
@@ -156,9 +160,11 @@ Normalized DSDF (dims 4-11) across 100 train files / 108M values:
 | **#4165** | alphonse | slice_num=48 retest (other side of curve) | `--slice_num 48 --n_hidden 176 --use_bf16 --epochs 18` (no T override) | WIP |
 | **#4178** | thorfinn | EMA of weights for val/test eval (decay=0.999) | `--n_hidden 176 --use_bf16 --epochs 18 --use_ema --ema_decay 0.999` | WIP |
 | **#4187** | frieren | Pressure-magnitude weighted L1 (top-decile \|p_true\|) | `--use_pmag_weight --pmag_weight_alpha 1.0 --pmag_weight_quantile 0.90 --n_hidden 176 --use_bf16 --epochs 18`, T=45 | WIP (new) |
-| **#4190** | tanjiro | n_hidden=144 + bf16 + ep18 (capacity-vs-epochs at 30-min budget) | `--n_hidden 144 --use_bf16 --epochs 18` (no T override) | WIP (new) |
-| **#4205** | edward | RMSNorm swap for LayerNorm on n_hidden=176+bf16+ep18 baseline | `--use_rmsnorm --n_hidden 176 --use_bf16 --epochs 18` (no T override) | WIP (new) |
-| **#4227** | frieren | AdaBelief optimizer swap for AdamW on n_hidden=176+bf16+ep18 baseline | `--optimizer adabelief --n_hidden 176 --use_bf16 --epochs 18` (no T override) | WIP (new) |
+| #4190 | tanjiro | n_hidden=144 + bf16 + ep18 (capacity-vs-epochs at 30-min budget) | `--n_hidden 144 --use_bf16 --epochs 18` (no T override) | **CLOSED 00:10** (val=57.05; capacity dominates schedule completion at 30-min budget) |
+| **#4205** | edward | RMSNorm swap for LayerNorm on n_hidden=176+bf16+ep18 baseline | `--use_rmsnorm --n_hidden 176 --use_bf16 --epochs 18` (no T override) | WIP |
+| **#4227** | frieren | AdaBelief optimizer swap for AdamW on n_hidden=176+bf16+ep18 baseline | `--optimizer adabelief --n_hidden 176 --use_bf16 --epochs 18` (no T override) | WIP |
+| **#4232** | fern | Push width frontier: n_hidden=208 + bf16 + ep18 | `--n_hidden 208 --use_bf16 --epochs 18` (no T override) | WIP (new) |
+| **#4233** | tanjiro | AGC (Adaptive Gradient Clipping) screening at nh=176+bf16+ep14 | `--use_agc --agc_clip_factor 0.01 --n_hidden 176 --use_bf16 --epochs 14` (no T override) | WIP (new — 30-min budget screening) |
 
 **Note on env timeout (important):** Pod env caps vary. Alphonse and tanjiro pods enforce 30-min hard wall (per #4108, #4111 student flags). Fern and thorfinn pods run 39+ min fine. Future assignments to alphonse/tanjiro must be designed for ≤30-min wall. Instructions to these students should NOT include `SENPAI_TIMEOUT_MINUTES` override since isolation rules prohibit it. Nezuko, askeladd, frieren, edward: budget unknown — assume 30 min unless evidence otherwise.
 

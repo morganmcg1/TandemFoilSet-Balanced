@@ -1,5 +1,114 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-17 00:20 — PR #4106 MERGED (new baseline) + #4190 CLOSED + #4232/#4233 assigned
+
+### #4106 fern Push wider: n_hidden=192 + bf16 + ep20 retest — **MERGED** (new baseline val=48.84/test=42.59)
+
+- **Student:** willowpai2i48h4-fern (branch: `willowpai2i48h4-fern/fern-nhidden192-bf16-ep18`)
+- **Hypothesis (v2 retest):** n_hidden=192 was compute-starved at ep18 (val=50.92 borderline in v1). Push to ep20 to give the wider model fair cosine completion.
+
+#### Results (vs prior baseline #4082)
+
+| Metric | New baseline #4106 (nh=192, ep20) | Prior #4082 (nh=176, ep18) | Δ |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | **48.8400** | 50.9008 | **−4.05%** |
+| **test_avg/mae_surf_p** | **42.5895** | 43.8989 | **−2.98%** |
+| best_epoch | 20/20 | 18/18 | — |
+| total_train_minutes | 43.6 | 39.0 | +4.6 |
+| Peak GPU memory | 47.6 GB | 44.6 GB | +3.0 GB |
+| Params | 1.47M | 1.23M | +18% |
+
+| Split | New #4106 | Prior #4082 | Δ |
+|---|---:|---:|---:|
+| single_in_dist | 46.4089 | 48.97 | **−5.24%** |
+| geom_camber_rc | 55.5071 | 55.45 | +0.10% (flat) |
+| geom_camber_cruise | 27.1443 | 28.27 | **−3.99%** |
+| re_rand | 41.2976 | 42.91 | **−3.76%** |
+
+- **W&B run:** `or5uq1id` (group `willow-r8-width-push`)
+- **Val trajectory last 5 ep:** ep16=54.92, ep17=55.18, ep18=50.67, ep19=49.32, ep20=48.84. Δ ep19→ep20=−0.97% (vs ep18→ep19=−2.67%) — **curve still descending but decelerating** at cut.
+
+#### Decision per criteria
+- **Merge** if val < 50.9008 AND test < 43.8989 → ✅ both met (val −4.05%, test −2.98%)
+- **Send back** if 50.9 ≤ val < 51.5 → N/A
+- **Close** if val ≥ 51.5 → N/A
+
+#### Key mechanistic findings (from student writeup + advisor review)
+
+1. **Compound width+epochs win confirmed.** Going from nh=176/ep18 → nh=192/ep20 wins on every primary metric. Width frontier still unsaturated.
+2. **Mild-overfitting hypothesis from v1 (ep18) refuted.** Every OOD split that regressed at ep18 now improves or holds flat at ep20: rc +0.19% → +0.10% (flat), cruise +1.85% → −3.99%, re_rand +1.44% → −3.76%. The wider model was *compute-starved*, not overfitting — exactly as the still-descending val curve suggested.
+3. **geom_camber_rc is the structural hard split** (~55 across all variants: nh=176/ep18=55.45, nh=192/ep18=55.55, nh=192/ep20=55.51). Width and epochs don't move it. Moving this split requires something other than width/budget — likely architectural or feature-engineering.
+4. **Curve decelerating at ep20** (final-epoch Δ shrunk from −2.67% to −0.97%) — the wider model is nearly converged. Marginal returns past ep20 likely small.
+5. **VRAM headroom remains:** 47.6 GB peak with 96 GB available → ~50 GB margin. Width can grow more without memory constraint.
+
+#### New training recipe (post-#4106)
+
+```bash
+cd "target/" && SENPAI_TIMEOUT_MINUTES=50 python train.py --n_hidden 192 --epochs 20 --use_bf16
+```
+
+#### Round-9 backlog additions
+- **n_hidden=208 + ep18 at fern's 50-min cap** (assigned as #4232 — already in flight)
+- **Investigating geom_camber_rc directly** — dedicated PR for shape/curvature features or augmentation; needs custom hypothesis
+- Stochastic depth retest **at width=192** (closed at nh=160; might unlock at higher capacity)
+- n_layers=6 retest **at nh=192** (closed at nh=176; might fit if compute frontier holds)
+
+### #4190 tanjiro n_hidden=144 (capacity-vs-epochs at 30-min budget) — **CLOSED** (val=57.05 +12.1% regress)
+
+- **Student:** willowpai2i48h4-tanjiro (branch: `willowpai2i48h4-tanjiro/capacity-vs-epochs-nh144`)
+- **Hypothesis:** At 30-min budget, smaller model (nh=144, ~0.84M params) completes more of the cosine schedule than nh=176 cut at ep14. Capacity-vs-schedule-completion tradeoff.
+
+#### Results
+
+| Metric | This run (nh=144) | Baseline #4082 (nh=176) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | **57.0497** | 50.9008 | **+6.15 (+12.1%)** |
+| test_avg/mae_surf_p | **49.5109** | 43.8989 | **+5.61 (+12.8%)** |
+| single_in_dist | 54.4835 | 48.97 | +5.51 |
+| geom_camber_rc | 61.3161 | 55.45 | +5.87 |
+| geom_camber_cruise | 34.5220 | 28.27 | +6.25 |
+| re_rand | 47.7219 | 42.91 | +4.81 |
+- **W&B run:** `6qzim3wc`
+- **Cut at ep16/18** (per-epoch throughput 116.9 s/ep vs predicted 95-105; total 31.18 min over 30-min cap by 1.2 min)
+- **Peak VRAM:** 38.9 GB (13% reduction vs nh=176) — memory unused as compute is the binding constraint
+
+#### Decision per criteria
+- **Close** if val > 53.5 → ✅ val=57.05 ≫ 53.5
+
+#### Key strategic finding
+
+**Capacity dominates schedule completion at 30-min budget.** Even at 87.5% cosine completion (lr_factor=0.038 at cut), val descent slowed to −0.5/ep — the remaining 2 epochs would have shaved another ~1-2 points, landing val ~55-56 — still well above 50.90 baseline. **Future 30-min budget experiments should default to nh≥176.** Tanjiro's pod role pivots to "screening student" — bold-idea viability tests at nh=176+ep14 with cut at ep13.
+
+### #4232 fern Push width frontier: n_hidden=208 + bf16 + ep18 — **ASSIGNED**
+
+- **Student:** willowpai2i48h4-fern (branch: `willowpai2i48h4-fern/nh208-push-width-frontier`)
+- **Hypothesis:** Width scaling unsaturated at nh=192 (per #4106's still-descending val curve). Push n_hidden=208 (+8% params over 192) at ep18 — fits 50-min cap (~46 min projected). If wins, width frontier continues; if regresses, capacity has peaked at nh=192 for this depth.
+- **Run:**
+  ```bash
+  cd "target/" && python train.py \
+    --n_hidden 208 --use_bf16 --epochs 18 \
+    --wandb_group willow-r8-width-frontier \
+    --wandb_name fern-nh208-bf16-ep18
+  ```
+- **Decision criteria:** Merge if val<48.84 AND test<42.59; send back if val<50.5 (improves over #4082 but not #4106); close if val≥51.5.
+
+### #4233 tanjiro AGC (Adaptive Gradient Clipping) screening — **ASSIGNED**
+
+- **Student:** willowpai2i48h4-tanjiro (branch: `willowpai2i48h4-tanjiro/agc-screening-test`)
+- **Hypothesis:** Replace global `grad_clip=1.0` with per-parameter adaptive clipping (Brock et al., NFNets ICML 2021). AGC clips each tensor's gradient relative to its parameter L2 norm — large parameters get larger gradient headroom, small parameters get tighter clipping. Particularly relevant for bf16 training where gradient magnitudes vary across layers. Orthogonal to all in-flight regularization/optimizer work.
+- **Why screening at smaller config:** Tanjiro's 30-min cap can't fit nh=192+ep20 (~44 min) or nh=176+ep18 (~39 min). Test at nh=176+ep14 (cuts at ep13 in budget). If signal positive, promote to longer-budget student for full-schedule comparison.
+- **Run:**
+  ```bash
+  cd "target/" && python train.py \
+    --n_hidden 176 --use_bf16 --epochs 14 \
+    --use_agc --agc_clip_factor 0.01 \
+    --wandb_group willow-r8-agc \
+    --wandb_name tanjiro-agc-nh176-bf16-ep14
+  ```
+- **Decision criteria (screening):** Promote-worthy if val at ep13 < 65 (≥3% below #4082's ep13 trajectory ~67); close if val at ep13 ≥ 70 OR diverges in first 3 epochs.
+
+---
+
 ## 2026-05-16 23:55 — PR #4187 CLOSED + #4227 assigned — frieren pmag-weight closes; pivot to AdaBelief optimizer
 
 ### #4187 frieren Pressure-magnitude weighted L1 — **CLOSED** (val=53.17 +4.5%, all OOD splits regress)
