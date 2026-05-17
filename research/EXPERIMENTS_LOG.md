@@ -1,5 +1,41 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-17 09:35 — Round-12 partial wave reviewed: 2 closures + 1 send-back; **second OOD-regularization signal**; 2 Round-13 loss-formulation PRs assigned
+
+### #4488 frieren Post-LN — **CLOSED (norm-placement axis exhausted)**
+- W&B run: `9rjukt6s`. val=50.71 (+7.91% regress), test=43.35 (+7.10% regress). Every test split worse (`single_in_dist` +2.3%, `geom_camber_rc` +8.0%, `geom_camber_cruise` +10.7%, `re_rand` +8.8%).
+- **Hypothesis half-validated:** Post-LN converged without divergence under QK-norm (instability absorbed). But endpoint is clearly worse at 14 epochs — convergence rate ~3 pts slower per epoch by ep13. Pre-LN's unnormalized accumulating residual stream is a feature, not a bug, at this depth.
+- **Grad-norm diagnostic confirms Post-LN signature:** L4 (last block) gradient 5-15× larger than mid-layers throughout training; L0 also 2-4× larger than middle. Mid-layers identical (~2-4). No grad explosion (peak 64, clipped 100).
+- **Axis exhausted:** Norm-placement experiments closed. Future architecture work must be qualitative (attention path, geometry encoding) not norm-placement tweaks.
+
+### #4485 askeladd Constant LR after warmup — **CLOSED (catastrophic regress)**
+- W&B run: `27n7kigj`. val=59.50 (+12.52 / +26.6% regress), test=52.17 (+11.69 / +28.9% regress). All splits regressed 9-16 pts.
+- **Val trajectory oscillated** (94→102→96→77→76→66→66→67→66→66→60), confirming late-training divergence mode documented in the assignment.
+- **Confirms cosine annealing is critical for Lion on this stack.** Late-training annealing is where convergence happens, not exploration. The sweet spot lives in the 5-15% lr floor band, not at 0% (cosine-to-zero) nor 100% (constant).
+- **Axis exhausted on the constant-LR side.** Bounds the eta_min experiment from the opposite side.
+
+### #4478 nezuko Lion eta_min=0.1 (1e-5 floor) — **SENT BACK for eta_min_fraction=0.05 (smaller floor)**
+- W&B run: `61sf7lda` (verified). val=47.5771 (+0.59 regress, **just over noise floor 0.5**), **test=40.2690 (−0.21 BEATS paper-facing)**.
+- **Per-split:** `single_in_dist` 44.96 (+1.78 worse), **`geom_camber_rc` 50.92 (−1.87 BEATS plateau-target)**, `geom_camber_cruise` 25.55 (−0.28 better), `re_rand` 39.64 (−0.48 better). 3 of 4 splits improved.
+- **Mechanism validated:** late-training val drop ep12→14 = 51.10→47.92→47.58 (−3.52). The lr floor (1e-5) genuinely keeps optimization active in last 2 epochs — cosine-to-zero baseline gets zero updates here.
+- **Signal:** This is the SECOND independent observation of "mild late-training stochasticity → better OOD on `geom_camber_rc`". First was tanjiro #4411 noise=0.005 arm A (val=47.03, test=40.35, geom_camber_rc=52.45 — pending seed-2). Both right at val noise floor with clear test improvement on the plateau-target split. Pattern: regularization tradeoff (improves OOD, slightly hurts in-dist fit).
+- **Decision:** SEND BACK for `eta_min_fraction=0.05` to find sweet spot between baseline (0%) and 10%. Hypothesis: 5% floor keeps most of the OOD regularization while letting val settle below 47.5.
+
+### Round-13 assignments to newly idle students
+
+| PR | Student | Hypothesis | Mechanism |
+|---|---|---|---|
+| #4510 | frieren | **Variance+Mean Composite Loss** (Hanna 2024) | `L = 0.8·mean(\|e\|) + 0.2·std(\|e\|)` on surface — penalize spatial inconsistency where MAE only sees average. Targets OOD error spikes near stagnation/wake. |
+| #4511 | askeladd | **Zonal/Wake-Emphasis Loss** (PINN-zonal Sep 2025) | `w=3.0` on wake/TE (x_norm>0.6), `w=2.0` on LE (x_norm<0.1), `w=1.0` elsewhere. Directly attacks Kutta-condition region where camber changes (geom_camber_rc) most affect pressure recovery. |
+
+Both are loss-only changes, <10 lines each, zero arch/optim modification. Both target the `geom_camber_rc` plateau specifically. Designed to be orthogonal — variance-loss attacks the per-node spike distribution, zonal-loss attacks the spatial location of bad nodes. Either could compound with the other if successful.
+
+### Plateau count: 19 consecutive non-improvements (closures #4485 + #4488 added)
+
+But: **second OOD-regularization signal** in 2 PRs (#4411 noise=0.005 and #4478 eta_min=0.1) — points toward "implicit regularization → better OOD" as the live mechanism axis. Round-13 loss-formulation PRs are aligned with this direction.
+
+---
+
 ## 2026-05-17 08:35 — Plateau at 17 consecutive non-improvements: 5 PRs CLOSED + 1 send-back + 5 fresh Round-12 assignments
 
 ### #4416 edward LayerScale γ_init=1.0 (retest) — **CLOSED (LayerScale axis exhausted)**
