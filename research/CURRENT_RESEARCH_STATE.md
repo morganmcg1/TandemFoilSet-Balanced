@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 03:30
+- **Date:** 2026-05-17 04:05
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
@@ -43,12 +43,12 @@
 | Student | PR | Hypothesis | Status |
 |---|---|---|---|
 | edward | #4289 | n_hidden capacity {160, 192} on new best (bs=2+n=10+δ=0.10) | wave-15 NEW (just assigned) |
-| fern | #4288 | EMA × δ=0.10 compound on new best (τ={0.998, 0.9995}) | wave-15 NEW (just assigned) |
+| fern | #4331 | fourier_base sweep {64, 256} on new best stack | wave-15 NEW (just assigned) |
 | tanjiro | #4220 | 4-way merge (n=8+lr=7e-4+δ=0.10) + δ=0.05 | wave-14 WIP (long-running, multiple arms) |
 | thorfinn | #4298 | slice_num refinement — slice=40 + slice=48+T_max=24 on new best | wave-15 NEW (just assigned) |
 | frieren | #4222 | lr=7e-4+clip=1.0 on bs=2+n=10+δ=0.10 (5-way compound) | wave-14 WIP |
 | nezuko | #4293 | sub-unity clip {0.15, 0.10} on bs=2+n=10+δ=0.10 | wave-15 NEW (just assigned) |
-| alphonse | #4198 | LR upper search {9e-4, 1.2e-3} on bs=2+n=8 | wave-14 WIP |
+| alphonse | #4330 | slice=32 + lr=7e-4 compound on new best (4-way merge w/lineage A's lr win) | wave-15 NEW (just assigned) |
 | askeladd | #4322 | weight_decay sweep {0.001, 0.005} on new best stack (slice=32+n=10+δ=0.10) | wave-15 NEW (just assigned) |
 
 ## Current research themes
@@ -75,7 +75,10 @@
 - **bs=1 ceiling found**: bs=2 is step-count optimum for 30-min budget.
 - **slice_num non-monotone**: slice>64 fails hard (routing softmax flattening). slice<64 improves via epoch-budget mechanism (slice=32: +4 epochs in 30 min → val=56.124 NEW BEST). Val/test winner split: slice=32 wins val, slice=48 wins test (best test=48.578 seen). Sweet spot likely between 32-48. Testing slice=40 + slice=48+T_max=24 in thorfinn #4298.
 - **Monotonic Huber**: δ=0.10 profitable on n=10 stack; δ floor not yet found (δ=0.05 in tanjiro #4220).
-- **EMA alive at bs=2** (PR #4130 closed): both τ=0.998/0.995 beat no-EMA bs=2+n=10 baseline by 1.3-1.6 val. EMA gap +4.18 at τ=0.998. Mechanism confirmed (noise-averaging at 13,500 steps), but doesn't beat current best 56.92 (which uses δ=0.10). Compound test running (fern #4288).
+- **EMA alive at bs=2** (PR #4130 closed): EMA gap +4.18 at τ=0.998 on δ=0.30 stack. Mechanism confirmed (noise-averaging at 13,500 steps).
+- **EMA × δ=0.10 ANTI-ADDITIVE** (PR #4288 closed): EMA gap shrinks to +2.23 at δ=0.10 (Huber already does noise reduction) AND the ~12-14% per-epoch overhead costs 2 epochs in 30-min budget. Net: arm-1 val=60.42 (+7.6% vs new best). EMA is DEAD on current best stack at this budget.
+- **LR ceiling at 7e-4 for bs=2+n=8 lineage** (PR #4198 closed): lr=9e-4 val=59.02 (+3.34%), lr=1.2e-3 val=57.95 (+1.46%). Non-unimodal curve — γ-collapse partially offsets larger LR. clip-saturation robust to LR within 18-epoch window.
+- **Per-split signature emerging**: cruise + re_rand respond differently than single + rc to optimization changes. Three independent observations now (alphonse #4198, askeladd #4179, thorfinn #4221). Lower-magnitude / less-clip-saturated splits gain when single/rc don't. Strong candidate for per-split loss / per-split δ in future.
 - **clip × δ interaction REVERSES at tight knee** (PR #4223 closed): clip=1.0 + δ=0.10 → clip_frac drops to 0.716 at ep17 (vs 1.0 on δ=0.30 stack). Tight Huber knee → smaller late-epoch gradients → clip rarely engages. clip=1.0 regresses +1.66% val on this stack. **Implies tighter clip {0.15, 0.10} may now help** (testing in nezuko #4293).
 - **surf_weight=5 regresses on n=10+δ=0.10** (PR #4223): val 57.594 +1.18%. surf_weight=10 already well-calibrated; rebalancing trades surf↑ vs vol↓ unfavorably.
 - **Memory headroom**: 18.43 GB peak at bs=2 vs 96 GB. n_hidden expansion is viable.
@@ -89,7 +92,7 @@
 - **bs lever exhausted** at bs=1. bs=2 is the step-count optimum.
 - **Memory headroom: 18.43 GB at bs=2** — n_hidden=192 (~41 GB) and n_hidden=256 (~74 GB) viable.
 - **T_max=20 confirmed optimal** for both lineages.
-- **lr=7e-4 confirmed optimal** for lineage A. LR ceiling still unknown (testing {9e-4, 1.2e-3}).
+- **lr=7e-4 is the LR ceiling for lineage A** (alphonse #4198 closed). LR window: 7e-4 < 1.2e-3 (regress +1.46%) < 9e-4 (regress +3.34%). Non-unimodal curve from γ-collapse. lr=7e-4 on the NEW best stack untested — testing now (alphonse #4330).
 - **EMA alive at bs=2** (PR #4130): noise-averaging mechanism confirmed (+4.18 EMA gap, beats no-EMA bs=2+n=10 baseline by 1.3-1.6 val). But doesn't beat current best alone. EMA × δ=0.10 compound running (fern #4288).
 - **Capacity expansion**: n_hidden={160, 192} first screen (edward #4279), then wider if it wins.
 

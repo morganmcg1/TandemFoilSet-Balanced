@@ -5,6 +5,59 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-17 04:00 — PR #4288 (charliepai2i48h5-fern): EMA × Huber δ=0.10 compound on new best stack — CLOSED (anti-additive, ~12% per-epoch overhead costs 2 epochs)
+
+- branch: `fern/ema-delta-compound`
+- hypothesis: EMA (parameter trajectory smoothing) and δ=0.10 (residual-shape) should compound as orthogonal levers
+
+| arm | τ | val_avg (EMA) | raw_val | EMA gap | test_avg | Δ val vs new best | best_epoch |
+|-----|---|---------|---------|---------|----------|--------------------|-----------|
+| arm-1 | 0.998 | 60.42 | 62.65 | +2.23 | 52.14 | **+7.6%** ✗ | 16/16 |
+| arm-2 | 0.9995 | 63.15 | 62.84 | -0.30 | 54.88 | **+12.5%** ✗ | 16/16 |
+
+- metric artifacts: `models/model-bf16-layerscale-bs2-n10-d010-ema998-20260517-015205/metrics.jsonl`, `models/model-bf16-layerscale-bs2-n10-d010-ema9995-20260517-022618/metrics.jsonl`
+
+**Analysis and conclusions:**
+
+EMA × δ=0.10 is **anti-additive**, contradicting the orthogonality hypothesis. Two mechanisms:
+
+1. **EMA's marginal gain shrinks at δ=0.10**: gap drops from +4.18 (at δ=0.30, PR #4130) to +2.23 (at δ=0.10). Huber tightening already does much of EMA's noise-reduction work.
+
+2. **Per-epoch overhead dominates**: extra raw-eval pass costs ~12-14% per epoch → 2 fewer epochs in 30 min budget. Raw model at ep16 = 62.65 (≈6 pts behind baseline ep18), and the +2.23 EMA gap doesn't recover it.
+
+τ=0.9995 was the wrong direction — half-life (~1400 steps) >> training duration (12k steps), shadow model spent 10/16 epochs underwater (raw < EMA).
+
+Per-split test signature: EMA hurt cruise the MOST (+9.1% to +16.6%) — exactly opposite of the predicted "EMA helps OOD" pattern. cruise has the smallest residuals at this stack so EMA averaging adds noise rather than removing it.
+
+**Settled**: EMA does not help on the new best stack at current 30-min budget. Cheaper variant (eval-only EMA) would require code changes — tabled.
+
+---
+
+## 2026-05-17 03:55 — PR #4198 (charliepai2i48h5-alphonse): LR upper search {9e-4, 1.2e-3} on bs=2+n=8 — CLOSED (LR ceiling at 7e-4 confirmed)
+
+- branch: `alphonse/lr-upper-search`
+- hypothesis: LR=7e-4 is at LR ceiling for bs=2+n=8 stack, but worth probing upward to find the optimum
+
+| arm | lr | val_avg | Δ vs 57.11 (lineage A) | test_avg | best_epoch | clip_frac@18 | grad_norm@18 |
+|-----|----|---------|------------------------|----------|-----------|--------------|--------------|
+| baseline #4146 | 7e-4 | 57.11 | — | 49.24 | 18/18 | 0.988 | 3.59 |
+| arm-1 | 9e-4 | 59.02 | +3.34% ✗ | 50.99 | 17/18 | 0.991 | 3.10 |
+| arm-2 | 1.2e-3 | 57.95 | +1.46% ✗ | 49.74 | 18/18 | 0.983 | 2.38 |
+
+- metric artifacts: `models/model-bf16-layerscale-bs2-n8-lr9e4-20260516-232703/metrics.jsonl`, `models/model-bf16-layerscale-bs2-n8-lr12e4-rerun-20260517-012916/metrics.jsonl`
+
+**Analysis and conclusions:**
+
+LR=7e-4 confirmed as the LR ceiling for bs=2+n=8 lineage. Curve is **non-unimodal in LR** (1.2e-3 outperforms 9e-4) — mechanistically: higher LR → faster γ_attn/γ_mlp shrinkage → smaller effective steps → partial offset of larger nominal LR. clip_frac stays saturated (~0.98) across all three arms; the clip-saturation regime is **robust to LR scaling within the 18-epoch window**.
+
+**Per-split signature**: arm-2 (1.2e-3) BEATS baseline on cruise (-3.29%) and re_rand (-2.05%) — the lower-magnitude / less-clip-saturated splits — but worse on single/rc. This is the **second independent observation** (after askeladd #4179) that cruise/re_rand respond differently to optimization changes than single/rc. Worth pursuing with per-split loss later.
+
+**Settled**: lr ceiling at 7e-4 for bs=2+n=8. Stop sweeping LR on lineage A.
+
+**Follow-up**: Reassigned alphonse to test slice=32 + lr=7e-4 compound on the new best stack (combines lineage A's LR win with lineage B's slice win).
+
+---
+
 ## 2026-05-17 03:25 — PR #4179 (charliepai2i48h5-askeladd): bs=2+n=8 + Huber δ={0.15, 0.20} compound — CLOSED (both arms regress; δ=0.30 optimal at lineage A confirmed)
 
 - branch: `charliepai2i48h5-askeladd/bs2-n8-huber`
