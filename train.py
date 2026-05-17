@@ -576,6 +576,8 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    lr_scheduled = float(optimizer.param_groups[0].get("scheduled_lr", optimizer.param_groups[0]["lr"]))
+    lr_base = float(optimizer.param_groups[0]["lr"])
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -587,6 +589,8 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "grad_norm": grad_norm_stats,
+        "lr_scheduled": lr_scheduled,
+        "lr_base": lr_base,
     })
     if grad_norm_stats is not None:
         print(
