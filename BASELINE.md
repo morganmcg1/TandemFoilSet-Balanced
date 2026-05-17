@@ -12,6 +12,7 @@ target base `icml-appendix-charlie`).
 | FFN width | **`mlp_ratio=2` effective** (PR #4282 fixed dead-code bug: `GEGLUBlock(hidden_dim, hidden_dim, hidden_dim=int(hidden_dim * mlp_ratio))`) — inner GEGLU projection now 256-d instead of 128-d |
 | Compile | **`torch.compile(model, dynamic=True, mode="default")`** (PR #4069) — fuses FiLM affine + GEGLU gate + QKV projections; `dynamic=True` required for pad_collate variable-length batches |
 | Optim | **Schedule-Free AdamW** `schedulefree.AdamWScheduleFree(lr=5e-4, weight_decay=1e-4, warmup_steps=200)` — PR #4071; NO LR scheduler |
+| **Grad clip** | **`torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)`** after `loss.backward()`, before `optimizer.step()` — PR #4398; clip activates ~100% of steps (typical pre-clip norms 20–250) |
 | Loss  | **SmoothL1 (Huber, beta=0.25)** in normalized space, `surf_weight=10.0` (PR #3400) |
 | EMA   | **Polyak averaging, decay=0.997**, evaluated at val/test time (PR #3783); EMA built before compile so `ema_model.module` is uncompiled |
 | Dropout | **dropout=0.1** in PhysicsAttention (attn + to_out) — PR #3402 |
@@ -22,54 +23,63 @@ target base `icml-appendix-charlie`).
 | Caps  | `SENPAI_MAX_EPOCHS=50`, `SENPAI_TIMEOUT_MIN=30.0` (hard per-run wall clock) |
 | Test  | Best-val EMA checkpoint evaluated on 4 test splits at end of run; use `load_target = getattr(model, "_orig_mod", model)` to load state dict after compile |
 
-## Current best metrics (PR #4282, mlp_ratio=2 fix on compile+bf16+GEGLU+SF+slice=8, single-seed, best epoch 37)
+## Current best metrics (PR #4398, gradient clipping max_norm=1.0, single-seed, best epoch 36)
 
 **Beat this to be a winner.**
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` **(primary)** | **36.13** |
-| `test_avg/mae_surf_p` | **31.97** |
-| `test/test_single_in_dist/mae_surf_p` | 36.53 |
-| `test/test_geom_camber_rc/mae_surf_p` | 44.62 |
-| `test/test_geom_camber_cruise/mae_surf_p` | 17.23 |
-| `test/test_re_rand/mae_surf_p` | 29.50 |
+| `val_avg/mae_surf_p` **(primary)** | **33.6757** |
+| `test_avg/mae_surf_p` | **29.6535** |
+| `test/test_single_in_dist/mae_surf_p` | 32.69 |
+| `test/test_geom_camber_rc/mae_surf_p` | 43.66 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 14.47 |
+| `test/test_re_rand/mae_surf_p` | 27.79 |
 
-Per-split val surface-p MAE at best checkpoint (single seed, epoch 37):
+Per-split val surface-p MAE at best checkpoint (single seed, epoch 36):
 
-| Split | mae_surf_p | Δ vs prev (37.31) |
+| Split | mae_surf_p | Δ vs prev (36.13) |
 |-------|------------|-----------|
-| `val_single_in_dist`     |  36.67 | -1.4% |
-| `val_geom_camber_rc`     |  48.15 | -4.7% |
-| `val_geom_camber_cruise` |  21.37 | -0.5% |
-| `val_re_rand`            |  38.34 | -4.4% |
-| **avg** | **36.13** | **-3.2%** |
+| `val_single_in_dist`     |  31.858 | **-13.1%** |
+| `val_geom_camber_rc`     |  48.254 | +0.2% (unchanged — structural bottleneck) |
+| `val_geom_camber_cruise` |  17.771 | **-16.8%** |
+| `val_re_rand`            |  36.820 | **-4.0%** |
+| **avg** | **33.6757** | **-6.8%** |
 
-Artifact: `models/model-mlp-ratio-2-with-geglu-on-compile-stack-20260517-015040/metrics.jsonl`
+Artifact: `models/model-charliepai2i48h1-frieren-grad-clip-1p0-20260517-055140/metrics.jsonl`
 
-**mlp_ratio=2 fix (dead-code bug fix + actual capacity increase):**
-- n_params: 736,831 → **983,871** (+33.6% — GEGLU inner dim 128→256, weights in w1/w2)
-- Per-epoch wall-clock: 42.4s → **47.76s** (+12.6% — expected from larger FFN)
-- Epochs in 30-min cap: 42 → **37** (−5 epochs — cost of extra capacity)
-- Peak VRAM: 18.88 GB → **22.61 GB** (+19.7% — larger activations from 2× FFN width)
-- All 4 val splits improved: single −1.4%, rc −4.7%, cruise −0.5%, re_rand −4.4%
-- Val still descending at epoch 37; more compute would push further
+**Gradient clipping impact:**
+- Pre-clip gradient norms: mean 25–70, p50 20–64, p99 100–177, max up to 262 — **across ALL epochs, ALL steps**
+- Clip activates on 374–375/375 steps every epoch (near-100% activation rate)
+- Without clipping, SF AdamW's second-moment EMA was being destabilized by O(100) gradient outliers on every step
+- All non-rc val splits improved strongly: single_in_dist −4.81, cruise −3.60, re_rand −1.52
+- rc-split essentially unchanged (+0.10): confirmed structural bottleneck, not a gradient-noise problem
+- Wall-clock unchanged: ~49s/epoch (clip_grad_norm_ is negligible overhead)
+- Peak VRAM unchanged: 22.6 GB
 
-**The dead-code bug:** Previous PR #3982 (mlp_ratio 2→1) and all subsequent tests were
-running `GEGLUBlock(hidden_dim, hidden_dim, hidden_dim=hidden_dim)` regardless of mlp_ratio
-config value — `mlp_ratio` was passed to `TransolverBlock.__init__` but never forwarded.
-Fix in PR #4282: `GEGLUBlock(hidden_dim, hidden_dim, hidden_dim=int(hidden_dim * mlp_ratio))`.
-This means the previous "mlp_ratio=1 closed" finding was invalid — the axis was never properly
-tested. mlp_ratio=2 now represents a genuine open axis with 36.13 as the new optimum.
+**IMPORTANT — 3-seed variance update (PR #4342 askeladd):**
+The "true" 3-seed mean of PR #4282 (old baseline) was **37.20 ± 0.62 (1σ)**. PR #4282's val=36.13 was a 1.7σ favorable seed — NOT the typical draw. Tightened variance estimate:
+- **Single-seed 1σ noise: ≈ 0.62 pts** (NOT ±5-10 pts as previously stated)
+- **2σ "clear improvement" threshold: ~1.2 pts below baseline**
+- For the new baseline val=33.68: a single-seed win requires val ≤ 32.5 to be clear of noise; anything in [32.5, 34.9] is "within noise" — needs 3-seed confirmation
+- Note: 3-seed std was measured on the OLD stack; std on new stack (with grad clipping) may differ but is expected to be equal or smaller (more stable training)
 
-**Key implementation note (GEGLUBlock instantiation):**
+**Key implementation note — gradient clipping placement:**
 ```python
-# In TransolverBlock.__init__:
-self.mlp = GEGLUBlock(hidden_dim, hidden_dim, hidden_dim=int(hidden_dim * mlp_ratio))
-# mlp_ratio=2: inner_dim=256; mlp_ratio=1: inner_dim=128
+# In the training loop, after loss.backward() and BEFORE optimizer.step():
+optimizer.train()
+# ... forward pass, loss computation ...
+scaler.scale(loss).backward()   # if using GradScaler; otherwise just loss.backward()
+torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.max_grad_norm)
+optimizer.step()
+optimizer.zero_grad()
+
+# CLI flag:
+parser.add_argument('--max_grad_norm', type=float, default=1.0,
+                    help='Max gradient norm for clipping (0 to disable)')
 ```
 
-**Key implementation notes:**
+**Key implementation notes (unchanged from PR #4282):**
 ```python
 # After EMA wrap, before training loop:
 try:
@@ -90,15 +100,19 @@ Reproduce:
 ```bash
 cd target/
 pip install schedulefree
-python train.py --experiment_name mlp-ratio-2-repro --agent <name>
+python train.py --experiment_name grad-clip-1p0-repro --agent <name> --max_grad_norm 1.0
 ```
 
 ### Note on val variance
 
-Single-seed variance is ±5-10 pts on `val_avg/mae_surf_p`. Improvements
-smaller than ~5% may be within noise — confirm with a re-run if uncertain.
+**Updated from 3-seed confirmation (PR #4342):** Single-seed 1σ noise is **≈ 0.62 pts** on `val_avg/mae_surf_p` (NOT ±5-10 pts). The 2σ clear-regression threshold is ~1.2 pts above baseline. The old ±5-10pt estimate was wrong and led to premature closures.
 
-**Total improvement from calibration baseline:** 143.52 → 36.13 = **-74.8%**
+Decision thresholds for **this** baseline (val=33.68):
+- **Clear win**: val ≤ 32.5 (≥1.2 pts below baseline — ≥2σ)
+- **Within noise / soft win**: val in [32.5, 34.9] — single-seed tie, needs 3-seed confirmation to distinguish from noise
+- **Clear regression**: val ≥ 34.9 (≥1.2 pts above baseline — ≥2σ)
+
+**Total improvement from calibration baseline:** 143.52 → 33.68 = **-76.5%**
 
 ### Calibration-only baseline (PR #3107, default config MSE)
 
@@ -149,4 +163,6 @@ After every merged winner, the advisor:
 | 2026-05-16 | #4071 | Schedule-Free AdamW: eliminates cosine T_max fragility, all 8 splits improved 7-18% | 45.07 | -10.9% |
 | 2026-05-16 | #4107 | slice_num 12→8 on bf16+GEGLU+SF: -8.7% sec/epoch → +2 epochs, 3/4 splits improved, rc-split flip from regress to win | 43.82 | -2.78% |
 | 2026-05-17 | #4069 | torch.compile(dynamic=True) on bf16+GEGLU+SF+slice=8: -41.3% sec/epoch (72→42s), 25→42 epochs, all 8 splits improved | 37.31 | -14.9% |
-| 2026-05-17 | #4282 | mlp_ratio=2 fix (dead-code bug: GEGLUBlock now uses int(hidden_dim*mlp_ratio)); +33.6% params, 983k, all 4 splits improved | **36.13** | **-3.2%** |
+| 2026-05-17 | #4282 | mlp_ratio=2 fix (dead-code bug: GEGLUBlock now uses int(hidden_dim*mlp_ratio)); +33.6% params, 983k, all 4 splits improved | 36.13 | -3.2% |
+| 2026-05-17 | #4342 | 3-seed baseline confirmation: true mean 37.20 ± 0.62; PR #4282's 36.13 was 1.7σ favorable seed; updates noise model from ±5-10pt to ±0.62pt | N/A (analysis) | N/A |
+| 2026-05-17 | #4398 | Gradient clipping max_norm=1.0: pre-clip norms 20–250 every step, ~100% activation rate; single_in_dist −13%, cruise −17%, re_rand −4%; rc unchanged (structural bottleneck confirmed) | **33.68** | **-6.8%** |
