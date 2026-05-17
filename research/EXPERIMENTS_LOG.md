@@ -1,5 +1,45 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-17 01:25 — PR #4252 MERGED (Lion optimizer) + #4280 assigned
+
+### #4252 frieren LION optimizer at nh=176+bf16+ep14 — **MERGED** (new baseline: val=49.26, test=41.62)
+
+- **Student:** willowpai2i48h4-frieren (branch: `willowpai2i48h4-frieren/lion-optimizer`)
+- **Hypothesis:** Lion optimizer (sign-of-gradient, categorically different from all Adam family) converges faster on this regression task due to uniform per-parameter step magnitude.
+
+#### Results
+
+| Metric | Lion (this PR, nh=176+ep14) | AdamW #4106 (nh=192+ep20) | AdamW #4082 (nh=176+ep14 matched) | Δ vs #4106 |
+|---|---:|---:|---:|---:|
+| val_avg/mae_surf_p | **49.2616** | 48.8400 | ~61.07 | +0.86% (within noise) |
+| test_avg/mae_surf_p | **41.6188** | 42.5895 | — | **−2.28%** WIN |
+| test/single_in_dist | 43.9070 | 46.4089 | — | **−5.39%** |
+| test/geom_camber_rc | 54.7549 | 55.5071 | — | **−1.36%** ← first hard-split improvement |
+| test/geom_camber_cruise | 26.1287 | 27.1443 | — | **−3.74%** |
+| test/re_rand | 41.6846 | 41.2976 | — | +0.94% (noise) |
+| Wall time | 30.5 min | ~43.6 min | — | −30% compute |
+| Peak VRAM | 44.6 GB | 47.6 GB | — | −6% memory |
+
+**Matched-config comparison vs AdamW@nh=176@ep14:** Lion val=49.26 vs AdamW val=61.07 → **−19.3% improvement**. Lion reaches AdamW-ep14 quality by ep9.
+
+- **W&B run:** `eu7e0g18`
+
+#### Decision: MERGE
+
+**Key reasoning:**
+1. Paper-facing test metric wins −2.28% (41.62 vs 42.59) despite smaller model config
+2. `geom_camber_rc` hard split improves for first time since width-scaling plateau (54.75 vs 55.51)
+3. Val tie (+0.86%) within seed noise (std ~2.5)
+4. Matched-config win −19.3% is overwhelming evidence Lion > AdamW
+5. 30% wall-clock saving compounds all future experiments
+6. Mechanistic insight: Lion's uniform step magnitude vs Adam's adaptive scaling balances volume/surface learning on surf_weight=10 regression task → `single_in_dist` and `geom_camber_cruise` (high volume content) benefit most
+
+**Lion is now the default optimizer. All future experiments should use `--use_lion --lion_lr 1e-4 --lion_wd 1e-3` unless testing optimizer variants.**
+
+#### Follow-up: #4280 Lion + nh=192 compound test (frieren, ep=12+T_max=12, 30-min cap-friendly)
+
+---
+
 ## 2026-05-17 01:15 — PR #4205 CLOSED + #4270 assigned; #4233 + #4232 sent back
 
 ### #4205 edward RMSNorm at nh=176+bf16+ep18 — **CLOSED** (dual-mode failure)

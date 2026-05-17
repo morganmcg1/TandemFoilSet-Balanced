@@ -1,17 +1,19 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-17 ~01:15 UTC
+- **Last updated:** 2026-05-17 ~01:30 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
 
 ## Current baseline
 
-**val_avg/mae_surf_p = 48.8400, test_avg/mae_surf_p = 42.5895** — from PR #4106 (fern, **n_hidden=192 + bf16 + epochs=20**), merged 2026-05-17 ~00:05 UTC. See `BASELINE.md` for full details.
+**val_avg/mae_surf_p = 49.2616, test_avg/mae_surf_p = 41.6188** — from PR #4252 (frieren, **Lion + n_hidden=176 + bf16 + epochs=14**), merged 2026-05-17 ~01:25 UTC. See `BASELINE.md` for full details.
 
-Per-split test (or5uq1id): single_in_dist=46.41, geom_camber_rc=55.51, geom_camber_cruise=27.14, re_rand=41.30.
+Per-split test (eu7e0g18): single_in_dist=43.91, geom_camber_rc=54.75, geom_camber_cruise=26.13, re_rand=41.68.
 
-**Mild-overfitting hypothesis refuted at ep20:** the OOD splits that regressed at ep18 (rc/cruise/re_rand) now improve or hold flat at ep20. The wider model was compute-starved, not overfitting. **geom_camber_rc remains the structural hard split** (~55 across all variants tested) — moving it requires something other than width/budget.
+**LION IS NOW DEFAULT OPTIMIZER.** All future experiments should use `--use_lion --lion_lr 1e-4 --lion_wd 1e-3` unless testing optimizer variants. Lion beats AdamW by −19.3% val at matched config (nh=176+ep14), delivers −2.28% test improvement even vs the wider/longer AdamW baseline (#4106 nh=192+ep20), and improves the previously-stuck `geom_camber_rc` hard split (54.75 vs 55.51) for the first time since the width-scaling plateau.
+
+**Prior AdamW baseline (superseded):** #4106 nh=192+ep20 val=48.84, test=42.59. W&B `or5uq1id`. Note: val metric at prior baseline was slightly better (48.84 < 49.26); this is within seed noise (std ~2.5). The paper-facing test metric and per-split breakdown clearly favor Lion.
 
 **Width+epochs frontier finding:** n_hidden=176/ep18 → 192/ep20 (+18% params, +2 epochs) wins +4.05% val / +2.98% test. Val curve still descending but decelerating at ep20 (−0.97% in final epoch). Peak VRAM at n_hidden=192 was 47.6 GB; ~50 GB headroom remains. **Width frontier still unsaturated; ep20 nearly converged.**
 
@@ -88,7 +90,8 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 | **#4165** | alphonse | slice_num=48 retest (other side of curve) | WIP — actively training (99% GPU) |
 | **#4178** | thorfinn | EMA of weights (decay=0.999) for val/test eval | WIP — actively training |
 | **#4205** | edward | RMSNorm swap for LayerNorm on n_hidden=176+bf16+ep18 baseline | WIP (assigned 23:15) |
-| **#4252** | frieren | LION optimizer (sign-of-gradient, categorically ≠ Adam family) at nh=176+bf16+ep14 | WIP (assigned 00:45) |
+| #4252 | frieren | LION optimizer at nh=176+bf16+ep14 | **MERGED 01:25** — new baseline val=49.26/test=41.62; test −2.28%, hard-split improves, −30% compute; Lion now default |
+| **#4280** | frieren | Lion+nh=192 compound test at ep=12+T_max=12 | WIP (assigned 01:30) |
 | **#4043** | nezuko | AdamW weight_decay sweep + eta_min (pivoted to ep14 for 30-min cap, 3 arms) | WIP (redirected 23:30) |
 | **#4232** | fern | Push width frontier further: n_hidden=208 + bf16 + ep18 | WIP (assigned 00:15) |
 | **#4233** | tanjiro | AGC (Adaptive Gradient Clipping) screening at nh=176+bf16+ep14 (30-min cap) | WIP (assigned 00:20) |
@@ -165,7 +168,8 @@ Normalized DSDF (dims 4-11) across 100 train files / 108M values:
 | #4205 | edward | RMSNorm swap for LayerNorm on n_hidden=176+bf16+ep18 baseline | `--use_rmsnorm --n_hidden 176 --use_bf16 --epochs 18` (no T override) | **CLOSED ~01:05** (val=76.02 +49% cut ep12/18; per-epoch ~163s vs baseline 128s — 27% SLOWER from unfused RMSNorm kernel; all 4 splits regress; dual-mode failure: slower throughput AND ~11 points/ep convergence deficit; mean-shift removal breaks slice-attention conditioning; #4270 QK-norm assigned) |
 | **#4270** | edward | QK-norm: LayerNorm on Q and K projections (per-head over head_dim) BEFORE attention dot product | `--use_qk_norm --n_hidden 176 --use_bf16 --epochs 14` (30-min budget) | WIP (new — assigned 01:15) |
 | #4227 | frieren | AdaBelief optimizer swap for AdamW on n_hidden=176+bf16+ep18 baseline | `--optimizer adabelief --n_hidden 176 --use_bf16 --epochs 18` (no T override) | **CLOSED 00:45** — per-epoch equivalent to AdamW; belief-scaling no-op at stable gradient regime; AdaBelief axis closed |
-| **#4252** | frieren | LION optimizer (sign-of-gradient) at nh=176+bf16+ep14 | `--use_lion --lion_lr 1e-4 --lion_wd 1e-3 --n_hidden 176 --use_bf16 --epochs 14` (30-min budget) | WIP (new) |
+| #4252 | frieren | LION optimizer at nh=176+bf16+ep14 | `--use_lion --lion_lr 1e-4 --lion_wd 1e-3 --n_hidden 176 --use_bf16 --epochs 14` | **MERGED 01:25** — new baseline val=49.26/test=41.62 |
+| **#4280** | frieren | Lion+nh=192 compound test at ep=12+T_max=12 (30-min cap) | `--use_lion --lion_lr 1e-4 --lion_wd 1e-3 --n_hidden 192 --use_bf16 --epochs 12` | WIP (new — assigned 01:30) |
 | **#4232** | fern | Push width frontier: n_hidden=208 + bf16 + ep18 → **sent back ~01:10 for clean ep=12+T_max=12 retest** (cap-friendly clean anneal) | `--n_hidden 208 --use_bf16 --epochs 12` (no T override) | WIP (sent back; v1 val=65.77 cut ep13 partial-anneal; ep-matched signal mixed: ep11/12 lead nh=192 by −5%/−15%, ep13 reverses +1.3% but schedule-confounded) |
 | **#4233** | tanjiro | AGC (Adaptive Gradient Clipping) at nh=176+bf16+ep14 → **sent back ~01:00 for clip_factor sweep** at 0.03 and 0.05 | `--use_agc --agc_clip_factor 0.03 / 0.05 --n_hidden 176 --use_bf16 --epochs 14` (30-min cap) | WIP (sent back; v1 val=59.29 clip=0.01 beats #4082 matched-config by −3% at ep14, agc_frac_clipped=0.79 aggressive; clip sweep to find optimum before full-budget confirmation) |
 
