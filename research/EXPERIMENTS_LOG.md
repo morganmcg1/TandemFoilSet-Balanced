@@ -1,5 +1,32 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-17 00:45 — PR #4227 CLOSED + #4252 assigned
+
+### #4227 frieren AdaBelief optimizer at nh=176+bf16+ep18 — **CLOSED** (per-epoch equivalence with AdamW)
+
+- **Student:** willowpai2i48h4-frieren (branch: `willowpai2i48h4-frieren/adabelief-optimizer`)
+- **Hypothesis:** AdaBelief (scales step by gradient-direction consistency (g-m)² vs gradient magnitude g² in Adam) benefits regression tasks with heterogeneous gradient structure.
+
+#### Results
+
+| Metric | AdaBelief (this PR) | AdamW baseline #4082 ep14 | AdamW full ep18 |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 61.68 (ep14, cut) | ~61.07 (ep14) | 50.9008 (ep18) |
+| test_avg/mae_surf_p | 54.20 | — | 43.8989 |
+
+- **W&B run:** `2lnm7584` (group `willow-r8-adabelief`)
+- **Pod cap:** 30 min — cut at ep14 (intended ep18)
+- **Per-epoch comparison vs AdamW (from run mgu3m5v2):** within ~1-2% at every matched checkpoint (ep4, ep10, ep14). Essentially indistinguishable.
+
+#### Decision: CLOSE
+- Hypothesis rejected: AdaBelief does not provide a structural advantage on this stack. Per-epoch equivalence with AdamW at lr=5e-4 means the "belief" scaling is a near no-op when gradients are well-behaved (small (g-m)²).
+- **Mechanistic insight:** at 1499 train samples × 6750 steps, gradient EMA m and raw gradient g are close enough that (g-m)² ≈ g² for most params — belief denominator is nearly constant, so the optimizer behaves like AdamW.
+- **Bf16 + eps=1e-16 interaction:** Clean — state dtype is fp32 (zeros_like on fp32 params); no NaN/inf in 14 epochs. Pattern safe for future small-eps adaptive optimizers.
+
+#### Follow-up: #4252 LION optimizer (sign-of-gradient, categorically different from all Adam family)
+
+---
+
 ## 2026-05-17 00:35 — PR #4129 CLOSED + #4238 assigned
 
 ### #4129 askeladd AdamW beta2 sweep (0.95, 0.98) at nh=176+bf16+ep18 — **CLOSED** (hypothesis rejected)

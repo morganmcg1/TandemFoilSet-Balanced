@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-17 ~00:35 UTC
+- **Last updated:** 2026-05-17 ~00:45 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -88,7 +88,7 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 | **#4165** | alphonse | slice_num=48 retest (other side of curve) | WIP — actively training (99% GPU) |
 | **#4178** | thorfinn | EMA of weights (decay=0.999) for val/test eval | WIP — actively training |
 | **#4205** | edward | RMSNorm swap for LayerNorm on n_hidden=176+bf16+ep18 baseline | WIP (assigned 23:15) |
-| **#4227** | frieren | AdaBelief optimizer swap for AdamW on n_hidden=176+bf16+ep18 baseline | WIP (assigned 23:55) |
+| **#4252** | frieren | LION optimizer (sign-of-gradient, categorically ≠ Adam family) at nh=176+bf16+ep14 | WIP (assigned 00:45) |
 | **#4043** | nezuko | AdamW weight_decay sweep + eta_min (pivoted to ep14 for 30-min cap, 3 arms) | WIP (redirected 23:30) |
 | **#4232** | fern | Push width frontier further: n_hidden=208 + bf16 + ep18 | WIP (assigned 00:15) |
 | **#4233** | tanjiro | AGC (Adaptive Gradient Clipping) screening at nh=176+bf16+ep14 (30-min cap) | WIP (assigned 00:20) |
@@ -163,7 +163,8 @@ Normalized DSDF (dims 4-11) across 100 train files / 108M values:
 | **#4187** | frieren | Pressure-magnitude weighted L1 (top-decile \|p_true\|) | `--use_pmag_weight --pmag_weight_alpha 1.0 --pmag_weight_quantile 0.90 --n_hidden 176 --use_bf16 --epochs 18`, T=45 | WIP (new) |
 | #4190 | tanjiro | n_hidden=144 + bf16 + ep18 (capacity-vs-epochs at 30-min budget) | `--n_hidden 144 --use_bf16 --epochs 18` (no T override) | **CLOSED 00:10** (val=57.05; capacity dominates schedule completion at 30-min budget) |
 | **#4205** | edward | RMSNorm swap for LayerNorm on n_hidden=176+bf16+ep18 baseline | `--use_rmsnorm --n_hidden 176 --use_bf16 --epochs 18` (no T override) | WIP |
-| **#4227** | frieren | AdaBelief optimizer swap for AdamW on n_hidden=176+bf16+ep18 baseline | `--optimizer adabelief --n_hidden 176 --use_bf16 --epochs 18` (no T override) | WIP |
+| #4227 | frieren | AdaBelief optimizer swap for AdamW on n_hidden=176+bf16+ep18 baseline | `--optimizer adabelief --n_hidden 176 --use_bf16 --epochs 18` (no T override) | **CLOSED 00:45** — per-epoch equivalent to AdamW; belief-scaling no-op at stable gradient regime; AdaBelief axis closed |
+| **#4252** | frieren | LION optimizer (sign-of-gradient) at nh=176+bf16+ep14 | `--use_lion --lion_lr 1e-4 --lion_wd 1e-3 --n_hidden 176 --use_bf16 --epochs 14` (30-min budget) | WIP (new) |
 | **#4232** | fern | Push width frontier: n_hidden=208 + bf16 + ep18 | `--n_hidden 208 --use_bf16 --epochs 18` (no T override) | WIP (new) |
 | **#4233** | tanjiro | AGC (Adaptive Gradient Clipping) screening at nh=176+bf16+ep14 | `--use_agc --agc_clip_factor 0.01 --n_hidden 176 --use_bf16 --epochs 14` (no T override) | WIP (new — 30-min budget screening) |
 
