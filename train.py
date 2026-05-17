@@ -400,6 +400,7 @@ class Config:
     ema_decay: float = 0.997  # EMA decay for shadow model evaluated at val/test
     sf_warmup_steps: int = 200  # Schedule-Free linear LR warmup
     max_grad_norm: float = 1.0  # Gradient clipping max norm (set 0 to disable)
+    dropout: float = 0.1  # Dropout rate in PhysicsAttention
 
 
 cfg = sp.parse(Config)
@@ -437,7 +438,7 @@ model_config = dict(
     n_head=4,
     slice_num=8,
     mlp_ratio=2,
-    dropout=0.1,
+    dropout=cfg.dropout,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
