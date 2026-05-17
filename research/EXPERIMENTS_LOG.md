@@ -1,5 +1,45 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-17 10:10 — Round-12 wave complete: 3 closures + **#4411 OOD signal was a seed fluke**; 3 Round-13 PRs assigned (data + arch + linear-attn)
+
+### #4486 fern TTA K=8 coord-noise eval — **CLOSED (TTA without training-time augmentation fails as predicted)**
+- W&B run: `npd7z3uu`. K=8 TTA `test_avg=41.0000` vs K=1 baseline-from-same-checkpoint `40.9680` (Δ=+0.0320 worse). All 4 test splits worse with TTA: single_in_dist +0.086, geom_camber_rc +0.023, geom_camber_cruise +0.002, re_rand +0.017. Val same direction (+0.026).
+- **Mechanism:** model trained with deterministic inputs (coord_noise=0.01 is training-time regularizer, NOT eval-time invariance prior). E[f(x+ε)] drifts AWAY from f(x) via Jensen's bias on a well-fit local function. Standard "TTA fails on non-augmented model" story.
+- Strong implementation work (paired K=1 vs K=8 same checkpoint, `mean_tta_std_norm` diagnostic verified model is sensitive to noise — output spread ~0.003-0.007, in-distribution with input std=0.005). The bias direction is structurally wrong.
+- **TTA axis CLOSED.** Only sensible re-test would be jointly-augmented training, but bench-time not justified.
+
+### #4483 thorfinn bs=8+ep18 — **CLOSED (bs axis closed on both sides)**
+- W&B run: `agzi4gh3`. val=55.9469 (+19.1%), test=48.7301 (+20.4%). 14/18 epochs (timeout-truncated at 30 min cap). Cosine lr reached only 1.46e-5 (vs 1e-5 floor planned).
+- **Mechanism:** Lion at this stack is **update-count-limited, not gradient-variance-limited**. Per-epoch wall barely moved (138 s vs ~131 s at bs=4, only +5%) because bottleneck is per-sample mesh compute on variable mesh size (242K nodes worst case), not GPU throughput. bs=8 halves updates per epoch without buying back wall time → ~half the gradient steps.
+- **VRAM note:** bs=8 + nh=176 sits at 91 GB peak — needed `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` to avoid OOM. Useful datum for future joint bs+nh moves.
+- **Bs axis fully closed:** bs=2 regressed (#4412 val=50.54), bs=4 baseline, bs=8 regresses (this PR val=55.95). Operating point locked at bs=4.
+
+### #4411 tanjiro coord_noise=0.005 seed-2 — **CLOSED (seed-1 was a seed fluke)**
+- Seed-2 (`gl2otzvv`): val=49.35 (+2.36 worse than baseline AND than seed-1), test=41.49 (+1.01 worse).
+- **2-seed mean for noise=0.005:** val=48.19 (+1.20), test=40.92 (+0.44). Both worse than baseline #4270 on both gates.
+- **Per-split direction FLIPS on seed-2:** geom_camber_rc seed-1=52.45 (BEAT) → seed-2=54.68 (+1.89 worse). re_rand seed-1=39.93 (BEAT) → seed-2=41.53 (+1.41 worse). The OOD signal was driven entirely by seed luck on those splits.
+- **CRITICAL LEARNING:** inter-seed spread on this stack is **val=2.31, test=1.14** — much wider than the 0.5 "noise floor" cited in prior send-back rubrics. The "val 46.6-47.5 close-tie" merge band is too narrow given this spread. **Future close-bracket sweeps need ≥3 seeds at decision point.**
+- **coord_noise axis closed.** Default 0.01 is fine; halving/doubling doesn't move it reproducibly.
+- **Implication for #4478 (eta_min=0.1) signal:** that PR also had N=1 with val=47.58 (+0.59) but test=40.27 (-0.21) and geom_camber_rc=50.92 (-1.87). Given the now-known 2.3 val seed spread, the N=1 signal at #4478 could similarly be a fluke. The sent-back #4478 eta_min=0.05 run (in flight) is the falsifying test. If 0.05 also shows test improvement on geom_camber_rc, the mechanism is real; if it regresses, eta_min axis is also a seed fluke.
+
+### Round-13 assignments to newly idle students (3 of 3)
+
+| PR | Student | Hypothesis | Tier |
+|---|---|---|---|
+| **#4530** | fern | **GeoMix camber interpolation** (Chen 2024 ICML) — bridge OOD M=6-8 via λ-mixed training pairs at p_mix=0.15 | Data augmentation |
+| **#4532** | tanjiro | **2D RoPE on mesh coords** (Su 2021 / EVA-02) — geometry-relative attention bias, d_rope=32 | Position encoding / attention |
+| **#4535** | thorfinn | **LinearNO drop-in linear attention** (Wu 2024 NeurIPS) — Φ(Q)·(Φ(K)^T·V) with elu+1 feature map, slice-attention only | Attention computation |
+
+Three orthogonal Round-13 axes plus 2 loss-formulation PRs already in flight (#4510 variance-mean, #4511 zonal-wake). Total Round-13 wave: 5 mechanism surfaces.
+
+### Plateau count: 22 consecutive non-improvements
+
+Sequence: [19 prior] → #4486 TTA close → #4483 bs=8 close → #4411 seed-2 close.
+
+**Noise-floor recalibration is itself useful:** the 0.5 val "close-tie" zone in prior rubrics is too tight. Real signal needs val ≤ ~46.5 OR ≥3-seed-averaged improvement at any val.
+
+---
+
 ## 2026-05-17 09:35 — Round-12 partial wave reviewed: 2 closures + 1 send-back; **second OOD-regularization signal**; 2 Round-13 loss-formulation PRs assigned
 
 ### #4488 frieren Post-LN — **CLOSED (norm-placement axis exhausted)**

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-17 09:35 UTC
+- **Last updated:** 2026-05-17 10:10 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Primary metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -24,25 +24,30 @@ No GitHub Issues open for this track as of 2026-05-17 06:30 UTC. Proceeding from
 
 | PR | Student | Axis being tested | Status |
 |---|---|---|---|
-| **#4411** | tanjiro | coord_noise=0.005 seed-2 confirmation | WIP — race-condition re-send-back posted 08:55 UTC |
 | **#4474** | alphonse | Skip-connection scaling 1/√2 + QK-norm + Lion | WIP — running |
-| **#4478** | nezuko | **eta_min_fraction=0.05** (smaller floor than 0.1 mixed result) | WIP — sent back 09:30 UTC, ready to rerun |
-| **#4483** | thorfinn | batch_size=8 + ep18 + Lion + QK-norm (3rd retry after 2 failures) | WIP — running `agzi4gh3` |
-| **#4486** | fern | TTA K=8 coord-noise eval + QK-norm | WIP — running |
+| **#4478** | nezuko | **eta_min_fraction=0.05** (smaller floor than 0.1 mixed result) | WIP — sent back, ready to rerun |
 | **#4489** | edward | Tail-emphasizing focal-L1 (α=0.5) | WIP — running |
-| **#4510** | frieren | **Variance+Mean Composite Loss** (Hanna 2024, α=0.8) — Round-13 #1 | WIP — just assigned |
-| **#4511** | askeladd | **Zonal/Wake-Emphasis Loss** (PINN-zonal Sep 2025) — Round-13 #2 | WIP — just assigned |
+| **#4510** | frieren | **Variance+Mean Composite Loss** (Hanna 2024, α=0.8) | WIP — Round-13 #1 (loss-tier) |
+| **#4511** | askeladd | **Zonal/Wake-Emphasis Loss** (PINN-zonal Sep 2025) | WIP — Round-13 #2 (loss-tier) |
+| **#4530** | fern | **GeoMix camber interpolation** (Chen 2024 ICML, p_mix=0.15) | WIP — Round-13 #3 (data-tier) |
+| **#4532** | tanjiro | **2D RoPE on mesh coords** (Su 2021 / EVA-02, d_rope=32) | WIP — Round-13 #4 (position-encoding tier) |
+| **#4535** | thorfinn | **LinearNO drop-in linear attention** (Wu 2024 NeurIPS) | WIP — Round-13 #5 (attention-compute tier) |
 
-**Zero idle students. Zero idle GPUs.**
+**Zero idle students. Zero idle GPUs.** 5 of 8 in-flight are Round-13 PRs.
 
-### Most promising standing signal — SECOND independent OOD-regularization observation
+### Standing signal — pending seed-2 verification
 
-Two PRs now show "mild late-training stochasticity → better OOD on `geom_camber_rc`":
+- **#4478 nezuko eta_min=0.1 (`61sf7lda`):** N=1 result val=47.58 (+0.59), **test=40.27 (-0.21 BEATS)**, **geom_camber_rc=50.92 (-1.87 BEATS plateau-target)**. Sent back for `eta_min_fraction=0.05`. **The N=1 signal cannot be trusted alone given the now-confirmed val=2.31 inter-seed spread on this stack.** If the 0.05 rerun also shows test improvement on geom_camber_rc, the eta_min mechanism is real. If it regresses, eta_min axis is closed (like #4411 was).
 
-1. **#4411 tanjiro coord_noise=0.005 (arm A `m5dcxfhe`):** val=47.03 (+0.04 within noise floor), **test=40.35 (-0.13 BEATS)**, geom_camber_rc=52.45 (-0.34 BEATS), re_rand=39.93 (-0.19 BEATS). Pending seed-2.
-2. **#4478 nezuko eta_min=0.1 (`61sf7lda`):** val=47.58 (+0.59 just outside noise), **test=40.27 (-0.21 BEATS)**, **geom_camber_rc=50.92 (-1.87 BEATS plateau-target)**, geom_camber_cruise=25.55 (-0.28), re_rand=39.64 (-0.48). 3 of 4 splits improved. Sent back for 0.05 floor.
+### CRITICAL NOISE-FLOOR RECALIBRATION (#4411 seed-2 result, 2026-05-17 09:34)
 
-**Pattern:** Both right at val noise floor, both improve test_avg, both improve `geom_camber_rc` (the structural hard split). Classic regularization tradeoff. Round-13 loss-formulation PRs (#4510 variance-mean, #4511 zonal) directly attack the same OOD mechanism from the loss side.
+- **Inter-seed spread on this stack:** val=2.31, test=1.14 (from #4411 seed-1 vs seed-2 at noise=0.005).
+- **Old "close-tie" zone (val 46.6-47.5):** TOO TIGHT given the new spread. A single seed in this band is NOT a reliable signal.
+- **Decision rubric update:** For close-tie zones, require either:
+  - val < 46.5 (1σ below baseline)
+  - OR ≥3 seeds with mean val ≤ 46.99
+  - OR test_avg < 40.0 AND test_geom_camber_rc < 51.0 (per-split structural signal)
+- **In-flight #4478 eta_min=0.05 send-back:** treat its N=1 result with skepticism. If interesting, immediately request 2 more seeds before any merge.
 
 ## Round-10/11 dead-ends (cumulative, 16 closures since #4270 merged)
 
@@ -66,35 +71,45 @@ Two PRs now show "mild late-training stochasticity → better OOD on `geom_cambe
 | #4383 | thorfinn | surf_weight {5,15} 3 arms close-tie/regress | CLOSED (axis exhausted) |
 | #4485 | askeladd | Constant LR after warmup: val=59.50 (+26.6% catastrophic, oscillation) | CLOSED |
 | #4488 | frieren | Post-LN: val=50.71 (+7.9%) — converges but slow, every split worse | CLOSED (norm-placement axis exhausted) |
+| #4486 | fern | TTA K=8 coord-noise: test+0.032, all splits worse — Jensen's bias | CLOSED (TTA axis closed) |
+| #4483 | thorfinn | bs=8+ep18: val=55.95 (+19%) — Lion update-count-limited, not gradient-variance-limited | CLOSED (bs axis closed both sides) |
+| #4411 | tanjiro | coord_noise=0.005 seed-1 fluke; 2-seed mean val=48.19 worse, OOD splits flip direction | CLOSED (noise-floor calibration learning) |
 
-## PLATEAU PROTOCOL EXTENDED (2026-05-17 09:35 UTC)
+## PLATEAU PROTOCOL EXTENDED (2026-05-17 10:10 UTC)
 
-**19 consecutive non-improvements since #4270 merged at 05:30 UTC.** +2 closures this cycle (#4485 constant-LR, #4488 Post-LN). But: **second independent OOD-regularization signal** (#4478 nezuko eta_min=0.1) — points to a live mechanism axis. Round-13 loss-formulation PRs target the same OOD axis from a different angle.
+**22 consecutive non-improvements since #4270 merged at 05:30 UTC.** +3 closures this cycle (#4486 TTA, #4483 bs=8, #4411 noise=0.005 seed fluke). Important falsification: #4411 seed-2 disproved seed-1's OOD-regularization read — single-seed N=1 signal on this stack is unreliable. #4478 (eta_min=0.1) is the other live N=1 OOD signal; the in-flight `eta_min=0.05` send-back is its falsifying test.
 
 ### Most promising signal — but technically not a win
 
 - **tanjiro #4411 arm A (coord_noise_std=0.005):** val=47.03 (+0.09% regress) but **test=40.35 (-0.32% IMPROVEMENT)**. Just outside noise floor on val. Arm B (std=0.02) still running — if both arms close-tie, the coord-noise axis may be a noise floor under QK-norm. WAIT for arm B.
 - **thorfinn #4383 arm A (surf_weight=5, run-B):** val=47.36 (+0.79% regress), test=40.64. Run-A `1grt9rc9` val=48.21 (+2.6%), test=40.22 (BEATS by 0.26). 0.85 spread on same config = noise floor ~0.5-1.0 val. sw=15 still running.
 
-### Round-12 wave outcome + Round-13 loss-formulation pivot
+### Round-12 wave COMPLETE. Round-13 wave (5 fresh axes) in flight.
 
-**Round-12 wave results (3 of 5 reviewed):**
-- thorfinn #4483 bs=8+ep18 — running 3rd retry `agzi4gh3` (2 prior failures: 1 startup crash, 1 divergence at step 197 with val=229.99)
-- askeladd #4485 constant LR — **CLOSED** (val=59.50, +26.6% catastrophic, oscillation)
-- fern #4486 TTA K=8 — running
-- frieren #4488 Post-LN — **CLOSED** (val=50.71, +7.9%, every split worse)
-- edward #4489 focal-L1 — running
+**Round-12 wave final tally (5 of 5):**
+- thorfinn #4483 bs=8+ep18 — **CLOSED** (val=55.95, update-count-limited)
+- askeladd #4485 constant LR — **CLOSED** (val=59.50 catastrophic)
+- fern #4486 TTA K=8 — **CLOSED** (test +0.032, Jensen's bias)
+- frieren #4488 Post-LN — **CLOSED** (val=50.71, every split worse)
+- edward #4489 focal-L1 α=0.5 — still running
 
-**Round-13 wave assigned (loss-formulation tier):**
-- **#4510 frieren Variance+Mean Composite Loss** — L = 0.8·mean(|e|) + 0.2·std(|e|) on surface (Hanna 2024)
-- **#4511 askeladd Zonal/Wake-Emphasis Loss** — 3x weight on TE (x_norm>0.6), 2x on LE (x_norm<0.1) (PINN-zonal Sep 2025)
+**Round-13 wave (5 mechanism surfaces, just assigned):**
+1. **Loss-formulation tier:**
+   - #4510 frieren Variance+Mean Loss — L = 0.8·mean(|e|) + 0.2·std(|e|) (Hanna 2024)
+   - #4511 askeladd Zonal/Wake-Emphasis — 3x w on TE, 2x on LE (PINN-zonal Sep 2025)
+2. **Data tier:**
+   - #4530 fern GeoMix — λ-mix training samples at p_mix=0.15 (Chen 2024 ICML)
+3. **Position-encoding tier:**
+   - #4532 tanjiro 2D RoPE — geometry-relative attention bias, d_rope=32 (EVA-02)
+4. **Attention-compute tier:**
+   - #4535 thorfinn LinearNO — drop-in elu+1 linear attention (Wu 2024 NeurIPS)
 
-Plus 3 carryovers/send-backs still running:
-- alphonse #4474 skip-1/√2 (residual scaling)
-- nezuko #4478 eta_min_fraction=0.05 send-back (LR floor sweet-spot search)
-- tanjiro #4411 send-back coord_noise=0.005 seed-2 (close-tie confirmation)
+**Plus 3 carryovers/send-backs:**
+- alphonse #4474 skip-1/√2 (residual scaling — Round-11 carryover)
+- nezuko #4478 eta_min_fraction=0.05 send-back (LR floor sweet-spot — critical falsifying test for OOD signal)
+- edward #4489 focal-L1 α=0.5 (Round-12 still running)
 
-**Total 8 in-flight on orthogonal mechanism surfaces.** Both Round-13 loss-formulation PRs directly target the `geom_camber_rc` plateau, aligned with the OOD-regularization pattern emerging from #4411 and #4478.
+**Total 8 in-flight on 5 orthogonal mechanism surfaces.** Round-13 attacks the plateau from data, loss, position, and attention angles simultaneously. If ANY breaks the plateau, several may compound.
 
 ## Key learnings (Round-10 to date)
 
