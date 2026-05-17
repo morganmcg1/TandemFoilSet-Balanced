@@ -399,6 +399,7 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     ema_decay: float = 0.997  # EMA decay for shadow model evaluated at val/test
     sf_warmup_steps: int = 200  # Schedule-Free linear LR warmup
+    max_grad_norm: float = 1.0  # Gradient clipping max norm (set 0 to disable)
 
 
 cfg = sp.parse(Config)
@@ -502,6 +503,7 @@ for epoch in range(MAX_EPOCHS):
     optimizer.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    pre_clip_norms: list[float] = []
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -522,6 +524,9 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        if cfg.max_grad_norm > 0:
+            pre_clip_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.max_grad_norm)
+            pre_clip_norms.append(float(pre_clip_norm))
         optimizer.step()
         ema_model.update_parameters(model)
 
@@ -531,6 +536,20 @@ for epoch in range(MAX_EPOCHS):
 
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+
+    if pre_clip_norms:
+        norms_t = torch.tensor(pre_clip_norms, dtype=torch.float64)
+        grad_norm_stats = {
+            "mean": float(norms_t.mean()),
+            "max": float(norms_t.max()),
+            "min": float(norms_t.min()),
+            "p50": float(norms_t.quantile(0.50)),
+            "p99": float(norms_t.quantile(0.99)),
+            "clip_activations": int((norms_t > cfg.max_grad_norm).sum()),
+            "n_steps": int(norms_t.numel()),
+        }
+    else:
+        grad_norm_stats = None
 
     # --- Validate ---
     model.eval()
@@ -566,7 +585,14 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
+        "grad_norm": grad_norm_stats,
     })
+    if grad_norm_stats is not None:
+        print(
+            f"  grad_norm: mean={grad_norm_stats['mean']:.3f} max={grad_norm_stats['max']:.3f} "
+            f"p99={grad_norm_stats['p99']:.3f} clip_hits={grad_norm_stats['clip_activations']}/"
+            f"{grad_norm_stats['n_steps']}"
+        )
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
