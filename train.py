@@ -587,6 +587,7 @@ class Config:
     norm_type: str = "layernorm"  # Block-level normalization: 'layernorm' or 'rmsnorm'
     eta_min: float = 0.0   # CosineAnnealingLR floor; 0 = anneal to zero (default)
     n_head: int = 4   # Transolver attention heads; head_dim = n_hidden // n_head
+    n_hidden: int = 128   # Transolver model hidden dimension (must be divisible by n_head)
     n_layers: int = 5   # Transolver depth (number of TransolverBlocks)
     slice_num: int = 64   # Transolver attention slice token count
     optimizer: str = "adamw"   # 'adamw' or 'lion'
@@ -637,11 +638,14 @@ val_loaders = {
 
 fourier_pe_freqs = cfg.fourier_pe_freqs if cfg.fourier_pe else 0
 extra_pe_features = 4 * fourier_pe_freqs
+if cfg.n_hidden % cfg.n_head != 0:
+    raise ValueError(f"n_hidden ({cfg.n_hidden}) must be divisible by n_head ({cfg.n_head})")
+
 model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2 + extra_pe_features,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=cfg.n_hidden,
     n_layers=cfg.n_layers,
     n_head=cfg.n_head,
     slice_num=cfg.slice_num,
@@ -793,6 +797,7 @@ for epoch in range(MAX_EPOCHS):
         "T_max": cfg.T_max,
         "fourier_pe": cfg.fourier_pe,
         "fourier_pe_freqs": fourier_pe_freqs,
+        "n_hidden": cfg.n_hidden,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "gate_stats": gate_stats,
