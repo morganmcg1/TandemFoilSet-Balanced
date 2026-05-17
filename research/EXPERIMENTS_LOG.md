@@ -1602,3 +1602,13 @@ Note: both #4186 and #4155 were trained on the **old pre-SF baseline** since the
 - **Metrics path:** `models/model-charliepai2i48h1-fern-ema-0995-on-compile-stack-20260517-005547/metrics.jsonl`
 - **Decision:** CLOSED. EMA axis saturated on current stack.
 - **Cross-experiment insight (fern's analysis):** *EMA decay optimum is coupled to per-step iterate displacement, not optimizer choice.* Compile doubling the epoch budget (23→42 epochs) shifted the optimum back upward. Re-tune only if a future PR materially changes epoch count.
+
+## 2026-05-17 01:48 — PR #4262 — compile EMA module (CLOSED — borderline regression, real but tiny speedup)
+
+- **Branch:** `charliepai2i48h1-askeladd/compile-ema-module-for-faster-val`
+- **Hypothesis:** Compile ema_model.module to fuse the eager validation forward pass; predicted ~7-9s/epoch saved → +7-9 more epochs.
+- **Results:** val=37.77 (+0.46% vs 37.31), test=32.20 (-0.61% vs 32.81). 44 epochs reached (+2). sec/epoch 41.25 (-2.7%, only -1.15s actual saving).
+- **Metrics path:** `models/model-compile-ema-module-for-faster-val-20260517-010021/metrics.jsonl`
+- **Decision:** CLOSED. val regressed slightly (within seed noise); val/test asymmetry (val worse, test better) confirms seed-noise band. Actual speedup ~2s/epoch (predicted 7-9) — val pass is only ~4-6s of each epoch, not 17s as inferred.
+- **Key learning:** *Train pass dominates per-epoch cost (~36s of 42s). Future compute wins should target train-side ops (attention/matmul fusion), not val.* The val pass is a small enough fraction that further val-side optimization has diminishing returns.
+- **Implementation note:** The change is correct and safe — `torch.compile(ema_model.module, dynamic=True, mode="default")` works cleanly with `AveragedModel`. EMA averaging continues to function; checkpoint round-trip preserved by using `getattr(ema_model.module, "_orig_mod", ema_model.module).state_dict()` on save.
