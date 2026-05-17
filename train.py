@@ -457,6 +457,9 @@ class Config:
     epochs: int = 80
     cosine_t_max_epochs: int = 80  # default unchanged from current behavior
     ema_decay: float = 0.999
+    swa_start_epoch: int = 0  # if > 0, use SWA from this epoch (replaces EMA)
+    swa_lr: float = 1e-6  # constant SWA LR after SWALR anneal
+    swa_anneal_epochs: int = 5  # SWALR linear anneal window from cosine -> swa_lr
     compile_mode: str = ""  # empty = no compile (baseline behavior)
     slice_num: int = 64
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -507,15 +510,37 @@ model_config = dict(
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
+
+use_swa = cfg.swa_start_epoch > 0
+swa_model = None
+swa_inference = None
+swa_scheduler = None
+if use_swa:
+    # AveragedModel deepcopies the underlying nn.Module; build BEFORE torch.compile so
+    # the deepcopy does not have to traverse the OptimizedModule wrapper.
+    from torch.optim.swa_utils import AveragedModel, SWALR
+    swa_model = AveragedModel(model).to(device)
+    print(f"SWA enabled: start_epoch={cfg.swa_start_epoch}, swa_lr={cfg.swa_lr}, anneal_epochs={cfg.swa_anneal_epochs}")
+
 if cfg.compile_mode:
     _mode = cfg.compile_mode if cfg.compile_mode != "default" else None
     model = torch.compile(model, mode=_mode, dynamic=True)
+    if use_swa:
+        # Compile the SWA inference path too so validation passes match the live
+        # model's eval throughput.
+        swa_inference = torch.compile(swa_model, mode=_mode, dynamic=True)
     print(f"Model compiled with mode={cfg.compile_mode!r}")
+else:
+    swa_inference = swa_model
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = Lion(model.parameters(), lr=cfg.lr, betas=(0.9, 0.99), weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.cosine_t_max_epochs)
-ema = EMA(model, decay=cfg.ema_decay)
+if use_swa:
+    swa_scheduler = SWALR(optimizer, swa_lr=cfg.swa_lr, anneal_epochs=cfg.swa_anneal_epochs)
+    ema = None
+else:
+    ema = EMA(model, decay=cfg.ema_decay)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -577,7 +602,8 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
-        ema.update(model)
+        if ema is not None:
+            ema.update(model)
 
         gn = grad_norm.item()
         epoch_gn_sum += gn
@@ -590,7 +616,14 @@ for epoch in range(MAX_EPOCHS):
 
     # Capture the LR that was actually used during this epoch (before stepping).
     epoch_lr = optimizer.param_groups[0]["lr"]
-    scheduler.step()
+    swa_active = use_swa and epoch >= cfg.swa_start_epoch
+    if swa_active:
+        swa_model.update_parameters(model)
+        swa_scheduler.step()
+        inference_source = "swa"
+    else:
+        scheduler.step()
+        inference_source = "ema" if ema is not None else "model"
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
     gn_mean = epoch_gn_sum / max(n_batches, 1)
@@ -598,12 +631,26 @@ for epoch in range(MAX_EPOCHS):
 
     # --- Validate ---
     model.eval()
-    ema.apply_to(model)
-    split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
-        for name, loader in val_loaders.items()
-    }
-    ema.restore(model)
+    if swa_active:
+        swa_model.eval()
+        if swa_inference is not swa_model:
+            swa_inference.eval()
+        split_metrics = {
+            name: evaluate_split(swa_inference, loader, stats, cfg.surf_weight, device)
+            for name, loader in val_loaders.items()
+        }
+    elif ema is not None:
+        ema.apply_to(model)
+        split_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            for name, loader in val_loaders.items()
+        }
+        ema.restore(model)
+    else:
+        split_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            for name, loader in val_loaders.items()
+        }
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
     dt = time.time() - t0
@@ -616,12 +663,25 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        # Save EMA shadow (the weights used for this val) so that the test loop
-        # reproduces the same checkpoint when loading from disk.
-        torch.save(ema.shadow, model_path)
+        # Save the exact weights used for this val so the test loop reproduces it
+        # when loading from disk. SWA: averaged module weights; EMA: shadow weights;
+        # otherwise: live model weights.
+        if swa_active:
+            # swa_model wraps an uncompiled copy, so its state_dict has clean keys.
+            # The live model may be torch.compile-wrapped (keys prefixed with
+            # _orig_mod.); prefix here so the test-eval load round-trips.
+            swa_sd = swa_model.module.state_dict()
+            if hasattr(model, "_orig_mod"):
+                swa_sd = {f"_orig_mod.{k}": v for k, v in swa_sd.items()}
+            torch.save(swa_sd, model_path)
+        elif ema is not None:
+            torch.save(ema.shadow, model_path)
+        else:
+            torch.save(model.state_dict(), model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    swa_n = int(swa_model.n_averaged.item()) if swa_model is not None else 0
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -636,6 +696,8 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
+        "inference_source": inference_source,
+        "swa_n_averaged": swa_n,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
