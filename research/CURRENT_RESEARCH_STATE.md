@@ -1,8 +1,35 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 04:10 UTC (Round 4 active on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-17 06:40 UTC (Round 4 active on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
+
+## 🚨 PROVISIONAL HEADLINE (uncommitted, awaiting frieren push)
+
+**Frieren #4248 progress comment at 05:37 UTC reports:** n_layers=3 hits **val_avg = 45.654** — a stunning **−12.6% paired Δ vs canonical 52.258**. Arm B control (n_layers=5) lands 53.549, +2.5% above the published canonical baseline (still inside the single-arm noise band; paired vs A is the rock-solid signal). Arm C (n_layers=7) reported in-flight at 05:37; Arm D (n_layers=4) not yet started.
+
+**Interpretation:** Shallower depth strongly dominates at 30-min budget. Same step-count vs capacity trade-off that closed the width axis (#4225) and supported the under-fit diagnosis from fern #4208 — but **the magnitude here (−14.7% paired) dwarfs any prior result in this round.** Either (a) the model is dramatically over-parameterized at 5 layers for 30-min training, or (b) gradient flow degrades non-monotonically with depth at this attention scale. Need test 3-split confirmation before declaring terminal — a depth=3 advantage that doesn't transfer to test is overfit-to-val.
+
+**Status:** Arms A/B metrics are on disk but **not yet committed** (last pushed commit is the 02:50 UTC infra). Left an urgent commit-now comment on the PR.
+
+## Operational status (06:40 UTC)
+
+| Student | PR | State | GPU now | Last push | Notes |
+|---|---|---|---|---|---|
+| ⭐ **frieren** | #4248 n_layers | progress in PR comment; A/B metrics uncommitted | 0 MB (post Arm B?) | infra 02:50Z | **Provisional huge winner; awaiting commit** |
+| **edward** | #4350 clip-lr3e3 | training | 83 GB | assign 03:56Z | No infra needed (flag pre-exposed) |
+| **alphonse** | #4317 SF-betas 2×2 | training | 83 GB | infra 03:39Z | |
+| **fern** | #4339 mlp_ratio | training | 83 GB | infra 03:48Z | |
+| **tanjiro** | #4207 surf_weight R2 | training (R2 launch) | 83 GB | R1 results 03:28Z; sent back for R2 at lr=3e-3 with arms {5, 8, 10, 15} | |
+| **askeladd** | #4351 n_head | infra done; about to launch | 0 MB (just exited) | infra 04:38Z | Recovered from rate-limit; should start Arm A next iter |
+| **thorfinn** | #4303 slice_num | infra done; just finished long Claude (607s) — likely launching | 0 MB | infra 02:52Z | Recovered from earlier stuck session |
+| **nezuko** | #4353 fourier-feats | **Claude session HUNG 1h+ since 05:22 UTC** | unknown | assign only 03:56Z | No infra; rate-limit fallout. Comment posted advising arm-by-arm commits on recovery |
+
+## Critical operational lessons (this round)
+
+1. **Arm-by-arm commits are mandatory.** Multiple students lost progress to 60-min SIGTERMs (fern earlier) and Claude session recycling. End-of-sweep commits are fragile.
+2. **GitHub API rate-limit creates cascading failures.** The 04:00-05:22 UTC rate-limit window caused 3 students (askeladd, frieren, thorfinn) to lose assignment polling for 1h+. Nezuko's Claude session may still be hung from this.
+3. **Frieren's session pattern:** GPU=0 for >2h with no commits despite reporting Arms A/B done. Either between arms or post-SIGTERM. The 45.654 result hasn't been confirmed by metrics file inspection yet.
 
 ## Session Progress — 3 Merges, Multiple Nulls Closed
 
@@ -87,14 +114,25 @@ python train.py \
 
 ## Priority Watch (Next Results to Land)
 
-1. **frieren n_layers #4248** — depth axis; if winner still descending at cap → scale test
-2. **thorfinn slice_num #4303** — PhysicsAttention physical-slice count
-3. **alphonse SF betas #4317** — optimizer-internal 2×2 factorial
-4. **edward clip #4350** — 98% clip-rate motivates loosening; primary suspect clip=1.5
-5. **tanjiro surf_weight #4207 R2** — non-monotone per-split landscape; resolves direction at canonical
-6. **fern mlp_ratio #4339** — completes capacity surface; BERT-default 4 vs current 2
-7. **askeladd n_head #4351** — final primary architecture axis
-8. **nezuko Fourier feats #4353** — first preprocessing axis; Tancik strong prior
+1. ⭐⭐⭐ **frieren n_layers #4248 — PROVISIONAL: depth=3 wins by paired −14.7% (val 45.654 vs 53.549 control).** Awaiting committed metrics + test 3-split confirmation. **If confirmed, this is the biggest single PR of the round.**
+2. **tanjiro surf_weight #4207 R2** — R1 winners w∈{5,15} were paired ≥1.86% above the now-stale lr=2e-3 control; R2 at canonical lr=3e-3 with arms {5, 8, 10, 15} resolves direction
+3. **edward clip #4350** — 98% clip-rate at canonical motivates loosening; primary suspect clip=1.5
+4. **alphonse SF betas #4317** — optimizer-internal 2×2 factorial
+5. **fern mlp_ratio #4339** — completes capacity surface; BERT-default 4 vs current 2
+6. **askeladd n_head #4351** — final primary architecture axis
+7. **thorfinn slice_num #4303** — PhysicsAttention physical-slice count
+8. **nezuko Fourier feats #4353** — first preprocessing axis; Tancik strong prior; **currently blocked on hung Claude session**
+
+## Plateau-busting follow-ups if frieren wins
+
+If n_layers=3 confirms at the canonical val/test, the follow-up surface to map next round:
+
+1. **Even shallower probe: n_layers ∈ {1, 2, 3} at canonical.** The win direction is downward; test if 2 or 1 layer is sub-30 (capacity floor).
+2. **Compensating capacity: n_layers=3 × n_hidden ∈ {128, 192, 256}.** Step-count budget loosens when depth halves; reallocate the savings to width.
+3. **Compensating capacity: n_layers=3 × mlp_ratio ∈ {2, 4, 6}.** Same logic, MLP axis.
+4. **Compensating capacity: n_layers=3 × slice_num ∈ {64, 96, 128, 160}.** PhysicsAttention capacity axis.
+5. **n_layers=3 × longer schedule.** If shallow models converge faster per epoch, push to 60 or 75 epochs at the same wall-clock by reducing eval frequency.
+6. **n_layers=3 × clip-relax.** Pair with edward's clip sweep winner if it lands.
 
 ## Falsified / Closed Hypotheses
 
