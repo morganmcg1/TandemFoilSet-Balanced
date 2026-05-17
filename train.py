@@ -566,6 +566,7 @@ class Config:
     lion_lr: float = 1e-4  # Lion lr; canonical: AdamW_lr / 3..10
     lion_wd: float = 1e-3  # Lion wd; canonical: AdamW_wd * 3..10
     use_qk_norm: bool = False  # ViT-22B-style LayerNorm(head_dim) on Q and K before SDPA
+    llrd_alpha: float = 1.0  # Layer-wise LR decay (Howard&Ruder 2018); block_l_lr = base_lr * alpha^(L-1-l); 1.0 disables
 
 
 cfg = sp.parse(Config)
@@ -614,10 +615,39 @@ n_params = sum(p.numel() for p in model.parameters())
 ffn_inner = next(m.inner for m in model.modules() if isinstance(m, SwiGLUFFN))
 print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN=SwiGLU inner={ffn_inner})")
 
+def make_llrd_param_groups(model, base_lr: float, alpha: float):
+    """Layer-wise LR decay (Howard & Ruder 2018, arXiv:1801.06146).
+
+    block-l lr = base_lr * alpha**(L-1-l), so the output-side block trains at
+    base_lr and earlier blocks decay exponentially. Embedding + placeholder
+    parameters are treated as "head" and use base_lr (matches the convention
+    of head/classifier groups in BERT/ViT fine-tuning recipes).
+    """
+    n_blocks = len(model.blocks)
+    groups = []
+    block_param_ids: set[int] = set()
+    for l, block in enumerate(model.blocks):
+        params = list(block.parameters())
+        block_param_ids.update(id(p) for p in params)
+        lr_l = base_lr * (alpha ** (n_blocks - 1 - l))
+        groups.append({"params": params, "lr": lr_l, "name": f"block_{l}"})
+    head_params = [p for p in model.parameters() if id(p) not in block_param_ids]
+    groups.append({"params": head_params, "lr": base_lr, "name": "head"})
+    return groups
+
+
 if cfg.use_lion:
-    optimizer = Lion(model.parameters(), lr=cfg.lion_lr,
-                     betas=(0.9, 0.99), weight_decay=cfg.lion_wd)
-    print(f"Optimizer: Lion (lr={cfg.lion_lr}, wd={cfg.lion_wd}, betas=(0.9, 0.99))")
+    if cfg.llrd_alpha != 1.0:
+        param_groups = make_llrd_param_groups(model, cfg.lion_lr, cfg.llrd_alpha)
+        optimizer = Lion(param_groups, lr=cfg.lion_lr,
+                         betas=(0.9, 0.99), weight_decay=cfg.lion_wd)
+        print(f"Optimizer: Lion + LLRD (base_lr={cfg.lion_lr}, alpha={cfg.llrd_alpha}, wd={cfg.lion_wd})")
+        for g in optimizer.param_groups:
+            print(f"  {g['name']:<10s} lr={g['lr']:.4e} ({g['lr']/cfg.lion_lr:.2f}x base)")
+    else:
+        optimizer = Lion(model.parameters(), lr=cfg.lion_lr,
+                         betas=(0.9, 0.99), weight_decay=cfg.lion_wd)
+        print(f"Optimizer: Lion (lr={cfg.lion_lr}, wd={cfg.lion_wd}, betas=(0.9, 0.99))")
 else:
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 
@@ -762,6 +792,17 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "global_step": global_step,
     }
+    if cfg.use_lion and cfg.llrd_alpha != 1.0:
+        for g in optimizer.param_groups:
+            log_metrics[f"lr_group/{g['name']}"] = g["lr"]
+        per_block_grad_norm = {}
+        for layer_idx, blk in enumerate(model.blocks):
+            sq = 0.0
+            for p in blk.parameters():
+                if p.grad is not None:
+                    sq += p.grad.detach().float().norm().item() ** 2
+            per_block_grad_norm[f"grad_norm/block_{layer_idx}"] = sq ** 0.5
+        log_metrics.update(per_block_grad_norm)
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
