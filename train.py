@@ -566,6 +566,7 @@ class Config:
     lion_lr: float = 1e-4  # Lion lr; canonical: AdamW_lr / 3..10
     lion_wd: float = 1e-3  # Lion wd; canonical: AdamW_wd * 3..10
     use_qk_norm: bool = False  # ViT-22B-style LayerNorm(head_dim) on Q and K before SDPA
+    constant_lr_after_warmup: bool = False  # disable cosine; keep LR at peak after warmup
 
 
 cfg = sp.parse(Config)
@@ -631,6 +632,8 @@ warmup_epochs = 2
 def lr_lambda(epoch):
     if epoch < warmup_epochs:
         return 0.1 + 0.9 * (epoch + 1) / warmup_epochs  # 0.1 -> 1.0 over warmup
+    if cfg.constant_lr_after_warmup:
+        return 1.0  # constant LR at peak after warmup
     progress = (epoch - warmup_epochs) / max(MAX_EPOCHS - warmup_epochs, 1)
     return 0.5 * (1 + math.cos(math.pi * progress))  # cosine to 0 after warmup
 scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
@@ -653,7 +656,7 @@ run = wandb.init(
         "val_samples": {k: len(v) for k, v in val_splits.items()},
         "warmup_epochs": warmup_epochs,
         "grad_clip_max_norm": GRAD_CLIP_MAX_NORM,
-        "scheduler": "linear_warmup_then_cosine",
+        "scheduler": "linear_warmup_then_constant" if cfg.constant_lr_after_warmup else "linear_warmup_then_cosine",
         "optimizer": "lion" if cfg.use_lion else "adamw",
         "lion_betas": (0.9, 0.99) if cfg.use_lion else None,
     },
