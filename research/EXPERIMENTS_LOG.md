@@ -1445,3 +1445,24 @@ Per-split test (arm 3 / T_max=25):
 - Branch: `willowpai2i48h3-tanjiro/lr-retune-cosine-t25`
 - Hypothesis: LR=1e-3 was swept previously (PR #4216) on broken T_max=50 schedule. With correct T_max=25, higher LR (1.5e-3, 2e-3) may now improve val as well as test. SOAP+grad_clip+bf16 is known-stable at 2-3× canonical LR.
 - 2 arms: lr ∈ {1.5e-3, 2e-3}, both with cosine_t_max=25.
+
+## 2026-05-17 04:00 — PR #4244 (alphonse): Wider Transolver n_hidden=192 on bf16 — **CLOSED**
+
+- Branch: `willowpai2i48h3-alphonse/wider-transolver-n-hidden-192`
+- W&B runs: `337ctiha` (arm1 n_h=128 baseline), `1174guyj` (arm2 n_h=192)
+
+**Result (vs old canonical val=41.4446; new canonical is 37.9354):**
+
+| Arm | n_hidden | params | epoch_time | epochs | val | test_excl |
+|---|---|---|---|---|---|---|
+| 1 (baseline) | 128 | 0.66M | 107.4s | 17 | 41.4446 | 43.2173 |
+| 2 (variant) | 192 | 1.47M | 135.5s | **14** | 43.7460 (+5.55%) | 43.3659 (+0.34%) |
+
+**Matched-epoch finding:** At EVERY epoch from 1–14, Arm 2 (wider) beats Arm 1 (narrower). At epoch 14: Arm 2=43.75 vs Arm 1=46.98 (Arm 2 leads by 3.23). The wider model IS better per-epoch, but only gets 14 epochs vs 17.
+
+**Analysis:** Wall-clock binding, not capacity. Arm 1's decisive last 3 epochs (46.98→45.33→44.60→41.44) happen after the wider model's budget is exhausted. Per-epoch slowdown 26% (135.5s vs 107.4s) erases bf16 throughput dividend (n_hidden=192 on bf16 ≈ n_hidden=128 on fp32). VRAM fine (43.1 GB, well under 96 GB). Capacity-via-width under current 30-min cap: closed for 192. **CLOSED.**
+
+## 2026-05-17 04:00 — Assignment: #4348 alphonse n-head-sweep
+
+- Branch: `willowpai2i48h3-alphonse/n-head-sweep`
+- Hypothesis: n_head=4 never swept; try {2, 8} on 14-winner canonical. n_head=2 (per-head dim=64) follows ViT-Base convention; n_head=8 (per-head dim=16) tests specialization. Epoch_time expected ~canonical at all values (attention not the bottleneck).

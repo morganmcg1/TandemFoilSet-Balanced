@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 (updated 03:10 — **#4263 tanjiro MERGED (cosine T_max=25, −8.47% val, 14th winner)**; #4336 tanjiro assigned (lr-retune on T_max=25 canonical {1.5e-3, 2e-3}))
+- **Date:** 2026-05-17 (updated 04:00 — #4244 alphonse CLOSED (n_hidden=192, wall-clock binding; matched-epoch advantage exists but truncated at 14 epochs); #4348 alphonse assigned (n_head sweep {2, 8}))
 - **Branch:** `icml-appendix-willow-pai2i-48h-r3`
 - **Most recent human researcher directive:** None this launch.
 - **Canonical baseline (merged):** `val_avg/mae_surf_p = 37.9354`, `test_avg/mae_surf_p (excl cruise) = 39.0519`
@@ -45,7 +45,8 @@ Old launch baseline: 135.30. Total gain: **−72.0%** over 14 compounding improv
 
 | PR | Student | Hypothesis | Outcome |
 |---|---|---|---|
-| #3140 | alphonse | Width scaling (128→192) | +18.7% — wall-clock penalty (bf16 revisit: #4244) |
+| #3140 | alphonse | Width scaling (128→192) | +18.7% — wall-clock penalty |
+| #4244 | alphonse | n_hidden=192 on bf16 canonical | +5.55% val — wall-clock binding (14 vs 17 epochs); matched-epoch advantage exists but truncated. Width closed. |
 | #3161 | frieren | Per-sample loss normalization | +13.0% |
 | #3165 | nezuko | Depth scaling (5→8 layers) | +25.4% — wall-clock penalty |
 | #4247 | thorfinn | Deeper Transolver n_layers=6 on bf16 canonical | +9.78% val — schedule/LR bottleneck; even at matched epoch 14 deeper model lags. Capacity-via-depth closed. |
@@ -76,7 +77,8 @@ Old launch baseline: 135.30. Total gain: **−72.0%** over 14 compounding improv
 | **#4234** | **askeladd** | **Batch size sweep {4, 6, 8} on bf16 canonical** | **Throughput** | **WIP — training.** |
 | **#4244** | **alphonse** | **Wider Transolver n_hidden=192 on bf16 canonical** | **Architecture** | **WIP — training.** |
 | **#4245** | **nezuko** | **Weight decay sweep {1e-4, 1e-3, 1e-2} on bf16 canonical** | **Regularization** | **WIP — training.** |
-| **#4296** | **thorfinn** | **Transolver slice_num sweep {32, 96} on bf16 canonical** | **Architecture** | **WIP — needs rebase after #4263 merge.** |
+| **#4296** | **thorfinn** | **Transolver slice_num sweep {32, 96} on bf16 canonical** | **Architecture** | **WIP — rebase in progress (conflict from #4263 train.py change).** |
+| **#4348** | **alphonse** | **Attention head sweep {2, 8} on 14-winner canonical** | **Architecture** | **WIP — just assigned.** |
 | **#4305** | **fern** | **MLP ratio revisit {3, 4} on bf16 canonical** | **Architecture** | **WIP — training.** |
 | **#4336** | **tanjiro** | **LR re-tune on T_max=25 canonical: {1.5e-3, 2e-3}** | **Optimization** | **WIP — just assigned.** |
 
@@ -101,7 +103,8 @@ Zero idle students.
 ### Immediate (active)
 - **Frieren log-Re (#3415).** −1.20% within-PR on older stack. Input-side, orthogonal — **highest-EV pending result**; expected val ≈ 35-37 if compounding holds on new T_max=25 canonical.
 - **Edward log-pressure (#3952).** Moderate within-PR signal; now re-running on full canonical. Must beat val=37.9354.
-- **Architecture unlocks (batch/width/FFN):** #4234 askeladd batch sweep, #4244 alphonse n_hidden=192, #4296 thorfinn slice_num (needs rebase), #4305 fern mlp_ratio.
+- **Architecture unlocks (batch/attention/FFN):** #4234 askeladd batch sweep, #4296 thorfinn slice_num (rebase in progress), #4305 fern mlp_ratio, #4348 alphonse n_head sweep.
+- **Width closed:** n_hidden=192 fails under 30-min cap even with bf16 (14 epochs vs 17; matched-epoch advantage real but truncated).
 - **Regularization:** #4245 nezuko weight decay sweep.
 - **LR re-tune on T_max=25 (#4336 tanjiro):** lr ∈ {1.5e-3, 2e-3} on correct schedule. Previous sweep (pr#4216) ran on broken T_max=50.
 - **Critical cascade:** ALL active experiments must add `--cosine_t_max 25`. Notified all 7 WIP PRs.
