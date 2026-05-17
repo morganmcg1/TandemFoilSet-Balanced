@@ -33,7 +33,7 @@
 | Student | PR | Hypothesis | Stack |
 |---|---|---|---|
 | alphonse | #4581 | LR warmup {3, 5} epochs on prior best stack (with Huber δ fallback) | n=8+lr=7e-4+wd=0.0001+δ=0.10+slice=32 ⚠️ stack now obsolete (lr=9e-4 is winner) |
-| **tanjiro** | **TBD this turn** | **lr=1e-3 push + T_max bracket on new best n=8+lr=9e-4 stack** | TBD |
+| **tanjiro** | **#4599** | **lr=1e-3 + T_max=20 vs lr=9e-4 + T_max=22 on n=8 stack** | n=8+wd=0.0001+δ=0.10+slice=32 |
 | edward | #4543 | lr=8e-4 cross-lineage transfer (n=8+lr=8e-4 ± wd=0.001) | n=8+δ=0.10+slice=32 ⚠️ partial result already known: arm-1 lr=8e-4=54.558 |
 | askeladd | #4561 | slice bracket {40, 48} on current best stack | n=8+lr=7e-4+wd=0.0001+δ=0.10 ⚠️ stack pre-tanjiro-merge |
 | frieren | #4484 | T_max bracket {18, 22} on n=8 stack | n=8+lr=7e-4+δ=0.10+slice=32 ⚠️ pre-tanjiro-merge |
