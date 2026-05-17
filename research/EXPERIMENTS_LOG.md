@@ -1662,3 +1662,40 @@ Note: both #4186 and #4155 were trained on the **old pre-SF baseline** since the
 - **Hypothesis:** Late-epoch surf_weight ramp (10→100 at epoch 38) focuses the model on surface pressure MAE in the final epochs.
 - **Results:** val=39.77 (vs new baseline 36.13, +10.1%). Val spiked from 40.85 to 44.49 at epoch 38 (the ramp point), then descended but never recovered.
 - **Decision:** CLOSED. The 10× abrupt multiplier jump scrambled SF AdamW's running gradient-variance estimates, causing a 5-epoch recovery period with no net benefit. Surface ramp direction not dead — a gentler approach (2× max over cosine curriculum, or smooth annealing over full training) is worth revisiting after core axes settle.
+
+## 2026-05-17 02:40 — PR #4281 — SmoothL1 beta=0.25→0.1 (SENT BACK — retest on mlp_ratio=2 stack)
+
+- **Branch:** `charliepai2i48h1-alphonse/smoothl1-beta-0.1-sharper-huber`
+- **Hypothesis:** Sharper Huber (beta=0.1 vs 0.25) pushes typical post-warmup residuals into the linear regime, maintaining gradient magnitude at late epochs.
+- **Results (on pre-mlp_ratio-fix stack):**
+
+| Metric | Value | Baseline (37.31) | Δ | Baseline (36.13) | Δ vs new |
+|--------|-------|------------------|---|-----------------|----------|
+| val_avg/mae_surf_p | **35.86** | 37.31 | **−3.9%** | 36.13 | **−0.7%** |
+| test_avg/mae_surf_p | **31.29** | 32.81 | **−4.6%** | 31.97 | **−2.1%** |
+| val_geom_camber_rc | 47.85 | 50.50 | −5.2% | 48.15 | −0.6% |
+| sec/epoch | 42.3 | 42.4 | same | — | — |
+| epochs | 42 | 42 | same | — | — |
+
+- **Metrics path:** `models/model-charliepai2i48h1-alphonse-smoothl1-beta-0.1-sharper-huber-20260517-014857/metrics.jsonl`
+- **Decision:** SENT BACK. val=35.86 beats both old (37.31) and new (36.13) baselines, but the result was on the pre-mlp_ratio-fix stack. Sent back for 2-arm retest: Arm A = beta=0.1 (confirm on mlp_ratio=2), Arm B = beta=0.05 (follow-up — alphonse's own suggested next step). Terminal slope was −0.29 pt/epoch over last 5 epochs, 2× steeper than baseline at same phase.
+- **Key finding:** camber_rc (hardest OOD split, largest typical residuals) was biggest beneficiary (−2.65 pt), not casualty. Consistent with L1-regime gradient staying active on large residuals even as overall MAE improves.
+
+## 2026-05-17 02:40 — PR #4068 — n_layers=4 + compile (CLOSED — 3-retest axis closure)
+
+- **Branch:** `charliepai2i48h1-edward/n-layers-4-on-film`
+- **Hypothesis:** One fewer Transolver block trades capacity for compute, earning more epochs in the 30-min cap.
+- **Results (final: 2-seed on compile+bf16+GEGLU+SF+slice=8 stack):**
+
+| Metric | Value | Baseline (37.31) | Δ | Baseline (36.13) | Δ vs new |
+|--------|-------|------------------|---|-----------------|----------|
+| val_avg/mae_surf_p (2-seed) | 36.89 | 37.31 | −1.13% | 36.13 | +2.1% |
+| test_avg/mae_surf_p (2-seed) | 32.77 | 32.81 | −0.12% | 31.97 | +2.5% |
+| sec/epoch | 34.70 | 42.4 | **−18%** | 47.76 | **−27%** |
+| peak VRAM | 15.62 GB | 18.88 GB | **−17%** | 22.61 GB | **−31%** |
+| n_params | 600,883 | 736,831 | −18% | 983,871 | −39% |
+| epochs (cap) | 50 (cap) | 42 | +19% | 37 | +35% |
+
+- **Metrics paths:** `models/model-charliepai2i48h1-edward-n-layers-4-on-compile-sf-geglu-bf16-20260517-004216/metrics.jsonl`, `...-seed2-20260517-015125/metrics.jsonl`
+- **Decision:** CLOSED. 3-retest history showed clean wins on prior stacks that narrowed to tie/noise as baseline improved. On the current strong baseline: val=36.89 vs 36.13 = +2.1% borderline regression, 2-seed. Each stack improvement consumed the compute headroom that n_layers=4 freed.
+- **Key finding:** n_layers=4 saves substantial compute (27-31% VRAM, 18-27% sec/epoch vs current baseline) but doesn't compound with the improved baseline. Future use: may serve as a sub-component if mlp_ratio=3/4 proves too expensive per-epoch — n_layers=4 + mlp_ratio=3 could provide equivalent quality at similar wall-clock to current baseline.

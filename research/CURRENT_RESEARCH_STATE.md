@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-17 02:15 UTC (R23 — mlp_ratio=2 fix merged as new baseline; 4 new assignments)
+- **Updated:** 2026-05-17 02:45 UTC (R23b — beta=0.1 sent back for mlp_ratio=2 retest; n_layers=4 closed; edward → lr sweep)
 - **Track:** Charlie local-metrics arm (`charlie-pai2i-48h-r1`)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-48h-r1`
 - **Target base:** `icml-appendix-charlie`
@@ -58,78 +58,66 @@ Per-split test: single=36.53, rc=44.62, cruise=17.23, re_rand=29.50.
 | EMA | decay=0.997, applied as val/test checkpoint |
 | Compute | ~47.76s/epoch, **37 epochs** in 30-min cap, peak VRAM 22.61 GB, **983,871 params** |
 
-## Key discovery: mlp_ratio was dead code; FFN capacity axis newly opened
+## Key discoveries this session
 
-PR #4282 revealed that all prior experiments since #3982 (mlp_ratio 2→1) were running
-with `mlp_ratio=1` regardless of config — `GEGLUBlock` was hardcoded `hidden_dim=hidden_dim`.
-The fix: `hidden_dim=int(hidden_dim * mlp_ratio)`. mlp_ratio=2 gives inner_dim=256 (vs 128),
-adding 33.6% params and delivering val=36.13 (−3.2%). The FFN capacity axis is now live and open.
+1. **mlp_ratio was dead code (R23, PR #4282):** GEGLUBlock was hardcoded `hidden_dim=hidden_dim` regardless of mlp_ratio. Fix: `hidden_dim=int(hidden_dim * mlp_ratio)`. mlp_ratio=2 → inner_dim=256 → val 37.31→36.13. The FFN capacity axis is now live and open.
 
-Previous "mlp_ratio CLOSED at 1" finding (R7, PR #3982) is invalidated — that PR effectively
-tested mlp_ratio=1 vs mlp_ratio=1. The axis needs a fresh sweep from 2 upward.
+2. **n_layers=4 axis closed (R23b):** Three retests across shifting baselines showed each baseline improvement consumed n_layers=4's compute headroom. At compile+mlp_ratio=2, it's a tie within noise. Potential future sub-component if mlp_ratio=3/4 is compute-heavy.
 
-EMA-epoch coupling insight: EMA decay optimum tracks per-step iterate displacement, not optimizer
-choice. Compile doubled epoch budget (23→42→37 epochs), shifting optimal EMA back to 0.997.
+3. **SmoothL1 beta=0.1 promising (R23b):** Alphonse's beta=0.1 result (val=35.86) beats both old and new baselines on the pre-fix stack. Sent back for 2-arm retest (beta=0.1 confirm + beta=0.05) on the mlp_ratio=2 stack.
 
 ## Currently in flight (8 WIP — all students active, zero idle GPUs)
 
 | PR | Student | Hypothesis | Theme | Status |
 |----|---------|------------|-------|--------|
-| #4299 | fern | mlp_ratio=3 (inner_dim=384) on mlp_ratio=2 compile stack | FFN capacity | WIP — R23 fresh |
-| #4300 | nezuko | mlp_ratio=4 (inner_dim=512) on mlp_ratio=2 compile stack | FFN capacity | WIP — R23 fresh |
+| #4299 | fern | mlp_ratio=3 (inner_dim=384) on mlp_ratio=2 stack | FFN capacity | WIP — R23 fresh |
+| #4300 | nezuko | mlp_ratio=4 (inner_dim=512) ceiling probe | FFN capacity | WIP — R23 fresh |
 | #4301 | thorfinn | weight_decay sweep {0, 5e-4} on mlp_ratio=2 stack | optim | WIP — R23 fresh |
 | #4302 | tanjiro | n_layers=6 depth probe on mlp_ratio=2 stack | depth | WIP — R23 fresh |
-| #4068 | edward | n_layers=4 + compile retest (on old mlp_ratio=1 stack) | compute | WIP — pre-mlp_ratio fix; must beat 36.13 |
-| #4260 | frieren | SF warmup_steps {50, 500} (on old mlp_ratio=1 stack) | optim | WIP — pre-mlp_ratio fix; must beat 36.13 |
-| #4281 | alphonse | SmoothL1 beta=0.1 (on old mlp_ratio=1 stack) | loss | WIP — pre-mlp_ratio fix; must beat 36.13 |
-| #4290 | askeladd | n_head=2 (dim_head=64) on compile stack | architecture | WIP — pre-mlp_ratio fix; must beat 36.13 |
+| #4314 | edward | lr sweep {3e-4, 7.5e-4} on mlp_ratio=2 stack | optim | WIP — R23b fresh |
+| #4281 | alphonse | beta=0.1 confirm + beta=0.05 sweep on mlp_ratio=2 stack | loss | WIP — R23b send-back |
+| #4260 | frieren | SF warmup_steps {50, 500} (pre-fix stack) | optim | WIP — must beat 36.13 |
+| #4290 | askeladd | n_head=2 (dim_head=64) on compile stack (pre-fix stack) | architecture | WIP — must beat 36.13 |
 
-**Note on pre-fix PRs:** edward #4068, frieren #4260, alphonse #4281, askeladd #4290 are all running
-on the old (mlp_ratio=1 dead-code) stack. Their wins need to be measured against 36.13 now.
-edward's n_layers=4 predicted val ~35 may still win. Others less certain.
+**Note on pre-fix PRs:** frieren #4260 and askeladd #4290 are on the old (mlp_ratio=1) stack.
+Their results will be compared against 36.13. Send back for retest if promising but miss new baseline.
 
 ## Closed axes (final state)
 
 | Axis | Verdict |
 |------|---------|
-| EMA decay (0.997→0.995) | SATURATED — 0.997 is optimal on compile stack (42 epochs) |
+| EMA decay (0.997→0.995) | SATURATED — 0.997 is optimal on compile stack |
 | RMSNorm | REGRESSION — mean-centering matters for CFD pressure |
-| Wider FiLM head (128→256) | TIE — FiLM head capacity not the bottleneck for 3 scalars |
-| slice_num | CLOSED at 8 (PR #4185 TIE on halving) |
-| mlp_ratio axis (prior closure invalid) | RE-OPENED — #3982 was dead code; now sweeping from 2 upward |
+| Wider FiLM head (128→256) | TIE — FiLM head capacity not the bottleneck |
+| slice_num | CLOSED at 8 |
+| mlp_ratio axis (prior closure invalid) | RE-OPENED — sweeping from 2 upward (fern mlp_ratio=3, nezuko mlp_ratio=4) |
 | dropout (0.1) | CLOSED |
 | surf_weight (10.0) | CLOSED |
-| lr peak (5e-4) | SATURATED |
+| lr peak (5e-4) | UNDER RETEST — edward sweeping {3e-4, 7.5e-4} on mlp_ratio=2 stack |
 | FiLM-full naive (11 scalars) | CLOSED |
 | FiLM-broadcast-scalar axis | CLOSED |
 | cosine T_max tuning | SUPERSEDED by Schedule-Free AdamW |
-| GEGLU readout head | CLOSED (+3.2%) |
-| SwiGLU gate | CLOSED (+4.2%) |
-| ReGLU gate | CLOSED (+1.9%) |
-| Gate-activation axis | FULLY CLOSED — GEGLU > ReGLU > SwiGLU |
-| Per-node geometric FiLM | CLOSED (+9.4%) |
-| FiLM family (all variants) | FULLY CLOSED |
 | GEGLU on attention projections | FULLY CLOSED — all regressed |
 | n_head=8 (dim_head=16) | CLOSED (+4%) — dim_head too thin |
 | n_layers=3 | CLOSED — capacity floor at n_hidden=128 |
-| batch_size=8 | CLOSED — halved step count, no VRAM gain on this GPU |
+| n_layers=4 | CLOSED — 3-retest tie within noise on current strong baseline |
+| batch_size=8 | CLOSED — halved step count, no compute benefit |
 | surface-weight ramp (10×) | CLOSED — destabilizes SF AdamW optimizer state |
-| n_hidden=160 (old stack) | DEFERRED — tested on broken mlp_ratio=1 stack; revisit if FFN axis saturates |
+| n_hidden=160 (old stack) | DEFERRED — revisit if FFN axis saturates |
+| Gate-activation axis | FULLY CLOSED — GEGLU > ReGLU > SwiGLU |
+| FiLM family (all variants) | FULLY CLOSED |
 
 ## Potential next research directions
 
-1. **mlp_ratio=3** — IN FLIGHT (fern #4299). Predicted ~33 epochs; natural next rung.
-2. **mlp_ratio=4** — IN FLIGHT (nezuko #4300). Ceiling probe; predicted ~29–30 epochs.
-3. **weight_decay sweep {0, 5e-4}** — IN FLIGHT (thorfinn #4301). Larger model may need different regularization.
-4. **n_layers=6** — IN FLIGHT (tanjiro #4302). First upward depth probe at mlp_ratio=2.
-5. **n_layers=4 + compile** — IN FLIGHT (edward #4068). Localizes depth knee from below.
-6. **SF warmup_steps {50, 500}** — IN FLIGHT (frieren #4260). On old stack; may need retest.
-7. **SmoothL1 beta=0.1** — IN FLIGHT (alphonse #4281). On old stack; may need retest.
-8. **n_head=2 (dim_head=64)** — IN FLIGHT (askeladd #4290). Coarser attention granularity.
-9. **mlp_ratio=3 + n_hidden=160** — after FFN axis settles; combined capacity probe.
-10. **lr sweep {3e-4, 7e-4}** — optimal lr may shift with larger 983k-param model.
-11. **dropout re-tune {0.0, 0.2}** — larger model may need different regularization.
-12. **Smooth surface ramp** — gentle 2× cosine curriculum (not abrupt 10×) on mlp_ratio=2 stack.
-13. **Multi-seed confirmation** — 3-seed variance on val=36.13 before deadline.
-14. **n_hidden=192 + mlp_ratio=2** — high-capacity probe after FFN axis closes.
-15. **FP8 precision** — next compute lever after compile saturates.
+1. **beta=0.1 (arm A confirm) + beta=0.05 (arm B)** — IN FLIGHT (alphonse #4281). Val=35.86 already beats new baseline on old stack; expecting compound win on mlp_ratio=2 stack.
+2. **mlp_ratio=3** — IN FLIGHT (fern #4299). Natural FFN capacity continuation.
+3. **mlp_ratio=4** — IN FLIGHT (nezuko #4300). FFN capacity ceiling bracket.
+4. **weight_decay sweep {0, 5e-4}** — IN FLIGHT (thorfinn #4301). Regularization with larger 983k model.
+5. **n_layers=6** — IN FLIGHT (tanjiro #4302). First upward depth probe on mlp_ratio=2 stack.
+6. **lr sweep {3e-4, 7.5e-4}** — IN FLIGHT (edward #4314). LR optimum may shift with 33% more params.
+7. **n_layers=4 + mlp_ratio=3** — If nezuko's mlp_ratio=4 wins but is compute-expensive, combine with n_layers=4 to reclaim wall-clock.
+8. **dropout re-tune {0.0, 0.2}** — After main axes settle; larger model may need different regularization.
+9. **Smooth surface ramp** — Gentle 2× cosine curriculum; revisit after core axes close.
+10. **n_hidden=160 + mlp_ratio=2** — After FFN capacity axis closes; combined capacity probe.
+11. **Multi-seed confirmation** — 3-seed variance on val=36.13 before deadline.
+12. **FP8 precision** — Next compute lever after compile saturates.
