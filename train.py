@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import random
 import statistics
@@ -572,6 +573,10 @@ class Config:
     lion_b2: float = 0.99  # Lion beta2; default matches historical baseline
     lookahead_k: int = 5
     lookahead_alpha: float = 0.5
+    lookahead_alpha_schedule: str = "none"  # "none" or "cosine"
+    lookahead_alpha_start: float = 0.5
+    lookahead_alpha_end: float = 0.5
+    lookahead_alpha_t_max: int = 17  # cosine schedule horizon (matches LR scheduler T_max)
 
 
 cfg = sp.parse(Config)
@@ -640,8 +645,29 @@ else:
     base_optimizer = torch.optim.AdamW(
         model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.95)
     )
+if cfg.lookahead_alpha_schedule not in ("none", "cosine"):
+    raise ValueError(
+        f"lookahead_alpha_schedule must be 'none' or 'cosine', got {cfg.lookahead_alpha_schedule!r}"
+    )
+
+
+def lookahead_alpha_for_epoch(epoch: int) -> float:
+    """Return Lookahead α for the given (0-indexed) training epoch.
+
+    "none" → static cfg.lookahead_alpha.
+    "cosine" → α_end + 0.5·(α_start − α_end)·(1 + cos(π·t/T_max)) with t clamped to T_max.
+    """
+    if cfg.lookahead_alpha_schedule == "none":
+        return cfg.lookahead_alpha
+    t = min(max(epoch, 0), cfg.lookahead_alpha_t_max)
+    return cfg.lookahead_alpha_end + 0.5 * (
+        cfg.lookahead_alpha_start - cfg.lookahead_alpha_end
+    ) * (1.0 + math.cos(math.pi * t / cfg.lookahead_alpha_t_max))
+
+
+_initial_alpha = lookahead_alpha_for_epoch(0)
 if cfg.lookahead_k > 0:
-    optimizer = Lookahead(base_optimizer, k=cfg.lookahead_k, alpha=cfg.lookahead_alpha)
+    optimizer = Lookahead(base_optimizer, k=cfg.lookahead_k, alpha=_initial_alpha)
 else:
     optimizer = base_optimizer
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(base_optimizer, T_max=17)
@@ -691,8 +717,17 @@ _base_name = "lion" if cfg.use_lion else "adamw"
 _lookahead_on = cfg.lookahead_k > 0
 _optim_name = f"lookahead-{_base_name}" if _lookahead_on else _base_name
 print(f"Base optimizer: {_base_name}  betas={_betas_per_group}  lr={_lr_per_group}  wd={_wd_per_group}")
-print(f"Lookahead wrap: {'ON' if _lookahead_on else 'OFF'}"
-      + (f" (k={cfg.lookahead_k}, alpha={cfg.lookahead_alpha})" if _lookahead_on else ""))
+if _lookahead_on:
+    if cfg.lookahead_alpha_schedule == "cosine":
+        _alpha_desc = (
+            f"cosine alpha {cfg.lookahead_alpha_start:.4f}→{cfg.lookahead_alpha_end:.4f}"
+            f" over T_max={cfg.lookahead_alpha_t_max} (initial={_initial_alpha:.4f})"
+        )
+    else:
+        _alpha_desc = f"alpha={cfg.lookahead_alpha:.4f} (static)"
+    print(f"Lookahead wrap: ON (k={cfg.lookahead_k}, {_alpha_desc})")
+else:
+    print("Lookahead wrap: OFF")
 run.summary["optim/betas"] = list(_betas_per_group[0])
 run.summary["optim/n_param_groups"] = len(_betas_per_group)
 run.summary["optim/lr_initial"] = _lr_per_group[0]
@@ -703,6 +738,11 @@ run.summary["use_lion"] = cfg.use_lion
 run.summary["lion_b2"] = cfg.lion_b2
 run.summary["lookahead_k"] = cfg.lookahead_k
 run.summary["lookahead_alpha"] = cfg.lookahead_alpha
+run.summary["lookahead_alpha_schedule"] = cfg.lookahead_alpha_schedule
+run.summary["lookahead_alpha_start"] = cfg.lookahead_alpha_start
+run.summary["lookahead_alpha_end"] = cfg.lookahead_alpha_end
+run.summary["lookahead_alpha_t_max"] = cfg.lookahead_alpha_t_max
+run.summary["lookahead_alpha_initial"] = _initial_alpha
 run.summary["lookahead_on"] = _lookahead_on
 
 # Rolling buffer for per-step train losses to compute volatility (window=100).
@@ -712,6 +752,12 @@ for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
         break
+
+    if _lookahead_on:
+        _epoch_alpha = lookahead_alpha_for_epoch(epoch)
+        optimizer.alpha = _epoch_alpha
+    else:
+        _epoch_alpha = cfg.lookahead_alpha
 
     t0 = time.time()
     model.train()
@@ -789,6 +835,7 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/loss_std_last100": loss_std_last100,
+        "train/lookahead_alpha_current": _epoch_alpha,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
