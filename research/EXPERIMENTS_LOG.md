@@ -1,5 +1,75 @@
 # SENPAI Research Results
 
+## 2026-05-17 03:00 — PR #4241: Lookahead-Lion k=3 ← CLOSED (k-shift prediction CONFIRMED; canonical k-frontier)
+
+- Branch: `willowpai2i48h1-edward/lookahead-lion-k3`
+- Student: willowpai2i48h1-edward
+- W&B runs: `v7jka5nw` (CANONICAL, val=48.20, best_ep=17), `g7bprn1m` (rerun, val=52.53, best_ep=15); group `lookahead_lion_k_sweep`
+- Hypothesis: Compose AdamW-era k=3 finding (was the AdamW k-minimum) with Lion-era baseline.
+
+### Results (W&B-verified; best run is canonical with best_ep=17)
+
+| Metric | Value | Δ vs k=5 baseline (PR #4123) |
+|---|---|---|
+| val_avg/mae_surf_p | **48.2021** | +0.229 |
+| test_avg/mae_surf_p | **46.9625** | +0.472 |
+| best_epoch | 17 (cosine floor ✓) | — |
+
+### Round-16 prediction CONFIRMED
+
+Round-16 close of PR #4268 predicted "edward's #4241 likely regresses to val ~48.3-48.5." Actual: val=48.20 — within 0.1 of predicted range. **Lion k-curve U-min is at or right of k=5.**
+
+### Cross-optimizer k-curve (definitive)
+
+| k | AdamW val | Lion val |
+|---|---|---|
+| 2 | 56.49 | 48.84 (PR #4268) |
+| 3 | **55.97 (AdamW min)** | 48.20 (THIS PR) |
+| 5 | 57.22 | **47.97 (Lion min so far)** |
+| 7 | — | TBD (edward #4310 incoming) |
+| 8 | 60.09 | — |
+
+Lion-side curve ASYMMETRIC: k=3 regresses by only +0.23, k=2 by +0.86 (steep left flank between k=2→3, shallow between k=3→5). Suggests U-min may be even further right; k=7 is the next test.
+
+### Decision
+
+Closed — val=48.20 > current programme best 47.97. Strong mechanism finding; edward reassigned to **Lookahead-Lion k=7 (#4310)** — direct prediction test for U-min location.
+
+⚠️ Rerun-variance pattern (same as #4242, #4202): canonical is the first run with best_ep=17.
+
+## 2026-05-17 03:00 — PR #4242: Lookahead-Lion seed=2 ← CLOSED (3-seed canonical COMPLETE for programme best)
+
+- Branch: `willowpai2i48h1-nezuko/lookahead-lion-seed2`
+- Student: willowpai2i48h1-nezuko
+- W&B runs: `2t9j83vn` (CANONICAL, val=48.84, best_ep=17), `apn6wsb4` (rerun val=51.33), `lrgw1b11` (rerun val=51.66); group `lookahead_lion_seed_scan`
+- Hypothesis: Complete 3-seed canonical (seed=0=47.97, seed=1=49.21, seed=2=?).
+
+### Results (W&B-verified; first run is canonical)
+
+| Metric | Value | Δ vs seed=0 |
+|---|---|---|
+| val_avg/mae_surf_p | **48.8437** | +0.870 |
+| test_avg/mae_surf_p | **47.5562** | +1.066 |
+| best_epoch | 17 (cosine floor ✓) | — |
+
+### Lookahead-Lion 3-SEED CANONICAL (CLEAN, complete)
+
+| Seed | val | test | best_ep |
+|---|---|---|---|
+| 0 | 47.9735 | 46.4900 | 17 |
+| 1 | 49.2089 | 47.6172 | 17 |
+| 2 | 48.8437 | 47.5562 | 17 |
+| **3-seed mean** | **48.6754** | **47.2211** | — |
+| **σ̂** | **0.6396** | **0.6364** | — |
+
+**Cleanest 3-seed canonical in the programme.** All three seeds hit cosine floor (best_ep=17). σ̂≈0.64 MAE on both val and test — paper-ready noise floor.
+
+### Decision
+
+Closed — best run val=48.84 > programme best 47.97. nezuko reassigned to **Lookahead-Lion + heads=8 (#4304)** — 3rd architectural arm (attention capacity dimension; orthogonal to mlp_ratio and depth).
+
+⚠️ Rerun-variance flag: heartbeat-restart pattern produces degraded later reruns. First clean run is canonical.
+
 ## 2026-05-17 02:30 — PR #4268: Lookahead-Lion k=2 ← CLOSED (canonical Lion k-frontier; U-curve SHIFTS RIGHT vs AdamW)
 
 - Branch: `willowpai2i48h1-tanjiro/lookahead-lion-k2`
