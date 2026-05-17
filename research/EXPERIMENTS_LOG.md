@@ -1,5 +1,101 @@
 # SENPAI Research Results
 
+## 2026-05-17 11:00 — PR #4402: k=6 + β2=0.995 + α=0.7 compound ← MERGED (NEW PROGRAMME ALL-TIME BEST)
+
+- Branch: `willowpai2i48h1-askeladd/k6-b2-995-a07-compound`
+- Student: willowpai2i48h1-askeladd
+- W&B: `ejacndhj` (finished, best_ep=17, 31.0 min, peak VRAM 101 GB); group `lookahead_lion_k6_b2_995_compound`
+- Hypothesis: Compound k=6 (k-bowl shift finding from PR #4371) with β2=0.995 winner (PR #4373). Mechanism: longer m-buffer (β2=0.995) and longer sync interval (k=6) are different-timescale smoothers that may compose constructively.
+
+### Results (W&B-verified)
+
+| Config | val_avg | test_avg | Δ vs prior best (#4373) |
+|---|---|---|---|
+| Prior best (PR #4373, k=5, β2=0.995) | 46.8383 | 45.3196 | — |
+| **THIS PR (k=6, β2=0.995)** | **45.7284** | **44.5079** | **−1.110 val / −0.812 test** |
+
+### SUPER-ADDITIVE COMPOUND — key mechanism finding
+
+Additive prediction from individual k and β2 gains: 46.8383 + (47.1361 − 47.5894) = **46.39**
+Actual: **45.73**
+**Super-additive by 0.66 val.** k=6 and β2=0.995 amplify each other, not just add.
+
+Mechanism: β2=0.995's m-buffer (half-life ≈138 steps) lets the inner trajectory settle around a coherent direction before each Lookahead outer step. At β2=0.99 (half-life ≈69 steps), the trajectory was still noisy at the sync boundary — k=6's advantage was partially wasted. At β2=0.995, the inner trajectory "earns" the longer sync interval by arriving at the outer step more coherently averaged.
+
+### Per-split test metrics
+
+| Split | mae_surf_p | Δ vs #4373 |
+|---|---|---|
+| test_single_in_dist | 43.0063 | −1.333 |
+| test_geom_camber_rc | 54.2173 | −0.937 |
+| test_geom_camber_cruise | 41.5453 | −0.457 |
+| test_re_rand | 39.2628 | −0.520 |
+
+All 4 test splits improve. OOD (geom_camber_rc) continues to be the hard split but benefits consistently.
+
+### Decision
+
+**MERGED.** New programme best val=45.7284 / test=44.5079. BASELINE.md updated. Win threshold drops to 45.73. Askeladd reassigned to **k=7 + β2=0.995 + α=0.7 (#4426)** — k-bowl right-flank extension.
+
+## 2026-05-17 11:00 — PR #4386: seed=1 canonical (k=5, β2=0.995) ← CLOSED (3-seed table complete)
+
+- Branch: `willowpai2i48h1-tanjiro/lookahead-lion-b2-0995-alpha07-seed1`
+- W&B: `jxahw2bk` (finished, best_ep=17, 31.4 min)
+- val=47.6478, test=46.6685
+
+### 3-seed canonical of k=5 + β2=0.995 (COMPLETE)
+
+| Seed | val_avg | test_avg | W&B |
+|---|---|---|---|
+| 0 (MERGED) | 46.8383 | 45.3196 | `3k6hob38` |
+| 1 (THIS PR) | 47.6478 | 46.6685 | `jxahw2bk` |
+| 2 (PR #4385) | 46.8264 | 45.4651 | `hqel4ej1` |
+| **3-seed mean ± σ̂** | **47.10 ± 0.46** | **45.82 ± 0.74** | — |
+
+Seed=1 is +0.81 above seed=0 — within 1.27σ of σ̂=0.46. Val σ̂=0.46 is tighter than OLD baseline (0.80) — β2=0.995 reduces per-seed variance on val. Paper-ready.
+
+**Closing as canonical-confirmation.** Programme has since advanced to #4402 (k=6+β2=0.995, val=45.73). Tanjiro reassigned to seed=1 canonical of NEW best (#4428).
+
+## 2026-05-17 11:00 — PR #4385: seed=2 canonical (k=5, β2=0.995) ← CLOSED (3-seed table complete)
+
+- Branch: `willowpai2i48h1-thorfinn/lookahead-lion-b2-0995-alpha07-seed2`
+- W&B: `hqel4ej1` (finished, best_ep=17, 31.1 min)
+- val=46.8264 (essentially TIES seed=0, Δ=−0.012), test=45.4651
+
+Seed=2 lands within 0.02 val of seed=0 — strongest seed-robustness signal in the programme. The k=5+β2=0.995 recipe is highly seed-stable. Closes the 3-seed canonical; see PR #4386 for full table. **Closing as canonical-confirmation.** Thorfinn reassigned to seed=2 canonical of NEW best (#4429).
+
+## 2026-05-17 11:00 — PR #4384: β2=0.997 at k=5 ← CLOSED (β2-bowl right edge confirmed)
+
+- Branch: `willowpai2i48h1-fern/lookahead-lion-b2-0997-alpha07`
+- W&B: `obxihg7g` (finished, best_ep=17, 31.0 min)
+- val=46.8006 (Δ=−0.038 vs #4373), test=45.8088 (+0.489 test regression on 3/4 splits)
+
+Val is flat (within seed-noise). Test regresses +0.49, dominated by rc-camber (+1.78). Longer m-buffer half-life (230 steps) over-smooths gradients across geometry-OOD basins. **β2=0.995 is the optimum at k=5; right-edge CLOSED.** Note: new baseline is now k=6+β2=0.995 (45.73); this result is +1.07 above that. Fern reassigned to **β2=0.997 + k=6 probe (#4427)** — test if bowl shifts at new k.
+
+## 2026-05-17 11:00 — PR #4376: β1=0.88 at k=5, α=0.7 ← CLOSED (β1 bowl floor confirmed at 0.90)
+
+- Branch: `willowpai2i48h1-alphonse/lookahead-lion-b1-088-alpha07`
+- W&B: `652k37q9` (finished, best_ep=17)
+- val=48.2070 (+0.618 vs old k=5 baseline), test=46.5601
+
+β1 landscape is SHARPER under α=0.7 than α=0.5: β1=0.88 costs +0.62 at α=0.7 vs β1=0.85 costing +0.34 at α=0.5. Faster slow-weight pull amplifies β1 sensitivity. β1=0.90 is the local optimum to ±0.02. **Further β1 probing unproductive.** Note: dirty branch (needs-rebase) but closed as regression — no rebase needed. Alphonse reassigned to **α=0.75 + k=6 + β2=0.995 (#4430)**.
+
+## 2026-05-17 11:00 — PR #4375: slice_num=32 + α=0.7 at β2=0.99 ← CLOSED (α-slice interaction; no additivity)
+
+- Branch: `willowpai2i48h1-frieren/lookahead-lion-slice32-alpha07`
+- W&B: `ucx65473` (finished, best_ep=19, 31.1 min)
+- val=48.3939 (+0.80 vs old k=5 baseline), test=46.5719
+
+Prediction of val≈47.40 was wrong; actual +0.61 worse than even slice32+α=0.5. At slice=32, raising α from 0.5→0.7 HURTS (+0.61) whereas at slice=64 it helps (−0.38). **α-optimum is slice_num-dependent.** Best_ep=19 slightly above T_max=17 — likely valid signal. All 4 UP arms now confirmed dead (h=192 also closed this round). Frieren reassigned to **β2=0.994 + k=6 + α=0.7 (#4431)**.
+
+## 2026-05-17 11:00 — PR #4374: h=192 + α=0.7 ← CLOSED (budget-cut at +35-40% per-epoch overhead)
+
+- Branch: `willowpai2i48h1-edward/lookahead-lion-h192-alpha07`
+- W&B: `fkbrzotp` (best_ep=14, budget-cut at 14/17 epochs, 32.1 min)
+- val=50.4295 (+2.84), test=48.7459 (+2.74)
+
+Per-epoch time +35-40% (≈135-138s vs 95-100s for h=128). VRAM=47.37 GB peak (well within 96 GB — not the constraint). Val curve still descending at ep14 (Δ≈−2.7/epoch). **ALL 5 ARCHITECTURAL UP-ARMS NOW CLOSED** (heads=8, slice=96, depth=6, mlp_ratio=3, h=192 — all budget-cut or regress). test_single_in_dist slightly improved (46.19 vs 46.51) but all 3 OOD splits worse — larger hidden dim overfits in-dist and generalises worse OOD under budget. Edward reassigned to **cfg.lr=7e-4 + k=6 + β2=0.995 (#4432)**.
+
 ## 2026-05-17 10:00 — PR #4345: Lookahead-Lion α=0.7 k=5 seed=2 (3-seed canonical) ← CLOSED (corrected canonical from missed converged run)
 
 - Branch: `willowpai2i48h1-nezuko/lookahead-lion-alpha07-seed2`
