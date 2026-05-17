@@ -951,3 +951,25 @@ Metric artifacts:
 
 - **Analysis:** Arm C clears val by 0.35 pts (within noise floor) but test regresses +1.69%. Arm D clear regression. The conjunctive beat target (val<39.83 AND test<33.89) is not met by either arm. Student's key insight: lowering LR (1.7e-4 vs 2.5e-4) and surface-vel-downweight appear to interact non-trivially — lowering LR absorbed the headroom that Arm B was exploiting at 2.5e-4. Per-channel diagnostic: surf_Ux/Uy flat between 0.7 and 0.8 (no backbone starvation), so regression at 0.8 is "insufficient pressure-share" failure mode rather than gradient starvation. Excellent analysis.
 - **Decision:** CLOSED — no_improvement. Velocity-surface-weight axis closed at lr=1.7e-4. Reassigning nezuko to attention-dropout (#4278) — targets the OOD generalization gap (val_geom_camber_rc=53.15) directly via attention regularization; model currently has zero stochastic regularization in attention path.
+
+---
+
+## 2026-05-17 02:15 — PR #4236: Warmup-cosine (2/3-epoch linear warmup) — no_improvement
+
+- **Student:** charliepai2i48h2-frieren
+- **Hypothesis:** The first 2-3 epochs are "wasted budget" because random-init gradient magnitudes are too large; a linear warmup would stabilize early training and use the cosine budget more effectively.
+- **Results:**
+
+| Metric | Arm A (warmup=2) | Baseline (#4079) |
+|--------|------------------|--------------------|
+| **val_avg/mae_surf_p** | **41.2842 (+3.64%)** | **39.8345** |
+| **test_avg/mae_surf_p** | **35.5331 (+4.86%)** | **33.8873** |
+| val_geom_camber_cruise | 25.64 (+12.88%) | 22.71 |
+| val_geom_camber_rc | 56.58 (+6.46%) | 53.15 |
+| val_single_in_dist | 43.49 (−0.43%) | 43.68 |
+| Best epoch | 33 (timeout) | 34 (timeout) |
+
+Stop condition triggered (val > 41.0 threshold); Arm B (warmup=3) correctly not run.
+
+- **Analysis:** Excellent student diagnosis. Three root causes identified: (1) "wasted epochs" premise was false — baseline learns rapidly from epoch 1 at full LR, gradients are already being clipped to max_norm=1.0 so warmup's stabilization role is redundant; (2) schedule-compression effect dominates — warmup shifts the effective cosine window from 40 → 38 epochs while keeping total budget at 33, creating a ~1-2 epoch shift in the descent curve; (3) OOD splits hit hardest (geom_camber_cruise +12.88%) — model needs maximum effective training time at these split distributions. This is the second warmup failure on this codebase (cf PR #3733). Warmup direction is closed.
+- **Decision:** CLOSED — no_improvement, direction refuted. Reassigning frieren to batch-size-sweep (#4287) — directly addresses frieren's own VRAM headroom observation (23.84/80 GB = 30% utilization at batch=4).
