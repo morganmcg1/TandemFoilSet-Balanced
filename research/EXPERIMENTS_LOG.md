@@ -3075,3 +3075,54 @@ At iso-epoch=12: C(61.65) ≈ A(61.72) < D(63.23) ≈ B(63.89) — B(s32) is BEH
 
 - **Student branch:** `charliepai2i48h4-alphonse/lr-retune-n-layers3`
 - **Hypothesis:** PR #4157 found lr=3e-3 still monotonically improving at n_layers=5 (17 epochs/budget). At n_layers=3 (26 epochs/budget) with sf_beta1=0.95 (stronger Polyak averaging), higher LR may be tolerable and better. Sweep {3e-3, 4e-3, 5e-3, 6e-3} at new canonical.
+
+---
+
+## 2026-05-17 08:30 — PR #4339 [CLOSED/NULL]: fern mlp_ratio sweep {1, 2, 4, 6} at lr=3e-3
+
+- **Student branch:** `charliepai2i48h4-fern/mlp-ratio`
+- **Hypothesis:** mlp_ratio=2 default may not be optimal; BERT default is 4; under-fit regime (#4208) suggests capacity headroom.
+
+### Results
+
+| Arm | mlp_ratio | epochs | sec/ep | val_avg | Δ vs A (paired) |
+|---|---:|---:|---:|---:|---:|
+| **A (control)** | **2** | **17** | **111.2s** | **53.549** | — |
+| B | 1 | 17 | 108.1s | 53.877 | +0.61% (regression) |
+| C | 4 | 16 | 117.8s | 56.149 | +4.85% (regression) |
+| D | 6 | 15 | 124.0s | 57.438 | +7.26% (regression) |
+
+Monotone regression r=1 ≈ r=2 < r=4 < r=6. Arm A wins all 4 val splits and test_3split. No widening overfit gap (train/val ≈ 0 throughout). Pattern matches n_hidden (#4225): step-count dominates FFN capacity.
+
+**Finding:** mlp_ratio=2 is the saturated optimum. Mechanism: wider FFN costs more sec/epoch (D only reaches 15 epochs vs A's 17); per-step, all arms within ~1% at iso-epoch — no capacity advantage.
+
+**Decision: CLOSED.** mlp_ratio axis closed. Joins n_hidden and n_layers among the capacity axes dominated by step-count budget at 30 min.
+
+---
+
+## 2026-05-17 08:32 — PR #4353 [SENT BACK]: nezuko Fourier feature encoding {raw, 16f-σ1, 32f-σ10, 64f-σ10}
+
+- **Student branch:** `charliepai2i48h4-nezuko/fourier-feats`
+- **Hypothesis:** Random Fourier features (Tancik et al. 2020) as coordinate encoding before Transolver — calibrated spectral basis for high-freq surface pressure patterns.
+
+### Results (at prior n_layers=5 canonical)
+
+| Arm | Config | val_avg | Δ vs A (paired) | test 3-split |
+|---|---|---:|---:|---:|
+| A (control) | raw coords | 53.549 | — | 52.590 |
+| **B (winner)** | **16f, σ=1.0** | **52.228** | **−2.47%** | **50.763** |
+| C | 32f, σ=10.0 | 64.720 | +20.86% | 60.885 |
+| D | 64f, σ=10.0 | 71.511 | +33.54% | 68.518 |
+
+**Key finding:** σ-calibration is critical. σ=10 (Tancik's default) calibrated for [0,1] pixel inputs. With normalized N(0,1) mesh coords, σ=10 injects high-freq noise that causes +20-34% regression. σ=1 is correct → clean −2.47% paired win. B leads from epoch 1 (genuine improvement, not step-count). Val/test agree: −3.47% on test 3-split.
+
+Test_3split=50.763 beats prior canonical 51.206. But absolute 52.228 >> new canonical 45.654.
+
+**Decision: SENT BACK.** Merge conflicts after #4248/#4317. Requested: rebase + rerun of 2 arms (control + Arm B) at new canonical (n_layers=3, sf_betas=(0.95, 0.99)) to verify compound effect before merging.
+
+---
+
+## 2026-05-17 08:35 — PR #4481 [ASSIGNED]: fern n_hidden compensating-capacity {96, 128, 192, 256} at n_layers=3
+
+- **Student branch:** `charliepai2i48h4-fern/n-hidden-at-n-layers3`
+- **Hypothesis:** n_hidden was closed at n_layers=5 (#4225, stale lr=2e-3) due to step-count. At n_layers=3 (26 epochs/budget vs 17), the capacity-step trade-off shifts: per-epoch cost of wider models is smaller relative to total budget. Tests whether capacity headroom is unlocked at new canonical. Arms: {96, 128, 192, 256}.

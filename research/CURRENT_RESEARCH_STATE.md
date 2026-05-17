@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 08:15 UTC (Round 4 active on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-17 08:35 UTC (Round 4 active on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30-min / 50-epoch caps)
 
@@ -38,20 +38,20 @@ python train.py \
 
 **val_avg/mae_surf_p: 45.654** | test_3split: 44.878
 
-## Operational Status (08:15 UTC)
+## Operational Status (08:35 UTC)
 
 | Student | PR | State | Notes |
 |---|---|---|---|
-| **frieren** | #4464 shallower-depth-probe | NEWLY ASSIGNED | Probe n_layers ∈ {1, 2, 3} at new canonical |
-| **alphonse** | #4467 lr-retune-n-layers3 | NEWLY ASSIGNED | LR sweep {3e-3, 4e-3, 5e-3, 6e-3} at new canonical |
-| **thorfinn** | #4303 slice_num (draft) | SENT BACK for rerun | Rebase at n_layers=3 canonical; iso-epoch showed s32 win was step-count artifact |
+| **frieren** | #4464 shallower-depth-probe | assigned/in-progress | Probe n_layers ∈ {1, 2, 3} at new canonical |
+| **alphonse** | #4467 lr-retune-n-layers3 | assigned/in-progress | LR sweep {3e-3, 4e-3, 5e-3, 6e-3} at new canonical |
+| **fern** | #4481 n-hidden-at-n-layers3 | NEWLY ASSIGNED | n_hidden {96, 128, 192, 256} at new canonical |
+| **thorfinn** | #4303 slice_num (draft) | sent back | Rebase + rerun at n_layers=3 canonical |
+| **nezuko** | #4353 fourier-feats (draft) | sent back | Rebase + rerun Arm A/B at n_layers=3 canonical; σ=1 calibration confirmed |
 | **edward** | #4450 vol-weight-r1 | training | vol_weight {0.25, 0.5, 1.0, 2.0, 4.0} at prior canonical |
 | **tanjiro** | #4438 huber-beta-r1 | training | Huber β {0.25, 0.5, 1.0, 2.0} at prior canonical |
-| **askeladd** | #4351 n_head | stale_wip | n_head {2, 4, 8} at prior canonical |
-| **fern** | #4339 mlp_ratio | stale_wip | mlp_ratio {1, 2, 4, 6} at prior canonical |
-| **nezuko** | #4353 fourier-feats | stale_wip | Fourier feature encoding; infra status unclear |
+| **askeladd** | #4351 n_head | stale_wip | n_head {2, 4, 8}; updated to use new canonical commands (comment posted) |
 
-Note: Edward, tanjiro, askeladd, fern, nezuko PRs were assigned before the n_layers=3 canonical. Their results use their own Arm A as paired reference. If they win absolutely vs NEW canonical (45.654), merge; if they beat old canonical (52.258) but not 45.654, request rerun.
+Note: Edward, tanjiro PRs were assigned before the n_layers=3 canonical. Their results use their own Arm A as paired reference. If they win absolutely vs NEW canonical (45.654), merge; if they beat old canonical (52.258) but not 45.654, request rerun at new canonical.
 
 ## Current Research Themes
 
@@ -67,15 +67,21 @@ PR #4157 found lr=3e-3 still monotonically improving at n_layers=5 (17 epochs/bu
 ### 4. Loss axis: Huber β and vol/surf weighting
 Tanjiro (Huber β sweep) and edward (vol_weight) are live. If vol_weight > 1.0 wins, it addresses surface-loss saturation (#4207). If Huber β ≠ 1.0 wins, the loss form is a new axis.
 
-### 5. Architecture axes pending rerun at new canonical
-Askeladd n_head, fern mlp_ratio, thorfinn slice_num — all running or pending at prior canonical. After results land, the ones with large paired Δ may be worth retesting at n_layers=3.
+### 5. mlp_ratio CLOSED — step-count dominates FFN capacity
+fern #4339: mlp_ratio=2 is the saturated optimum. Monotone regression from r=1.9 ≈ r=2 < r=4 < r=6. Closes the last primary FFN capacity axis.
+
+### 6. Fourier features (σ=1) — promising, rerun at new canonical pending
+nezuko #4353: Arm B (16f, σ=1.0) −2.47% paired val / −3.47% test at n_layers=5. Sent back for 2-arm rerun at n_layers=3 canonical. σ-calibration finding: Tancik's σ=10 wrong for N(0,1) inputs.
+
+### 7. n_hidden compensating-capacity at n_layers=3 now in flight
+fern #4481 (assigned): tests whether n_hidden=192/256 can win at n_layers=3 (26 epochs/budget). At n_layers=5 (17 epochs), width lost to step-count. At n_layers=3, the absolute epoch count is higher.
 
 ## Priority Next Experiments (if new idle slots open)
 
-1. **n_layers=3 × n_hidden sweep {128, 192, 256}** — at n_layers=3, width capacity may compound (smaller sec/epoch-per-width-unit; more steps per budget)
-2. **Longer-budget rerun at n_layers=3 (60 min)** — separate step-count from capacity asymptote; test if n_layers=3 continues improving beyond 26 epochs
-3. **Weight decay retune at new canonical** — wd=1e-4 never swept at lr=3e-3 with n_layers=3 / betas=(0.95, 0.99)
-4. **Fourier feature coordinate encoding (#4353, nezuko)** — first preprocessing axis, orthogonal to all above
+1. **Weight decay retune at new canonical** — wd=1e-4 never swept at lr=3e-3 with n_layers=3 / betas=(0.95, 0.99)
+2. **n_head sweep at new canonical** — askeladd #4351 assigned but stale; final primary architecture axis
+3. **Longer-budget rerun at n_layers=3** — if idle slot opens, extend wall-clock to understand convergence asymptote
+4. **Fourier sigma grid** — if nezuko confirms σ=1 16f wins, explore {8f, 16f, 32f} × {σ=0.5, 1.0, 2.0}
 
 ## Merged Winners (Chronological)
 
