@@ -453,6 +453,59 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Lion optimizer (Chen et al. 2023, arxiv:2302.06675)
+# ---------------------------------------------------------------------------
+
+
+class Lion(torch.optim.Optimizer):
+    """Lion optimizer: sign-of-momentum update with decoupled weight decay.
+
+    update_t = sign(beta1 * m_{t-1} + (1-beta1) * g_t)
+    theta_t  = (1 - lr*wd) * theta_{t-1} - lr * update_t        # decoupled wd
+    m_t      = beta2 * m_{t-1} + (1-beta2) * g_t
+
+    Uses one momentum buffer (vs Adam's two). Sign update gives identical
+    per-step magnitude `lr` for every parameter; tune lr ~ AdamW_lr/3..10 and
+    wd ~ AdamW_wd*3..10 per the paper.
+    """
+
+    def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
+        if lr <= 0.0:
+            raise ValueError(f"Invalid lr: {lr}")
+        if not 0.0 <= betas[0] < 1.0 or not 0.0 <= betas[1] < 1.0:
+            raise ValueError(f"Invalid betas: {betas}")
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+        for group in self.param_groups:
+            beta1, beta2 = group["betas"]
+            lr = group["lr"]
+            wd = group["weight_decay"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                grad = p.grad
+                state = self.state[p]
+                if len(state) == 0:
+                    state["exp_avg"] = torch.zeros_like(p)
+                exp_avg = state["exp_avg"]
+                # update = sign(beta1*m + (1-beta1)*g). Use non-inplace mul so
+                # exp_avg is not mutated before its own beta2 update below.
+                update = exp_avg.mul(beta1).add_(grad, alpha=1.0 - beta1).sign_()
+                if wd != 0.0:
+                    p.data.mul_(1.0 - lr * wd)  # decoupled weight decay
+                p.data.add_(update, alpha=-lr)  # sign update
+                exp_avg.mul_(beta2).add_(grad, alpha=1.0 - beta2)  # momentum
+        return loss
+
+
+# ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
 
@@ -478,6 +531,9 @@ class Config:
     mlp_ratio: int = 2  # FFN expansion ratio; SwiGLU inner = round_to_mult(hidden*mlp_ratio*2/3, 8)
     use_bf16: bool = False  # bf16 autocast (activations only; params/optimizer stay fp32)
     n_hidden: int = 160  # Transolver hidden dim (embedding/attention/FFN base width)
+    use_lion: bool = False  # use Lion optimizer (sign-of-momentum) instead of AdamW
+    lion_lr: float = 1e-4  # Lion lr; canonical: AdamW_lr / 3..10
+    lion_wd: float = 1e-3  # Lion wd; canonical: AdamW_wd * 3..10
 
 
 cfg = sp.parse(Config)
@@ -525,7 +581,12 @@ n_params = sum(p.numel() for p in model.parameters())
 ffn_inner = next(m.inner for m in model.modules() if isinstance(m, SwiGLUFFN))
 print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN=SwiGLU inner={ffn_inner})")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+if cfg.use_lion:
+    optimizer = Lion(model.parameters(), lr=cfg.lion_lr,
+                     betas=(0.9, 0.99), weight_decay=cfg.lion_wd)
+    print(f"Optimizer: Lion (lr={cfg.lion_lr}, wd={cfg.lion_wd}, betas=(0.9, 0.99))")
+else:
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 
 def train_amp_ctx():
     """bf16 autocast for the forward pass when --use_bf16 (no GradScaler needed)."""
@@ -560,6 +621,8 @@ run = wandb.init(
         "warmup_epochs": warmup_epochs,
         "grad_clip_max_norm": GRAD_CLIP_MAX_NORM,
         "scheduler": "linear_warmup_then_cosine",
+        "optimizer": "lion" if cfg.use_lion else "adamw",
+        "lion_betas": (0.9, 0.99) if cfg.use_lion else None,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
