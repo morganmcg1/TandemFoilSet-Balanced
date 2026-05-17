@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import subprocess
 import time
@@ -199,6 +200,33 @@ class FiLMConditioner(nn.Module):
         return scale, shift
 
 
+class FourierFeatures(nn.Module):
+    """Random Fourier feature encoding (Tancik et al. 2020, arXiv:2006.10739).
+
+    Lifts a low-dim input ``v ∈ R^{...,in_dim}`` to a spectral basis
+    ``γ(v) = [sin(2π v B), cos(2π v B)] ∈ R^{...,2*num_freqs}`` with a fixed
+    random projection matrix ``B ~ N(0, sigma^2)`` shape ``(in_dim, num_freqs)``.
+    ``B`` is registered as a non-trainable buffer so it follows ``.to(device)``
+    and round-trips through ``state_dict``.
+    """
+
+    def __init__(self, in_dim: int, num_freqs: int, sigma: float):
+        super().__init__()
+        self.in_dim = in_dim
+        self.num_freqs = num_freqs
+        self.sigma = sigma
+        B = torch.randn(in_dim, num_freqs) * sigma
+        self.register_buffer("B", B)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        proj = 2.0 * math.pi * (x @ self.B)
+        return torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)
+
+    @property
+    def out_dim(self) -> int:
+        return 2 * self.num_freqs
+
+
 class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
@@ -208,22 +236,38 @@ class Transolver(nn.Module):
                  film_cond: bool = False, film_cond_dim: int = 11,
                  film_cond_slice: tuple[int, int] = (13, 24),
                  film_mlp_hidden: int = 128,
-                 two_shot_film: bool = False):
+                 two_shot_film: bool = False,
+                 fourier_feats: bool = False,
+                 fourier_in_dim: int = 2,
+                 fourier_num_freqs: int = 32,
+                 fourier_sigma: float = 10.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
 
+        self.fourier_feats = fourier_feats
+        self.fourier_in_dim = fourier_in_dim
+        if fourier_feats:
+            self.fourier = FourierFeatures(
+                in_dim=fourier_in_dim, num_freqs=fourier_num_freqs, sigma=fourier_sigma,
+            )
+            effective_space_dim = self.fourier.out_dim
+        else:
+            self.fourier = None
+            effective_space_dim = space_dim
+
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
         else:
-            self.preprocess = MLP(fun_dim + space_dim, n_hidden * 2, n_hidden,
+            self.preprocess = MLP(fun_dim + effective_space_dim, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        self.effective_space_dim = effective_space_dim
         self.n_layers = n_layers
         self.two_shot_film = two_shot_film
         self.blocks = nn.ModuleList([
@@ -263,10 +307,17 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         if self.film_cond:
+            # FiLM must read from the ORIGINAL input — global condition vars
+            # live at indices film_cond_slice and must not be Fourier-lifted.
             s0, s1 = self.film_cond_slice
             cond = x[:, 0, s0:s1]
             scales, shifts = self.film(cond)
-        fx = self.preprocess(x) + self.placeholder[None, None, :]
+        if self.fourier is not None:
+            d = self.fourier_in_dim
+            x_in = torch.cat([self.fourier(x[..., :d]), x[..., d:]], dim=-1)
+        else:
+            x_in = x
+        fx = self.preprocess(x_in) + self.placeholder[None, None, :]
         for i, block in enumerate(self.blocks):
             if self.film_cond:
                 fx = block(fx, scale=scales[:, i], shift=shifts[:, i])
@@ -500,6 +551,9 @@ def write_experiment_summary(
         "lion_weight_decay": cfg.lion_weight_decay if cfg.optimizer == "lion" else None,
         "lion_betas": cfg.lion_betas if cfg.optimizer == "lion" else None,
         "seed": cfg.seed,
+        "fourier_feats": cfg.fourier_feats,
+        "fourier_num_freqs": cfg.fourier_num_freqs if cfg.fourier_feats else None,
+        "fourier_sigma": cfg.fourier_sigma if cfg.fourier_feats else None,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -564,6 +618,9 @@ class Config:
     lion_betas: str = "0.9,0.99"  # Lion (beta1, beta2) as comma-separated floats
     seed: int = 0  # RNG seed for model init + data sampler; enables paired-arm reproducibility
     n_layers: int = 5  # number of TransolverBlock layers
+    fourier_feats: bool = False  # lift the first 2 spatial dims through random Fourier features
+    fourier_num_freqs: int = 32  # number of Fourier frequencies (output dim = 2 * num_freqs)
+    fourier_sigma: float = 10.0  # Gaussian σ for random projection B (controls spectral bandwidth)
 
 
 cfg = sp.parse(Config)
@@ -611,6 +668,10 @@ model_config = dict(
     film_cond_slice=(13, 24),
     film_mlp_hidden=cfg.film_mlp_hidden,
     two_shot_film=cfg.two_shot_film,
+    fourier_feats=cfg.fourier_feats,
+    fourier_in_dim=2,
+    fourier_num_freqs=cfg.fourier_num_freqs,
+    fourier_sigma=cfg.fourier_sigma,
 )
 
 model = Transolver(**model_config).to(device)
