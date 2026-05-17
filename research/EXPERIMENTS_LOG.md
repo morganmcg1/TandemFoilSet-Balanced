@@ -2749,3 +2749,59 @@ Researcher-agent's #3 ranked hypothesis (H-C). Applies the proven H120 K=1 Fouri
 **Rationale:** DSDF channels (x[..., 4:11]) encode 7-dim signed distance to surface segments — inherently camber-sensitive. Currently enter model as raw scalars; non-linear chord-scale lifting via sin/cos may discriminate camber differences in slice attention. Adds 14 features (2×K×7) at K=1. Independent of all 7 in-flight hyperparameter levers and of H131 (LE/TE coords) — can compound with both.
 
 **8 WIP remaining (H123, H125-H128, H130-H132), 0 idle.**
+
+---
+
+## 2026-05-17 — PR #4459: H125 wd=5e-3 (edward) — MERGED, new baseline val=34.5532
+
+| Arm | wd | val_avg | Δ vs baseline | test 3-split | Δ vs baseline |
+|-----|-----|---------|--------------|-------------|--------------|
+| A | 5e-3 | **34.5532** | **−1.11** ✓ | **33.0792** | **−0.32** |
+| B | 1e-2 | 34.6908 | −0.98 | 34.2420 | +0.84 |
+| baseline H120 K=1 | 1e-3 | 35.6651 | — | 33.3976 | — |
+
+Per-split Arm A vs baseline: val_single_in_dist −4.70 (dominant), val_geom_camber_rc +0.22 (flat), val_geom_camber_cruise +0.06 (flat), val_re_rand −0.03 (flat).
+
+**Mechanism: wd reduces in-dist feature memorisation** (val_single_in_dist −4.70 dominant). NOT addressing OOD — val_geom_camber_rc barely moved. K=1 Fourier already constrains sub-chord overfitting; wd targets a different memorisation axis. Optimum near wd=5e-3; wd=1e-2 (Arm B) worse on test 3-split (+1.16) despite similar val.
+
+**wd now LOCKED at 5e-3 for all future experiments.**
+
+Artifacts: `models/model-h125-arm-a-wd5e-3-20260517-074718/`
+
+---
+
+## 2026-05-17 — PR #4462: H127 n_hidden={96,112} (nezuko) — CLOSED, capacity lever closed
+
+| Arm | n_hidden | params | val_avg | Δ vs baseline |
+|-----|---------|--------|---------|--------------|
+| A | 96 | 495K (−42%) | 37.6110 | **+1.95 (>2σ)** |
+| B | 112 | 668K (−22%) | 36.1206 | +0.46 (within noise) |
+| baseline | 128 | 860K | 35.6651 | — |
+
+val_geom_camber_rc: both arms WORSE (+2.06, +1.80). Prediction of OOD improvement falsified. Arm A shows visible overfit despite 42% fewer params (val rising after epoch 23). Combined with prior negatives at n_hidden>128: n_hidden=128 confirmed optimum. Capacity lever closed in both directions.
+
+---
+
+## 2026-05-17 — PR #4451: H123 Fourier K=0 ablation + K=1 scale=0.5 (askeladd) — CLOSED, K-sweep complete
+
+| Arm | K | scale | val_avg | test 3-split |
+|-----|---|-------|---------|-------------|
+| Baseline K=1 | 1 | 1.0 | 35.6651 | 33.3976 |
+| A (K=0) | 0 | — | 35.8176 (+0.15) | 34.6098 (+1.21) |
+| B (K=1 scale=0.5) | 1 | 0.5 | 36.1488 (+0.48) | 33.4882 (+0.09) |
+
+K=0: test regresses +1.21 (above noise floor); K=1 provides structure that raw coords don't. K=1 scale=0.5 (2×chord wavelength): val_geom_camber_rc worsens +0.73. Monotone K=8→K=1 trend does NOT continue to K=0 — K=1 scale=1.0 (chord wavelength) is the true Fourier PE optimum. K-sweep lever definitively closed.
+
+Notable: askeladd identified and fully documented the data/scoring.py NaN propagation root cause (NaN * 0 = NaN in accumulate_batch). Fix declined — data/scoring.py is read-only to preserve evaluation contract.
+
+---
+
+## 2026-05-17 — Cycle 45 launch: H133, H134, H135 (OOD-targeted attack)
+
+| PR | Student | Hypothesis | Mechanism | Expected gain |
+|----|---------|-----------|----------|--------------|
+| #4526 | askeladd | **H134: GALE geometry cross-attention (K=32, K=16 tokens)** | Architecture: surface nodes → fixed pool of geometry tokens, cross-attended by all mesh nodes in each block | 0.5–2.0 pts, primary target val_geom_camber_rc |
+| #4527 | edward | **H133: spectral norm on in_project_slice** | Lipschitz-1 constraint on slice-assignment logits; compresses slice spatial-frequency sensitivity | 0.2–0.8 pts |
+| #4529 | nezuko | **H135: condition-only Mixup α={0.2,0.5}** | Blend only NACA+flow conditioning dims 13:24 + targets between sample pairs; mesh geometry fixed. Geometry-safe Mixup for camber-axis interpolation | 0.3–1.0 pts camber OOD |
+
+All use new wd=5e-3 baseline (34.5532 / 33.0792). **8 WIP, 0 idle.**
