@@ -487,6 +487,7 @@ class Config:
     slice_num: int = 64
     use_swiglu: bool = False
     swiglu_hidden_mult: float = 1.0  # 1.0 = full hidden; 0.6667 = param-matched
+    grad_noise_std: float = 0.0     # std of Gaussian noise added to gradients before clip+step. 0 = off.
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -551,6 +552,7 @@ print(
     f"MLP-only={n_mlp_params/1e3:.1f}K, "
     f"use_swiglu={cfg.use_swiglu}, swiglu_hidden_mult={cfg.swiglu_hidden_mult})"
 )
+print(f"grad_noise_std={cfg.grad_noise_std}")
 
 optimizer = Lion(model.parameters(), lr=cfg.lr, betas=(0.9, 0.99), weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.cosine_t_max_epochs)
@@ -586,6 +588,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_gn_sum = 0.0
     epoch_gn_max = 0.0
     epoch_gn_clipped = 0
+    epoch_gn_preNoise_sum = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -614,6 +617,18 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        if cfg.grad_noise_std > 0.0:
+            # Record pre-noise grad_norm so the diagnostic reflects the
+            # un-perturbed signal magnitude, then inject Gaussian noise
+            # before clip+step (Neelakantan et al. 2015).
+            with torch.no_grad():
+                pre_noise_gn = torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), max_norm=float("inf")
+                )
+            for p in model.parameters():
+                if p.grad is not None:
+                    p.grad.add_(torch.randn_like(p.grad) * cfg.grad_noise_std)
+            epoch_gn_preNoise_sum += pre_noise_gn.item()
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         ema.update(model)
@@ -634,6 +649,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_surf /= max(n_batches, 1)
     gn_mean = epoch_gn_sum / max(n_batches, 1)
     gn_clip_frac = epoch_gn_clipped / max(n_batches, 1)
+    gn_pre_noise_mean = epoch_gn_preNoise_sum / max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -672,6 +688,8 @@ for epoch in range(MAX_EPOCHS):
         "train/grad_norm_preclip_mean": gn_mean,
         "train/grad_norm_preclip_max": epoch_gn_max,
         "train/grad_norm_clip_frac": gn_clip_frac,
+        "train/grad_norm_pre_noise_mean": gn_pre_noise_mean,
+        "train/grad_noise_std": cfg.grad_noise_std,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
