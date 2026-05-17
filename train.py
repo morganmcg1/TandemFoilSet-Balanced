@@ -336,7 +336,7 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, use_bf16: bool = False) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -357,7 +357,10 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bf16):
+                pred = model({"x": x_norm})["preds"]
+            # Loss and MAE accumulation in fp32 for stable reductions.
+            pred = pred.float()
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -449,7 +452,7 @@ def write_experiment_summary(
     print(f"\nSaved experiment summary to {summary_path}")
 
 
-def collect_gate_stats(model: nn.Module, loader, stats: dict, device) -> list[dict]:
+def collect_gate_stats(model: nn.Module, loader, stats: dict, device, use_bf16: bool = False) -> list[dict]:
     """One-batch GEGLU gate-activation health. Captures post-activation gate
     mean/std for each GEGLU module. Uses the first batch of ``loader``.
     """
@@ -477,7 +480,8 @@ def collect_gate_stats(model: nn.Module, loader, stats: dict, device) -> list[di
             for x, y, is_surface, mask in loader:
                 x = x.to(device, non_blocking=True)
                 x_norm = (x - stats["x_mean"]) / stats["x_std"]
-                _ = model({"x": x_norm})
+                with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bf16):
+                    _ = model({"x": x_norm})
                 break
     finally:
         for h in handles:
@@ -575,6 +579,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    use_bf16: bool = False   # Enable bf16 mixed-precision via torch.autocast (H95)
 
 
 cfg = sp.parse(Config)
@@ -682,7 +687,11 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=cfg.use_bf16):
+            pred = model({"x": x_norm})["preds"]
+        # Loss computation in fp32: reductions on tiny Huber thresholds (0.25, 0.5)
+        # benefit from full precision, and Lion only needs gradient signs anyway.
+        pred = pred.float()
         abs_err = (pred - y_norm).abs()  # [B, N, 3]
         # Per-channel Huber delta: [Ux, Uy, p]
         delta = torch.tensor(
@@ -722,7 +731,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, use_bf16=cfg.use_bf16)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -742,7 +751,7 @@ for epoch in range(MAX_EPOCHS):
 
     gate_stats = []
     if cfg.ffn_act in ("geglu", "swiglu"):
-        gate_stats = collect_gate_stats(model, val_loaders["val_single_in_dist"], stats, device)
+        gate_stats = collect_gate_stats(model, val_loaders["val_single_in_dist"], stats, device, use_bf16=cfg.use_bf16)
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     append_metrics_jsonl(metrics_jsonl_path, {
@@ -756,6 +765,7 @@ for epoch in range(MAX_EPOCHS):
         "clip_grad_norm": cfg.clip_grad_norm,
         "norm_type": cfg.norm_type,
         "ffn_act": cfg.ffn_act,
+        "use_bf16": cfg.use_bf16,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "gate_stats": gate_stats,
@@ -789,7 +799,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, use_bf16=cfg.use_bf16)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
