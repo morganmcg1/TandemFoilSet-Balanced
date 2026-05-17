@@ -910,3 +910,44 @@ Metric artifacts:
 
 - **Analysis:** Arm A within null band (±1.0), test also within noise. Arm B exceeds the 41.0 failure threshold — over-LR signature (rc-camber most sensitive: 58.05 vs 53.15). Physical intuition that T_max=40's extended high-LR dwell might want lower peak LR did NOT hold. Both arms show val still descending at timeout — the model is timeout-limited, not LR-limited. Key student observation: final-epoch LR at 9.5-12% of init (above the expected 7% for T_max=40) because timeout prevents reaching cycle completion; rc-camber split is the most LR-sensitive and the dominant val error source.
 - **Decision:** CLOSED — no_improvement. LR axis fully closed. lr=1.7e-4 is the precise optimum for the 12-mech / T_max=40 stack. Reassigning edward to SGDR warm restarts (#4253) — mid-training LR reset to test if the "val still descending at timeout" attractor can be escaped via a second high-LR phase.
+
+---
+
+## 2026-05-17 02:00 — PR #4061: Channel-decoupled output heads (velocity/pressure split) — no_improvement
+
+- **Student:** charliepai2i48h2-tanjiro
+- **Hypothesis:** The shared `Linear(d,d)→GELU→Linear(d,3)` output head is forced to represent both heavy-tailed pressure and lighter-tailed velocity jointly; splitting into parallel pressure/velocity heads lets each specialize.
+- **Results:**
+
+| Metric | Baseline (#4079) | Arm A (2-layer p head) | Arm B (3-layer p head) |
+|--------|------------------|-----------------------|-----------------------|
+| **val_avg/mae_surf_p** | **39.8345** | **40.0470 (+0.53%)** | **41.9308 (+5.26%)** |
+| **test_avg/mae_surf_p** | **33.8873** | **35.2176 (+3.92%)** | **36.1335 (+6.63%)** |
+| val_single_in_dist | 43.68 | 40.94 (−6.3%!) | 45.03 |
+| val_geom_camber_rc | 53.15 | 55.19 (+3.8%) | 55.16 (+3.8%) |
+| val_geom_camber_cruise | 22.71 | 23.52 (+3.6%) | 25.23 (+11.1%) |
+| val_re_rand | 39.80 | 40.53 (+1.8%) | 42.30 (+6.3%) |
+| n_params | 662,359 | 678,871 (+2.5%) | 695,383 (+5.0%) |
+| Per-epoch time | ~54.2 s | ~55.0 s | ~55.8 s |
+| Peak VRAM | 23.84 GB | 24.13 GB | 24.63 GB |
+
+- **Analysis:** Arm A is within ±1 null band on val but paired test regression (+3.92%) rules out compounding win. Arm B threshold breach (+5.3% val). Key student insight: per-split analysis shows val_single_in_dist improved −6.3% (bright spot) offset by OOD regressions; channels moved uniformly, not pressure-specifically — confirming the 12-mech stack (asinh+pw=2.0) had already neutralized the shared-head bottleneck. The tanjiro implementation was clean (correct param counts, channel order preserved). Excellent diagnostic work.
+- **Decision:** CLOSED — no_improvement. Decoupled-heads axis closed. Reassigning tanjiro to n_head sweep (#4273) — pure head count sweep (prior #3106 was a 3-way compound; uninterpretable for n_head alone).
+
+---
+
+## 2026-05-17 02:00 — PR #4030: Velocity surface down-weighting Arms C/D at lr=1.7e-4 — no_improvement
+
+- **Student:** charliepai2i48h2-nezuko
+- **Hypothesis:** Arm B (ux=uy=0.7) at lr=2.5e-4 showed val=40.19 and test=33.72 — promising signal; re-run at lr=1.7e-4 (12-mech baseline) to see if the mechanism holds.
+- **Results:**
+
+| Metric | Baseline (#4079) | Arm C (0.7 at lr=1.7e-4) | Arm D (0.8 at lr=1.7e-4) |
+|--------|------------------|--------------------------|--------------------------|
+| **val_avg/mae_surf_p** | **39.8345** | **39.4862 (−0.88%)** | **40.7607 (+2.32%)** |
+| **test_avg/mae_surf_p** | **33.8873** | **34.4596 (+1.69%)** | **34.8643 (+2.88%)** |
+| val_geom_camber_rc | 53.15 | 53.15 (≈same) | 55.38 |
+| Best epoch | 34 | 33 | 32 |
+
+- **Analysis:** Arm C clears val by 0.35 pts (within noise floor) but test regresses +1.69%. Arm D clear regression. The conjunctive beat target (val<39.83 AND test<33.89) is not met by either arm. Student's key insight: lowering LR (1.7e-4 vs 2.5e-4) and surface-vel-downweight appear to interact non-trivially — lowering LR absorbed the headroom that Arm B was exploiting at 2.5e-4. Per-channel diagnostic: surf_Ux/Uy flat between 0.7 and 0.8 (no backbone starvation), so regression at 0.8 is "insufficient pressure-share" failure mode rather than gradient starvation. Excellent analysis.
+- **Decision:** CLOSED — no_improvement. Velocity-surface-weight axis closed at lr=1.7e-4. Reassigning nezuko to attention-dropout (#4278) — targets the OOD generalization gap (val_geom_camber_rc=53.15) directly via attention regularization; model currently has zero stochastic regularization in attention path.

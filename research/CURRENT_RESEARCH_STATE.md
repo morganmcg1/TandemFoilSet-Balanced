@@ -50,8 +50,8 @@ cd target && python train.py --agent <student> \
 | #4237 | fern | Depth sweep: n_layers=6, 7 (vs current 5) on 12-mech stack | WIP | #4154 closed; depth untouched since round 1; width was throughput-bound (#4167) |
 | #4253 | edward | SGDR warm restarts: T_0=17 (Arm A), T_0=12 (Arm B) on 12-mech stack | WIP — NEW | #4181 closed (LR axis locked at 1.7e-4); all arms show val descending at timeout → test mid-training LR restart |
 | #4243 | askeladd | slice_num sweep: 48 (Arm A), 96 (Arm B) vs current 64 on 12-mech stack | WIP — NEW | #4029 closed (EMA decay 0.993/0.990 within noise); slice_num cleanest untested architectural axis |
-| #4030 | nezuko | Velocity surface down-weighting (re-test at lr=1.7e-4): Arm C (ux=uy=0.7), Arm D (ux=uy=0.8) | WIP | Initial arms ran at lr=2.5e-4: Arm B (0.7) hit val=40.19, test=33.72; need lr=1.7e-4 re-test |
-| #4061 | tanjiro | Channel-decoupled output heads: split velocity from pressure | WIP | Code implementation committed (commit 33faba0); decoupled_heads + pressure_head_layers flags; no terminal results yet |
+| #4278 | nezuko | Attention dropout: p=0.05 (Arm A), p=0.10 (Arm B) in PhysicsAttention | WIP — NEW | #4030 closed; vel-surf-weight null at lr=1.7e-4; val_geom_camber_rc=53.15 dominant gap → test attention regularization |
+| #4273 | tanjiro | n_head sweep: 2 (Arm A), 8 (Arm B) vs current 4 on 12-mech stack | WIP — NEW | #4061 closed; decoupled-heads null (shared head not bottleneck); pure n_head is uncharted (#3106 compounded 3 changes) |
 | #4230 | thorfinn | Weight decay sweep: wd=1e-4, 5e-4 bracketing 3e-4 | WIP | #3734 SwiGLU closed (17h stale, blocked); wd untouched since #3293 (Lion change) |
 
 ## Key open questions (round 15 — new baseline 39.83 — PLATEAU PROTOCOL ACTIVE)
@@ -64,8 +64,9 @@ cd target && python train.py --agent <student> \
 4. **Does MLP-ratio expansion (3, 4) beat baseline?** (#4235 alphonse) — capacity along widest parameter group; throughput penalty ~10-20% per arm.
 5. **Does linear warmup before cosine reduce wasted early-epoch budget?** (#4236 frieren) — T_max=50 data showed val descending at 28.7% LR at ep33; warmup tests if early budget is wasted.
 6. **Does depth scaling (n_layers=6, 7) work where width scaling didn't?** (#4237 fern) — depth untouched since round 1; per-block slice attention scales linearly with layers.
-7. **Do channel-decoupled output heads improve pressure specialization?** (#4061 tanjiro) — implementation committed, awaiting terminal results.
+7. **Does attention dropout (p=0.05, 0.10) reduce OOD over-fitting on geom_camber_rc?** (#4278 nezuko) — dominant val error is rc-camber split (53.15); model has zero attention regularization; small-data regime (36 training geometries).
 8. **Does slice_num=48 or 96 improve on the current 64?** (#4243 askeladd) — cleanest untested architectural axis; prior #3106 was a three-way compound; pure slice sweep is new.
+9. **Does n_head=2 or 8 outperform current n_head=4?** (#4273 tanjiro) — head_dim directly controls attention subspace rank per block; pure n_head sweep is new ground (prior #3106 compounded 3 changes).
 
 ## 12-mechanism stack: full pipeline
 
@@ -117,6 +118,8 @@ cd target && python train.py --agent <student> \
 | #4154 (fern loosen-other-clip) | no_improvement: other=1.5 val=40.63 (+2.0%), other=2.0 val=42.04 (+5.5%); per-group(1.0,1.0) "win" in #4016 was magnitude-inflation noise → #4237 n-layers-sweep |
 | #4029 (askeladd EMA-decay-fine) | no_improvement: 0.993 val=39.79 (+noise, test +0.79 regression), 0.990 not run (below threshold); EMA decay=0.995 locked → #4243 slice-num-sweep |
 | #4181 (edward lr-fine-sweep) | no_improvement: lr=1.5e-4 val=40.39 (+1.4% null), lr=2.0e-4 val=41.87 (+5.1% failure); lr=1.7e-4 locked as optimum for T_max=40; LR axis fully closed → #4253 sgdr-warm-restarts |
+| #4061 (tanjiro decoupled-heads) | no_improvement: Arm A (2-layer p head) val=40.05 (+0.53% null) but test=35.22 (+3.92%); Arm B (3-layer) val=41.93 (+5.3%); 12-mech already neutralized shared-head bottleneck (asinh+pw=2.0) → #4273 n-head-sweep |
+| #4030 (nezuko vel-surf-weight arms C/D) | no_improvement: Arm C (0.7) val=39.49 (within noise) but test=34.46 (+1.69%); Arm D (0.8) val=40.76 (+2.3%); vel-surf-weight axis closed at lr=1.7e-4 → #4278 attention-dropout |
 
 ## Potential next research directions
 
@@ -129,7 +132,9 @@ cd target && python train.py --agent <student> \
 - **Warmup-cosine** — IN PROGRESS as #4236 (frieren); 2/3-epoch linear warmup before cosine T_max=40
 - **SGDR warm restarts** — IN PROGRESS as #4253 (edward); T_0=17 and T_0=12 — mid-training LR reset to escape timeout-bound attractor
 - **Slice_num sweep** — IN PROGRESS as #4243 (askeladd); slice_num=48, 96 (vs current 64) — cleanest untested architectural axis
-- **Velocity surface down-weighting** — IN PROGRESS as #4030 (nezuko); vel_ux=vel_uy=0.7/0.8 at lr=1.7e-4
-- **Channel-decoupled heads** — IN PROGRESS as #4061 (tanjiro); split velocity/pressure output heads
+- **Velocity surface down-weighting** — CLOSED as #4030 (nezuko); null at lr=1.7e-4 (Arm C val within noise but test +1.69%); axis closed
+- **Channel-decoupled heads** — CLOSED as #4061 (tanjiro); null (12-mech already neutralized shared-head bottleneck); axis closed
+- **Attention dropout** — IN PROGRESS as #4278 (nezuko); p=0.05, 0.10 in PhysicsAttention; targets OOD gap at val_geom_camber_rc
+- **n_head sweep** — IN PROGRESS as #4273 (tanjiro); n_head=2 (head_dim=64) and n_head=8 (head_dim=16) vs current 4
 - **Weight decay sweep** — IN PROGRESS as #4230 (thorfinn); wd ∈ {1e-4, 5e-4} bracketing 3e-4
 - **SwiGLU gating** — CLOSED as #3734 (thorfinn); blocked on implementation, 3 attempts failed
