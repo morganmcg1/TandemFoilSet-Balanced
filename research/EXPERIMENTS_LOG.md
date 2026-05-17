@@ -1,5 +1,29 @@
 # SENPAI Research Results
 
+## 2026-05-17 01:45 — #4214 frieren EMA@layer_scale CLOSED (truncated, finding #28); #4274 frieren EMA@T_max=24+clip new BL assigned
+
+### #4214 frieren — R11 H64: EMA decay at layer_scale+T_max=20 (CLOSED — timeout-truncated, informative null + Finding #28)
+
+W&B group `round11-ema-newsub-frieren`. Both arms truncated at epoch 13/50 by 30-min wall-clock cap (cosine T_max=20 never completed).
+
+| Arm | ema | val (13 ep) | test (13 ep) | Notes |
+|-----|------|-------------|--------------|-------|
+| Ctrl ref (8m99yywe, 50 ep) | 0.997 | 54.30 | 47.29 | (not directly comparable due to epoch mismatch) |
+| A (4ub0crfk) | 0.995 | 56.40 | 47.14 | within ~1.3σ of ctrl; consistent with finding #4 extends |
+| B (42if6l9l) | 0.999 | 63.32 | 54.34 | slow-but-converging (monotonic descent ep10=83→ep13=63); NOT divergent |
+
+**Finding #28**: layer_scale_init=1e-4 stabilises ema=0.999 (no divergence vs PR #4152 where it diverged at no-layer_scale T_max=20). However ema=0.999 is uncompetitive in 30-min budget due to slow convergence. Distinction matters: "slow-but-converging" ≠ explosive divergence.
+
+A-vs-ctrl ambiguous due to truncation (13ep vs 50ep); within seed-σ. Finding #4 (EMA robust [0.995, 0.997]) likely extends to layer_scale substrate but not provable from these truncated runs.
+
+### #4274 frieren — R11 H70: EMA decay at new BL substrate (T_max=24+clip=1.0) (just assigned)
+
+EMA sweep {0.995, 0.997 ctrl=BL, 0.999} at the actual new BL substrate. Tests:
+- (a) does EMA robustness extend to T_max=24+clip without layer_scale?
+- (b) does ema=0.999 diverge here, slow-but-converge (like #4214), or work?
+
+---
+
 ## 2026-05-17 01:05 — Triple closure (#4192 #4180 #4173); triple reassignment (#4255 fern, #4256 edward, #4258 thorfinn) all targeting the new BL substrate
 
 ### #4192 fern — R11 H61: Huber β at lr=2e-4+T_max=14+clip=1.0 (CLOSED — informative null)

@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-17 (~01:10 UTC) — Triple closure (#4192, #4180, #4173 all informative nulls vs new BL 53.81; added findings #25/26/27). Triple reassignment to new BL substrate: #4255 fern lr@T24+clip, #4256 edward fine-clip@T24, #4258 thorfinn Lion β1@T24+clip. 8/8 staffed.
+- **Date:** 2026-05-17 (~01:45 UTC) — #4214 frieren EMA@layer_scale CLOSED (timeout-truncated; Finding #28: layer_scale stabilises ema=0.999 but slow). #4274 frieren reassigned to EMA@new BL substrate (T_max=24+clip). 8/8 staffed. #4201 nezuko likely-winner pending student submission (best run jqmn2nw7 val 53.27/test 45.35 beats BL).
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
@@ -53,7 +53,7 @@ Key mechanism: T_max=24 + grad_clip=1.0 super-additive interaction. At T_max=24,
 | #4201 | nezuko | R11 H62: layer_scale=1e-4 + clip=1.0 + lr=2e-4 + T_max=20 (four-way composition) | WIP |
 | **#4256** | **edward** | **R11 H68: Fine-grained clip sweep at T_max=24 {0.85, 1.0 ctrl, 1.15}** | **Just assigned** |
 | **#4212** | **askeladd** | **R11 H63: layer_scale magnitude sweep {1e-3, 1e-5, 3e-4} at new BL substrate** | **Just assigned** |
-| **#4214** | **frieren** | **R11 H64: EMA decay {0.995, 0.997 ctrl, 0.999} at layer_scale+T_max=20 substrate** | **Just assigned** |
+| **#4274** | **frieren** | **R11 H70: EMA decay at new BL substrate (T_max=24+clip=1.0) {0.995, 0.997 ctrl, 0.999}** | **Just assigned** |
 | **#4231** | **tanjiro** | **R11 H65: LR recalibration at new substrate (layer_scale+T_max=20) {1.7e-4, 2.0e-4, seed-3}** | **Just assigned** |
 
 **All 8 students now staffed.**
@@ -62,6 +62,7 @@ Key mechanism: T_max=24 + grad_clip=1.0 super-additive interaction. At T_max=24,
 
 | PR | Student | Result | Note |
 |----|---------|--------|------|
+| #4214 | frieren | EMA@layer_scale+T_max=20: timeout-truncated at 13ep. **Finding #28**: layer_scale stabilises ema=0.999 (no divergence vs #4152) but slow-but-converging — uncompetitive in budget. ema=0.995 within ~1.3σ of ctrl (finding #4 likely extends but unprovable from truncated runs). | CLOSED |
 | #4173 | thorfinn | Triple compose extended at clip+T_max=20: lr response monotone in [1.5, 2.0] (Finding #26); T_max=18 worse than {14,20} bimodal terminal LR (Finding #27); all arms worse than new BL. | CLOSED |
 | #4180 | edward | Clip ratio @ lr=2e-4: clip=1.0 sharp optimum; asymmetric regression (clip=1.4 hurts 2× more than 0.7); intersection of co-located scale+direction optima (Finding #25). | CLOSED |
 | #4192 | fern | Huber β @ lr=2e-4 + clip=1.0: both arms (0.03, 0.10) regress significantly; finding #11 extends to new substrate. | CLOSED |
@@ -97,7 +98,7 @@ Key mechanism: T_max=24 + grad_clip=1.0 super-additive interaction. At T_max=24,
 | **Huber β recalibration at lr=2e-4** | **β {0.03, 0.05 ctrl, 0.10} at lr=2e-4 + clip=1.0** | **#4192 fern** | **−0 to −1.5 val; tests whether finding #11 extends to new substrate; β=0.03 is novel** |
 | Clip ratio recalibration at lr=2e-4 | clip {0.7, 1.0 ctrl, 1.4} at lr=2e-4 | #4180 edward | −0 to −1.5 val; parallel to finding #22 |
 
-## Key findings (cumulative, 27)
+## Key findings (cumulative, 28)
 
 1. **FiLM on log(Re)** contributes −4.35 val / −4.56 test under n_fourier=0 (paper-critical ablation confirmed).
 2. **EMA(0.997)** contributes +4.4 val on top of Lion.
@@ -126,6 +127,7 @@ Key mechanism: T_max=24 + grad_clip=1.0 super-additive interaction. At T_max=24,
 25. **clip=1.0 valley is asymmetric (lr=2e-4+T_max=14)** [PR #4180]: clip=0.7 → val 59.35 (+2.46), clip=1.4 → val 62.24 (+5.35). Asymmetric regression (B 2× worse than A) rules out both pure-scale and pure-direction stories. clip=1.0 sits at intersection of two co-located optima: scale (effective per-step magnitude that fits loss curvature) AND direction-stability (clipped step alignment with Lion sign). Moving down hurts via reduced effective magnitude; moving up hurts via both curvature overshoot AND direction-noise.
 26. **lr response monotone at T_max=20+clip=1.0 in [1.5, 2.0]** [PR #4173]: lr=1.5e-4 ~57.66, lr=1.8e-4 → 58.38, lr=2.0e-4 → 56.98. No interior minimum — earlier hypothesis of "lr sweet spot between 1.5 and 2 at T_max=20+clip" is falsified.
 27. **T_max scan non-monotone at lr=2e-4+clip=1.0** [PR #4173]: T_max=14 → 56.89, T_max=18 → 57.72, T_max=20 → 56.98. T_max=18 worse than both endpoints — bimodal terminal-LR effect at the 14-epoch wall-clock cap. T_max=14 terminates at LR≈0, T_max=20 at LR≈5e-5, T_max=18 at LR≈2e-5 — "too low to keep learning, too high to settle".
+28. **layer_scale=1e-4 stabilises ema=0.999 (no divergence) but slow-converging** [PR #4214]: at layer_scale+T_max=20, ema=0.999 monotonically descends ep10=83 → ep13=63 (no NaN, no upward bounce). Contrast PR #4152 (no-layer_scale T_max=20) where ema=0.999 diverged. Layer_scale's small residual init dampens the gradient propagation enough to prevent the explosive feedback that EMA=0.999 induces at high-LR endpoints. However, ema=0.999 remains uncompetitive in 30-min budget due to slow effective convergence (averaged weights still tracking high-loss trajectory).
 
 ## Next priorities
 
