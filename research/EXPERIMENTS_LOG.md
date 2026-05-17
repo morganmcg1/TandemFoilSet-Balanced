@@ -1156,3 +1156,30 @@ Stop condition triggered (val > 41.0 threshold); Arm B (warmup=3) correctly not 
 
 - **Analysis:** Clear interaction effect: n_head=2 (head_dim=64) needs the spatial resolution of slice=64 to compensate for fewer attention heads. At slice=48 (coarser), two heads with head_dim=64 cannot resolve the attention patterns. The baseline n_head=4, head_dim=32, slice_num=48 is a local optimum on the head_count×slice_num interaction grid. single_in_dist degraded most (40→45), confirming the attention shape mismatch hurts basic learning capacity.
 - **Decision:** CLOSED — no_improvement. n_head direction fully closed. Assigned tanjiro to RMSNorm (#4365) — orthogonal normalization-layer axis.
+
+---
+
+## 2026-05-17 05:10 — PR #4278: attention-dropout (nezuko) — no_improvement → closed
+
+- **Student:** charliepai2i48h2-nezuko
+- **Hypothesis:** Attention dropout (p=0.05 Arm A, p=0.10 Arm B) inside PhysicsAttention to reduce OOD over-fitting on geom_camber_rc.
+- **Results:**
+
+| Metric | Arm A (p=0.05) | Arm B (p=0.10) | Old baseline (#4079) | New baseline (#4243) |
+|--------|----------------|----------------|----------------------|----------------------|
+| **val_avg/mae_surf_p** | 40.2876 | 40.6040 | 39.8345 | **38.6750** |
+| **test_avg/mae_surf_p** | 34.4451 | 34.6701 | 33.8873 | **33.4948** |
+| val_single_in_dist | 43.4782 | 43.6650 | 43.6797 | 42.1400 |
+| **val_geom_camber_rc** | 54.1693 (+1.91%) | 54.7244 (+2.96%) | 53.1517 | 51.6180 |
+| val_geom_camber_cruise | 23.5359 | 23.4124 | 22.7101 | 22.4830 |
+| val_re_rand | 39.9668 | 40.6141 | 39.7965 | 38.4600 |
+| Best epoch | 33 | 33 | 34 | 35 |
+| Sec/epoch | 54.8 | 55.5 | ~54.2 | 51.7 |
+| Peak VRAM | 23.84 GB | 23.84 GB | 23.84 GB | 22.60 GB |
+| Metric artifacts | `models/model-charliepai2i48h2-nezuko-attention-dropout-A-20260517-024608/metrics.jsonl` | `models/model-charliepai2i48h2-nezuko-attention-dropout-B-20260517-033355/metrics.jsonl` | | |
+
+- **Analysis:** Two clean diagnostics:
+  1. **Train/val gap GREW with higher dropout** (Arm B p=0.10: train surf_loss 0.021, val_geom_camber_rc 0.066, gap 0.046 vs Arm A p=0.05: gap 0.036). Opposite of regularization-of-overfit signature — dropout is removing signal not co-adaptation.
+  2. **OOD split worsened on both arms** — the very split this hypothesis aimed at (geom_camber_rc) got more error. Attention dropout is NOT helping the OOD bottleneck.
+  - Note: results were submitted vs the OLD baseline (val 39.83). Even comparing favorably there, both arms regressed (+1.14%, +1.93%). Against new baseline (38.675), regression is +4.2%, +5.0%.
+- **Decision:** CLOSED — no_improvement. Combined with #4308 (FFN dropout) and #4312 (SWA), three consecutive failures of model-internal regularization. Reading: model is not over-fitting; OOD gap is from data coverage. Next axis: **data augmentation**. Assigned nezuko to point-subsampling (#4377) — drop 20%/40% non-surface points per training batch.
