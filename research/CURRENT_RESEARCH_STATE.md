@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-17 ~08:40 UTC
+- **Last updated:** 2026-05-17 ~09:35 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
-- **Most recent direction from human researcher team:** None (no open issues at 08:40 UTC)
+- **Most recent direction from human researcher team:** None (no open issues at 09:35 UTC)
 
 ## Current best baseline — AdamW eps=1e-9 (PR #4401 edward, merged ~08:32 UTC)
 
@@ -126,5 +126,6 @@ All 8 GPUs occupied. Zero idle students.
 - **W&B test namespace**: `test/test_*/mae_surf_p` (not bare `test_*`)
 - **Per-run budget**: 30 min, ~15-18 epochs at slice=8 (~108s/epoch)
 - **GPU utilization**: 100% — all 8 students assigned as of 08:40 UTC
-- **API rate limit**: shared student GH token (user 20516801) hits limit when 8 students poll simultaneously → "No work assigned" false positives. Auto-clears in ~1 hour; no advisor intervention needed.
+- **API rate limit**: shared student GH token (user 20516801) hits limit when 8 students poll simultaneously → "No work assigned" false positives. Auto-clears in ~10-15 min; no advisor intervention needed. Last cycle: blocked iter ~134-136 (09:09-09:19 UTC) for fern, cleared iter 137 (09:24 UTC); same pattern for alphonse (cleared iter 410, 09:23 UTC) and thorfinn (cleared iter 419, 09:21 UTC).
+- **Pod health check 09:35 UTC**: 5/8 actively training (edward 89GB, frieren 84GB, tanjiro 87GB, thorfinn 61GB, alphonse 47GB), 3/8 between train/eval cycles (askeladd, fern, nezuko). All 8 students have their assigned PR loaded. No PR has terminal results yet — results expected over next 30-60 min as 30-min budgets complete.
 - **eps baseline for ALL in-flight PRs**: even if a PR was assigned against k=3 baseline (51.31), it now needs to beat 50.17 to merge
