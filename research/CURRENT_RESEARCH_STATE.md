@@ -1,173 +1,122 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 23:50 UTC
+- **Last updated:** 2026-05-17 00:40 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
-- **Most recent direction from human researcher team:** None (no open issues at 23:50 UTC)
-- **PENDING WIN (rebase-in-flight):** PR #4142 (nezuko Lookahead k=5 α=0.5 on slice=8) hit val=53.6164 / test=53.5143 — beats new alphonse baseline by −5.0% / −3.3%. Sent back for rebase due to argparse conflict with alphonse's β2 changes. Result is the biggest single optimizer-axis win in the programme; expecting confirmation post-rebase.
-- **MILD POSITIVE (rebase-in-flight):** PR #4151 (thorfinn LLRD=0.85 on slice=8) hit val=56.4394 / test=55.6056. Beats OLD slice=8 baseline by −0.80%, narrowly misses new baseline (+0.024% val, +0.48% test). Sent back to retest on the new slice=16+β2=0.95 stack — if compounding lands, val < 55.8 is plausible.
+- **Most recent direction from human researcher team:** None (no open issues at 00:40 UTC)
 
-## Current best baseline (after alphonse #4067 merge — plateau BROKEN)
+## Current best baseline — NEW (Lookahead merge at 00:35 UTC)
 
 | Metric | Value | Source |
 |---|---|---|
-| `val_avg/mae_surf_p` | **56.4260** | PR #4067 alphonse (slice=16 + β2=0.95, run `3pc74k8f`) |
-| `test_3split/mae_surf_p` | **55.3387** | PR #4067 alphonse |
+| `val_avg/mae_surf_p` | **54.2986** | PR #4142 nezuko Lookahead k=5 α=0.5 slice=8 `qhphlg41` |
+| `test_3split/mae_surf_p` | **52.8790** | PR #4142 nezuko |
 
-Per-split val (PR #4067):
+Per-split val (PR #4142, best seed `qhphlg41`):
 
-| Split | mae_surf_p | Δ vs slice=8 baseline (56.8954) |
+| Split | mae_surf_p | Δ vs prior alphonse baseline (56.426) |
 |---|---|---|
-| val_single_in_dist | 65.188 | −2.66% |
-| val_geom_camber_rc | 67.131 | **−4.20%** ← dominant residual reduced significantly |
-| val_geom_camber_cruise | 37.922 | +7.36% (regress) |
-| val_re_rand | 55.464 | +0.44% |
-| **val_avg** | **56.426** | **−0.83%** |
+| val_single_in_dist | 63.937 | −1.9% |
+| val_geom_camber_rc | **68.753** | **+2.4% ← REGRESSED** |
+| val_geom_camber_cruise | 31.954 | **−15.7% ← best improvement** |
+| val_re_rand | 52.552 | −5.2% |
+| **val_avg** | **54.299** | **−3.8%** |
+
+Per-split test (PR #4142):
+
+| Split | mae_surf_p |
+|---|---|
+| test_single_in_dist | 54.230 |
+| test_geom_camber_rc | 60.693 |
+| test_geom_camber_cruise | NaN (fleet-wide bug) |
+| test_re_rand | 43.715 |
+| **test_3split** | **52.879** |
 
 Reproduce:
 ```bash
 cd target/ && python train.py \
   --grad_clip 5.0 --huber_delta 0.5 --ema_decay 0.99 --asinh_p_scale 1.0 \
   --use_swiglu --mlp_ratio 1.333 --n_head 2 --asinh_vel_scale 0.5 \
-  --slice_num 16 \
-  --adamw_beta2 0.95 \
+  --slice_num 8 \
+  --use_lookahead --lookahead_k 5 --lookahead_alpha 0.5 \
   --agent <student>
 ```
 
-**IMPORTANT**: This baseline was measured on **slice=16**, not slice=8. The previous slice=8 baseline (PR #4062, val=56.8954) is still in the merged code. The compounding question — does β2=0.95 + slice=8 beat β2=0.95 + slice=16? — is unanswered and is alphonse's next assignment (PR #4162).
+**NOTE**: β2=0.999 (default). β2=0.95+Lookahead compound is the highest-priority open experiment (#4249 nezuko).
 
-**NO SGDR** in current baseline. NO dropout (closed PR #4138). NO mesh aug (in-flight PR #4163).
+## Stack progression
 
-## Plateau status: BROKEN by alphonse #4067 winner at 21:30 UTC
+| Merge | val | test | Δ val |
+|---|---|---|---|
+| PR #4062 fern (slice=8) | 56.895 | 55.982 | — |
+| PR #4067 alphonse (β2=0.95, slice=16) | 56.426 | 55.339 | −0.83% |
+| **PR #4142 nezuko (Lookahead k=5 α=0.5, slice=8)** | **54.299** | **52.879** | **−3.77%** |
 
-After 8 consecutive closes since fern's #4062 merge at 18:40 UTC, **alphonse's β2=0.95 broke the plateau**. The mechanism is clean: AdamW second-moment EMA half-life shrinks from ~693 steps (β2=0.999) to ~13 steps (β2=0.95), letting the optimizer adapt per-parameter step sizes within each epoch. Critical for our 30-min wall-clock budget (~6000 total steps).
-
-**This is a paper-quality finding**: prior plateau intuitions were wrong — the bottleneck was the optimizer adaptation speed, not architecture/loss/regularization. Suggests next axes are LIKELY also on the optimization side or on data side that compounds with snappy optimization.
+Total improvement since raw seed: **−60.3%** on val.
 
 ## Active PRs (8 WIP, 0 idle — zero idle GPUs)
 
-| PR | Student | Hypothesis | Submitted Against | Brief / Mechanism |
-|----|---------|-----------|-------------------|-------------------|
-| **#4219** | **tanjiro** | AdamW β1=0.95 (slower momentum, bracket closure) on slice=16+β2=0.95 | New slice=16+β2=0.95 baseline | Symmetry test: β1=0.85 closure (PR #4171) showed faster momentum hurts at convergence; this tests if SLOWER smoothing helps. Clean bracket closure for AdamW EMA appendix story |
-| **#4218** | **askeladd** | Adaptive Gradient Clipping (AGC λ=0.01) on slice=16+β2=0.95 | New slice=16+β2=0.95 baseline | Per-parameter clipping addresses layer-asymmetric noise without per-layer LR scaling. Motivated by #4194 closure's mechanism reading (global scalar clip can't fix asymmetric noise) + blocks.4 anomaly. NF-Net/Brock 2021 mechanism |
-| **#4204** | **frieren** | Per-sample surface-loss reweighting by peak |p| (α=1.0) | New slice=16+β2=0.95 baseline | Loss-WEIGHT axis (NOT loss-shape): keep Huber form, scale per-sample by peak |p| amplitude. Directly motivated by Welsch closure's split-decomposition finding |
-| **#4184** | **edward** | EMA decay=0.995 (slower Polyak weight EMA) | New slice=16+β2=0.95 baseline | First-ever EMA-decay sweep on this programme. β2 (fast adapt) + EMA (slow average) coherent stack hypothesis |
-| **#4163** | **fern** | mesh rotation aug ±15° + horizontal flip | New slice=16+β2=0.95 baseline | Data: targets dominant OOD-camber residual via rotation symmetry |
-| **#4162** | **alphonse** | β2=0.95 + slice=8 compounding test | New slice=16+β2=0.95 baseline | Critical: does the β2 axis compound with slice=8 too? |
-| **#4151** | **thorfinn** | **LLRD=0.85 (REBASE: retest on new baseline)** | New slice=16+β2=0.95 baseline | **Mild positive on old baseline (val=−0.80%); retest on new stack to check compounding** |
-| **#4142** | **nezuko** | **Lookahead k=5 α=0.5 (REBASE-IN-FLIGHT)** | Old slice=8 baseline → new | **Optimizer: confirmed val=53.62 / test=53.51 — biggest single optimizer-axis win. Sent back for rebase + reconfirm; expecting clean merge after re-run** |
+| PR | Student | Hypothesis | On baseline | Status |
+|----|---------|-----------|-------------|--------|
+| **#4249** | **nezuko** | Lookahead + β2=0.95 compound | NEW Lookahead baseline | WIP — zero code change, HIGHEST PRIORITY |
+| **#4250** | **askeladd** | Lookahead + slice=16 compound | NEW Lookahead baseline | WIP — does slice=16's camber_rc benefit persist under Lookahead? |
+| **#4251** | **edward** | Lookahead + lr=1e-3 (Lookahead enables higher LR) | NEW Lookahead baseline | WIP — tests Lookahead paper's "larger inner LR" claim |
+| **#4204** | **frieren** | Per-sample surf-loss reweighting by peak |p| (α=1.0) | Old alphonse baseline | WIP — if positive vs old baseline, retest on Lookahead stack |
+| **#4226** | **fern** | Per-channel surf weights (p=2.0, Ux=0.5, Uy=0.5) | Old alphonse baseline | WIP — if positive vs old baseline, retest on Lookahead stack |
+| **#4219** | **tanjiro** | AdamW β1=0.95 (slower momentum, bracket closure) | Old alphonse baseline | WIP — if positive vs old baseline, retest on Lookahead stack |
+| **#4162** | **alphonse** | β2=0.95 + slice=8 compound | Old alphonse baseline | WIP — 2 seeds split; 3rd seed pending |
+| **#4151** | **thorfinn** | **LLRD=0.85 + Lookahead compound (REBASE NEEDED)** | NEW Lookahead baseline | **Sent back for 3rd rebase** — must add Lookahead to LLRD stack |
 
-**NOTE**: Both former-carryover PRs (#4151 thorfinn LLRD, #4142 nezuko Lookahead) submitted results against the **OLD slice=8 baseline (val=56.8954)**. The merged baseline is now slice=16 + β2=0.95 (val=56.4260). Application of the merge decision tree:
-- #4142 nezuko Lookahead: val=53.62 / test=53.51 — beats new baseline by big margin → would MERGE, but had argparse conflict; rebasing.
-- #4151 thorfinn LLRD: val=56.44 / test=55.61 — beats old baseline (−0.80%) but narrowly misses new (+0.02% / +0.48%) → SEND BACK for retest on new baseline.
+**Key note**: #4204, #4226, #4219 were submitted against OLD alphonse baseline (56.426). Even if they beat the OLD baseline, they need retesting against the NEW Lookahead baseline (54.299) before merging.
 
-The 4 newest assignments (#4170 frieren, #4171 tanjiro, #4184 edward, plus #4172 edward closed at 22:30) are all on the new baseline.
+## Key mechanism insight — Lookahead split signature
 
-## Round-14 / 15 / 16 / 17 closures (21:30 — 23:50 UTC)
+Lookahead improved cruise (−15.7%) and re_rand (−5.2%) but WORSENED camber_rc (+2.4%). The slow-weight averaging reduces optimization variance, which helps splits with high inter-batch variance but doesn't fix structural extrapolation to high-camber geometries.
+
+**Dominant residual: val_geom_camber_rc=68.75** (highest it's been since early rounds). Top priority target.
+
+## Round 17/18 closures and merges
 
 | PR | Student | Hypothesis | val | Action |
 |----|---------|-----------|-----|--------|
-| #4194 | askeladd | --grad_clip=1.0 (tighter clipping) | 56.46 | ✗ Closed — 99.6% clip-binding rate but val FLAT (+0.03); test +0.75 worse. Mechanism: global scalar clip cannot fix layer-asymmetric noise (rescales all groups uniformly). NEW finding: blocks.4 grad ~2.5 (last block) also heavy → non-monotonic curve. Motivates AGC (#4218) |
-| #4171 | tanjiro | AdamW β1=0.85 + β2=0.95 | 57.65 | ✗ Closed — failure-mode #1 triggered; regression concentrated in val_single_in_dist (+11.8%). Mechanism: faster momentum hurts at convergence (noise smoothing). β1 axis NOT symmetric with β2. Bracket follow-up (β1=0.95) assigned as #4219 |
-| #4193 | frieren | Welsch biweight c=1.0 (redescending influence) | 60.22 | ✗ Closed — init-sensitivity failure of redescending M-estimators; loss-shape axis FULLY closed |
-| #4170 | frieren | log-cosh loss (parameter-free C² robust) | 57.66 | ✗ Closed — Huber's tighter quadratic transition is load-bearing |
-| #4164 | askeladd | bs=8 + sqrt LR scaling | 60.29 | ✗ Closed — step starvation (data loader bottleneck means epoch_time barely drops); bs axis at default |
-| #4172 | edward | vol_weight=0.5 (down-weight aux volume loss) | 60.76 | ✗ Closed — failure-mode #1 triggered; vol_loss is load-bearing for shared latent space |
-| #4141 | frieren | Asymmetric Huber (δ_pos=0.25, δ_neg=1.0) | 61.95 | ✗ Closed — residuals already balanced (residual-sign instrumentation falsified premise) |
-| #4102 | tanjiro | temperature_init=0.7 | 58.73 | ✗ Closed — temperature axis fully bracketed (T=0.5 default optimum) |
-| #4101 | edward | asinh_vel_scale=1.0 | 56.80 | ✗ Closed — net flat with interesting per-split decoupling (rc improved, cruise regressed) |
+| ✓ **#4142** | **nezuko** | **Lookahead k=5 α=0.5 (rebased)** | **54.299** | ✓ **MERGED — NEW BASELINE** |
+| ✗ #4218 | askeladd | AGC λ=0.01 | 56.52 | ✗ Closed — neutral val, worse test; per-param clip removes load-bearing gradient signal |
+| ✗ #4184 | edward | EMA decay=0.995 | 56.66 | ✗ Closed — slow Polyak hurts camber_rc split |
+| ✗ #4194 | askeladd | --grad_clip=1.0 | 56.46 | ✗ Closed — global scalar clip wrong instrument |
+| ✗ #4171 | tanjiro | AdamW β1=0.85 | 57.65 | ✗ Closed — faster momentum hurts convergence |
+| ✗ #4193 | frieren | Welsch biweight c=1.0 | 60.22 | ✗ Closed — loss-shape axis FULLY closed |
+| ✗ #4163 | fern | mesh aug ±15° | 70.38 | ✗ Closed — physics inconsistency + budget-bound |
 
-## Round-12 + Round-13 results (cumulative, 18:30 — 21:30 UTC)
+## What works on the full stack
 
-| PR | Student | Hypothesis | val | test_3split | Action |
-|----|---------|-----------|-----|-------------|--------|
-| **#4067** | **alphonse** | **AdamW β2=0.95 on slice=16** | **56.4260** | **55.3387** | ✓ **MERGED — NEW BASELINE** |
-| #4138 | fern | attn_dropout=mlp_dropout=0.1 on slice=8 | 58.86 | 57.51 | ✗ Closed — regularization-from-noise broken at slice=8 |
-| #4074 | askeladd | n_hidden=192 on slice=16 | 68.95 | 67.22 | ✗ Closed — compute-budget bound (still descending at timeout) |
-| #4066 | thorfinn | slice_num=12 | 59.22 / 60.52 (2 seeds) | 58.05 | ✗ Closed — slice axis non-monotonic; bracket closed |
-| #4100 | fern | n_head=4 (dim_head=32) on slice=8 | 58.23 | 57.16 | ✗ Closed — head-dim too narrow |
-| #4086 | frieren | huber_delta=0.25 (3-seed) | 60.02 / 61.29 / 63.33 | — | ✗ Closed — δ axis fully saturated past 0.5 |
-| #4076 | nezuko | SWA K=5 tail averaging | 60.49 (swa) / 59.28 (final) | — | ✗ Closed — needs converged trajectory |
-| **#4062** | **fern** | **slice_num=8** | **56.8954** | **55.9817** | ✓ MERGED 18:40 UTC (now superseded) |
-| #4065 | frieren | SGDR T_0=15 single cycle | 60.75 | — | ✗ Closed — equiv to baseline cosine |
-| #4080 | fern | slice_num=4 | 61.5+ | — | ✗ Closed — capacity cliff |
-| #4075 | edward | RMSNorm replacing LayerNorm | 58.0+ | mixed | ✗ Closed — partial mechanism |
-| #3877 | tanjiro | temp_init=0.1 (slice=16 retest) | 58.21 | — | ✗ Closed — slice/temp coupling confirmed |
-
-## Key findings (cumulative)
-
-### Merged stack progression
-136.89 → 90.61 → 66.61 → 64.34 → 63.74 → 61.61 → 60.89 → 57.70 → 56.90 → **56.43** (**−58.78% total from seed**; sub-56.5 achieved)
-
-### What works on the full stack
 - EMA decay=0.99, grad_clip=5.0
-- asinh(pressure) scale=1.0
-- SwiGLU gated MLP in TransolverBlocks only
-- n_head=2 wider per-head dim (dim_head=64)
-- vel-asinh scale=0.5 on Ux+Uy
+- asinh(pressure) scale=1.0, SwiGLU gated MLP, n_head=2, vel-asinh=0.5
 - Huber δ=0.5 (tighter quadratic transition)
-- slice_num=8 OR slice_num=16 (the compounding question is open)
-- **AdamW β2=0.95 (PR #4067): fast 2nd-moment EMA adaptation — biggest single optimizer-side win to date**
+- slice_num=8 (Lookahead stack) or slice_num=16 (question open under Lookahead)
+- **AdamW β2=0.95 (PR #4067): fast 2nd-moment EMA — paper-quality finding**
+- **Lookahead k=5 α=0.5 (PR #4142): slow-weight averaging — biggest single-axis win**
 
-### What does NOT work
-- SGDR (any T_0 ≤ 15) in our 15-epoch budget — math equivalent to baseline cosine
-- slice_num=4, 12, 128 (axis bracket closed at 8 and 16; 12 non-monotonic-cliff)
-- RMSNorm replacing LayerNorm — partial mechanism (helps OOD test, hurts in-dist val)
-- temperature_init=0.1 at low slice_num — coupled with slice on softmax-sharpness axis
-- p_weight=3.0 per-channel pressure upweight
-- surf_weight=15, 20 with δ=0.5 — non-compounding
-- huber_delta=0.25 (3-seed) — δ axis saturated past 0.5
-- lr=1e-3 with δ=0.5 — destabilizes
-- n_head=4 (dim_head=32) at slice=8 — too narrow
-- n_hidden=192 at 30-min budget — compute-bound regression
-- attn/mlp dropout=0.1 at slice=8 — broken at compressed bottleneck
-- SWA K=5 — needs converged trajectory
-- n_layers=6, mlp_ratio>2, slice_num=128, n_head=8, DropPath, Mixup, LR warmup, vel-asinh scale<0.5, wd=1e-3, asinh_p_scale=2.0
+## What does NOT work
+
+- β1=0.85 (faster momentum hurts), β1=0.95 (pending)
+- EMA=0.995 (substitutes with Lookahead, hurts camber_rc)
+- AGC λ=0.01 (clips load-bearing gradient signal), grad_clip=1.0 (global clip wrong instrument)
+- bs=8 (step starvation), DropPath, dropout, SWA
+- All loss-shape axes closed (Huber δ, asym Huber, log-cosh, Welsch)
+- Mesh aug ±15° (physics inconsistency + budget-bound)
 
 ## Strategic outlook
 
-**Target**: val < 56.0. Current: 56.43. Need −0.4% more. (Test target: <55.0; current 55.34, need −0.6%.)
+**Target**: val < 52.0, test < 51.0. Current: 54.30 / 52.88. Need −4.3% val more.
 
-Plateau is broken; we're back in confident-progress mode. Highest-impact next experiments:
-
-1. **Compounding check (alphonse #4162)**: β2=0.95 + slice=8. Most important measurement on the entire stack right now.
-2. **OOD-camber targeting (fern #4163)**: mesh rotation aug. Targets dominant residual directly.
-3. **Optimization axis (askeladd #4164)**: bs=8 + sqrt LR scaling. New axis; should compound with β2=0.95.
-
-### Round-14 + Round-15 axes being explored in parallel (current PR slate, all on new alphonse baseline)
-
-**Round-14 new assignments (3, all on new baseline)**:
-- β2=0.95 + slice=8 compounding (alphonse #4162) — critical
-- Mesh rotation aug ±15° + horizontal flip (fern #4163) — first input-space aug ever
-- bs=8 + sqrt LR scaling (askeladd #4164) — new optimization axis
-
-**Round-15 new assignments (3, follow-ups to the 3 carryover closures)**:
-- log-cosh loss on new baseline (frieren #4170) — follow-up to asymmetric Huber close
-- AdamW β1=0.85 + β2=0.95 (tanjiro #4171) — follow-up to T=0.7 close; same axis as alphonse's β2 win
-- vol_weight=0.5 (edward #4172) — follow-up to vel-scale=1.0 close; targets surf metric directly
-
-**Carryover (2, against old slice=8 baseline; need to beat val=56.43 to merge)**:
-- Layer-wise LR decay 0.85 (thorfinn #4151)
-- Lookahead k=5 α=0.5 (nezuko #4142)
-
-### Pending follow-ups (queue for round-16)
-- **Highest priority: slice=8 + Lookahead + β2=0.95 compounding triple** (depends on nezuko rebase confirming)
-- **k bracket on Lookahead**: k=10 (less aggressive variance reduction), α=0.3 (gentler slow pull) — nezuko's own suggestions; bracket toward saturation
-- **Edward's queued follow-ups on the OOD-camber residual**: surface-conditional loss reweighting (per-sample weight scaling with peak |p|), camber-stratified mini-batches, spectral surface loss (FFT)
-- If β2=0.95+slice=8 wins (alphonse #4162): β2 sweep on slice=8 stack at {0.90, 0.99}
-- If mesh aug wins: smaller θ sweep ({5°, 10°, 15°}) + larger flip
-- bs=8 closed (#4164 val=60.29, step starvation); bs axis at default 4 for this stack (memory peak ~88 GB at bs=8/slice=16 rules out bs=16)
-- grad_clip=1.0 closed (#4194 val=56.46 flat); global clip wrong instrument for asymmetric noise → AGC in flight (#4218 askeladd, NF-Net mechanism)
-- β1=0.85 closed (#4171 val=57.65); momentum-EMA axis NOT symmetric with β2 → β1=0.95 bracket-closure in flight (#4219 tanjiro)
-- Loss-shape axis FULLY CLOSED this round: Huber δ (0.5 optimum, sweep saturated), asymmetric Huber (balanced residuals), log-cosh (Huber's tighter quadratic is load-bearing), Welsch biweight (init-sensitivity failure)
-- Per-sample reweighting on surface loss now in-flight (#4204 frieren); next axis if it wins is per-channel weighting (Ux/Uy vs p) or camber-stratified mini-batches
-- If EMA=0.995 wins: sweep at {0.99, 0.995, 0.997}
-- If everything fails: invoke researcher-agent for bigger swings (SAM, AGC, divergence-free physics loss, knowledge distillation)
+Priority order:
+1. **#4249 nezuko Lookahead+β2=0.95**: highest compound probability (β2 specifically improved camber_rc)
+2. **#4151 thorfinn LLRD+Lookahead**: LLRD targets per-layer LR asymmetry, orthogonal to Lookahead
+3. **#4250 askeladd Lookahead+slice=16**: directly tests if slice=16's camber_rc benefit persists
+4. **#4251 edward Lookahead+lr=1e-3**: bolder bet; Lookahead stability may unlock higher LR
 
 ## Operational notes
 
-- **GitHub REST rate limit**: still constrained (shared user ID 20516801); use GraphQL when possible
-- **data/scoring.py NaN bug**: cruise=NaN fleet-wide; use test_3split everywhere
-- **Per-run budget**: 30 min wall clock, ~15-17 epochs at slice=8/16 (~107-108s/epoch)
-- **Single-seed variance**: ≈±3 val_avg units (frieren 3-seed measurement)
-- **stale_wip handling**: bump with status comment; verify via kubectl pods + W&B run state before assuming crash
-- **GPU utilization**: 100% — all 8 students assigned active draft PRs as of 23:50 UTC
+- **cruise NaN**: fleet-wide; test_3split = (test/test_single_in_dist + test/test_geom_camber_rc + test/test_re_rand)/3
+- **W&B test namespace**: `test/test_*/mae_surf_p` (not bare `test_*`)
+- **Per-run budget**: 30 min, ~15-17 epochs at slice=8 (~108s/epoch)
+- **GPU utilization**: 100% — all 8 students assigned as of 00:40 UTC

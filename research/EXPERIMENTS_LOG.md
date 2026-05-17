@@ -1,5 +1,40 @@
 # SENPAI Research Results
 
+## 2026-05-17 00:40 UTC — Lookahead MERGED (#4142) + AGC/EMA closed + 3 new Lookahead-compound assignments
+
+### MERGED: PR #4142 (nezuko) — Lookahead k=5 α=0.5 on slice=8 — NEW BASELINE val=54.299/test=52.879
+
+Run `qhphlg41` (best of 2 seeds): val=54.2986 (−3.77% vs alphonse baseline 56.426), test_3split=52.8790 (−4.45% vs baseline 55.339). Both seeds beat baseline: `fz2r6otj` val=54.884/test=53.799, `qhphlg41` val=54.299/test=52.879.
+
+| Split | Lookahead | Alphonse | Δ |
+|---|---|---|---|
+| val_single_in_dist | 63.937 | 65.188 | −1.9% |
+| val_geom_camber_rc | **68.753** | 67.131 | **+2.4% ← REGRESSED** |
+| val_geom_camber_cruise | 31.954 | 37.922 | **−15.7%** |
+| val_re_rand | 52.552 | 55.464 | −5.2% |
+
+**Mechanism**: Lookahead's slow-weight sync every k=5 steps reduces trajectory variance. cruise/re_rand (high inter-batch variance) improved most. camber_rc (structural extrapolation) REGRESSED → dominant residual. β2=0.95 specifically improved camber_rc on old baseline → Lookahead+β2=0.95 compound is highest priority.
+
+### Closed: PR #4218 (askeladd) — AGC λ=0.01 on slice=16+β2=0.95
+
+Run `bg1e9fvx`: val=56.518 (+0.09 neutral), test=56.334 (+1.00 worse). AGC clips all wrong layers: preprocess 100% binding at −31× shrink, placeholder 100% binding at −130× shrink, head 83% binding at −25× shrink. **New finding**: placeholder embedding grad/param ratio=42.49× — highest in network. AGC removes load-bearing gradient signal from bottleneck layers, not noise. val_re_rand specifically improved (−1.96), but camber_rc and single_in_dist regressed. Global+per-parameter clip axes now FULLY CLOSED.
+
+### Closed: PR #4184 (edward) — EMA decay=0.995 on slice=16+β2=0.95
+
+2-seed summary: seed 1 `2ielsor5` val=56.664/test=55.969, seed 2 `phemk0vs` val=60.972. Mean val=58.82 (+4.2%). val_geom_camber_rc on best seed=68.67 (+1.54 worse). Slower Polyak averaging reinforces in-dist patterns at cost of OOD. EMA=0.99 stays as stack optimum.
+
+### New assignments — Round 18 on Lookahead baseline
+
+| PR | Student | Hypothesis |
+|---|---|---|
+| #4249 | nezuko | Lookahead + β2=0.95 (zero code, highest priority compound) |
+| #4250 | askeladd | Lookahead + slice=16 (does slice=16's camber_rc benefit carry over?) |
+| #4251 | edward | Lookahead + lr=1e-3 (Zhang et al.: Lookahead enables larger inner LR) |
+
+Thorfinn #4151 sent back for 3rd rebase: must test LLRD=0.85 + Lookahead on new stack. LLRD alone (val=55.44) doesn't beat new baseline (54.30).
+
+---
+
 ## 2026-05-16 23:50 — grad_clip=1.0 closure (#4194) + β1=0.85 closure (#4171); 2 new assignments AGC (#4218) + β1=0.95 (#4219)
 
 ### Closed: PR #4194 (askeladd) — grad_clip=1.0 on new baseline
