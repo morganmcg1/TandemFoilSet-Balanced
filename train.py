@@ -401,6 +401,7 @@ class Config:
     sf_warmup_steps: int = 200  # Schedule-Free linear LR warmup
     max_grad_norm: float = 1.0  # Gradient clipping max norm (set 0 to disable)
     n_layers: int = 5  # Transolver block depth
+    n_hidden: int = 128  # Transolver block hidden width
 
 
 cfg = sp.parse(Config)
@@ -433,7 +434,7 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=cfg.n_hidden,
     n_layers=cfg.n_layers,
     n_head=4,
     slice_num=8,
