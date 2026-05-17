@@ -1,5 +1,43 @@
 # SENPAI Research Results
 
+## 2026-05-17 ~11:30 UTC — Round 41: Close #4491 (β1 null) + Assign #4573 (n_head bracket)
+
+### Closed: PR #4491 (tanjiro) — β1 bracket (0.85, 0.95) on eps=1e-9 baseline ✗
+
+**Null result — β1-axis CLOSED at default 0.9 on full optimizer stack.**
+
+| Arm | β1 | val_avg | test_3split | W&B run |
+|-----|-----|---------|-------------|---------|
+| Arm A | 0.85 | 52.917 (+5.59% vs n4 baseline) | 54.886 | `v814ft7l` |
+| Arm B | 0.95 | 51.105 (+1.97% vs n4 baseline) | 50.945 | `7mubvn7j` |
+| **Baseline (PR #4453)** | **0.9** | **50.119** | **50.210** | `uiy4eks9` |
+
+Note: arms run on eps=1e-9 stack (n_layers=5 old baseline val=50.166); both arms also regress vs that older stack.
+
+**Per-split val**:
+| Split | Baseline (β1=0.9) | Arm A (β1=0.85) | Arm B (β1=0.95) |
+|-------|------------------|-----------------|-----------------|
+| val_single_in_dist | 57.870 | 60.467 | 60.991 |
+| val_geom_camber_rc | 62.561 | 66.074 | 63.743 |
+| val_geom_camber_cruise | 31.988 | 33.584 | **29.842 (−6.71%)** |
+| val_re_rand | 48.243 | 51.544 | 49.843 |
+| **val_avg** | **50.166** | **52.917** | **51.105** |
+
+**Analysis**: β1=0.85 (faster EMA) is uniformly worse — tighter eps=1e-9 step control + Lookahead variance reduction makes noisier fast-weight steps worse. β1=0.95 (slower EMA) is mildly worse overall, with one interesting exception: cruise improves by −6.71%. Mechanism: longer first-moment averaging helps cruise (easiest split, smoothest gradients) but hurts re_rand (+3.32%), rc (+1.89%), and in_dist (+5.39%). The default β1=0.9 is the Pareto-optimal point — neither axis helps on net. **β1-axis CLOSED.**
+
+Student note on β1=0.95 cruise improvement: split-conditioned β1 preferences are a potentially interesting follow-up, but architecture/optimizer budget is better spent on axes with more headroom.
+
+**Decision**: Closed. No cherry-pick (β1 CLI flag is clean code, but not load-bearing for the campaign).
+
+### Assigned: PR #4573 (tanjiro) — n_head bracket (1, 4) on n_layers=4
+
+Testing whether the attention head-count optimum shifted at n_layers=4. At n_layers=5, n_head=4 (head_dim=32) was closed. At n_layers=4, each block does more per-pass work, and more specialization (n_head=4) may now help — especially for val_geom_camber_rc which has been the hardest split throughout.
+- Arm A: n_head=1 (head_dim=128, global attention)
+- Arm B: n_head=4 (head_dim=32, specialist heads)
+No code changes needed — `--n_head` is already a CLI flag.
+
+---
+
 ## 2026-05-17 ~11:05 UTC — Round 40: Close #4400 (eta_min null) + Close #4404 (mlp_ratio null) + Assign #4569 #4570
 
 ### Closed: PR #4400 (fern) — cosine eta_min floor (5e-5, 1e-5) on k=3 stack ✗

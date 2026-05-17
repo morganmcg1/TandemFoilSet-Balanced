@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-17 ~11:05 UTC
+- **Last updated:** 2026-05-17 ~11:30 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
 - **Most recent direction from human researcher team:** None (no open issues at 11:05 UTC)
 
@@ -58,18 +58,18 @@ Total improvement since raw seed: **−64.9%** on val.
 
 | PR | Student | Hypothesis | On baseline | Status |
 |----|---------|-----------|-------------|--------|
-| **#4552** | **alphonse** | **n_layers=4 + eps=1e-9 stack (2 seeds)** | **n_layers=4 baseline** | **NEW — TARGET-CLEARING RUN. Highest EV of campaign.** |
-| **#4554** | **askeladd** | weight decay bracket (5e-5, 3e-4) on n_layers=4 | n_layers=4 baseline | NEW — wd untested on current stack |
-| **#4490** | **edward** | eps fine grid (3e-9, 3e-10, 1e-10) on eps=1e-9 stack | eps=1e-9+n_layers=5 | WIP — eps fine-grid; results on OLD n_layers=5 stack |
-| **#4491** | **tanjiro** | β1 bracket (0.85, 0.95) on eps=1e-9 baseline | eps=1e-9+n_layers=5 | WIP |
+| **#4552** | **alphonse** | **n_layers=4 + eps=1e-9 stack (2 seeds)** | **n_layers=4 baseline** | **TARGET-CLEARING RUN. Highest EV of campaign.** |
+| **#4554** | **askeladd** | weight decay bracket (5e-5, 3e-4) on n_layers=4 | n_layers=4 baseline | wd untested on current stack |
+| **#4573** | **tanjiro** | n_head bracket (1, 4) on n_layers=4 — architecture axis | n_layers=4 baseline | NEW — Assigned R41 after closing #4491 (β1 null) |
+| **#4490** | **edward** | eps fine grid (3e-9, 3e-10, 1e-10) on eps=1e-9 stack | eps=1e-9+n_layers=5 | WIP (stale — pod hitting rate-limit) |
 | **#4534** | **nezuko** | Lookahead k=4 retest on eps=1e-9 (2 seeds) | eps=1e-9+n_layers=5 | WIP |
-| **#4469** | **frieren** | surf_weight bracket (5, 20) on k=3 baseline | old k=3 (pre-eps, n_layers=5) | WIP (stale_wip) |
-| **#4570** | **thorfinn** | lr bracket (3e-4, 7e-4) on n_layers=4 baseline | n_layers=4 baseline | NEW — lr axis untested on current config |
-| **#4569** | **fern** | T_max-matched cosine (epochs=20) + eta_min bracket | n_layers=4 baseline | NEW — schedule-fix from #4400 T_max discovery |
+| **#4469** | **frieren** | surf_weight bracket (5, 20) on k=3 baseline | old k=3 (pre-eps, n_layers=5) | WIP (stale) |
+| **#4570** | **thorfinn** | lr bracket (3e-4, 7e-4) on n_layers=4 baseline | n_layers=4 baseline | lr axis untested on current config |
+| **#4569** | **fern** | T_max-matched cosine (epochs=20) + eta_min bracket | n_layers=4 baseline | Schedule-fix from #4400 T_max discovery |
 
-**Note on pre-n_layers=4 PRs**: #4490, #4491, #4534, #4469, #4404, #4400 were assigned against older baselines (val=50.17 or 51.31). They now need to beat **50.12** to merge. Most will still provide axis characterization even if they don't clear the new bar. An eps fine-grid result below the n_layers=4 baseline (50.12) on the OLD n_layers=5 stack would suggest eps stacking is especially powerful.
+**Note on pre-n_layers=4 PRs**: #4490, #4534, #4469 were assigned against older baselines (val=50.17 or 51.31). They now need to beat **50.12** to merge. Most will still provide axis characterization even if they don't clear the new bar.
 
-## Recent closures (round 39)
+## Recent closures (rounds 40–41)
 
 | PR | Student | Hypothesis | val | Action |
 |----|---------|-----------|-----|--------|
@@ -77,6 +77,7 @@ Total improvement since raw seed: **−64.9%** on val.
 | ✗ **#4468** | **askeladd** | **FiLM conditioning on camber M** | **56.89** | ✗ **Closed — FiLM conditioning CLOSED** |
 | ✗ **#4400** | **fern** | **eta_min floor** | **52.28** | ✗ **Closed — T_max mismatch makes eta_min mechanically inactive; follow-up #4569 tests T_max-matched schedule** |
 | ✗ **#4404** | **thorfinn** | **mlp_ratio bracket (1.0, 1.667)** | **54.54 mean** | ✗ **Closed — throughput noise dominates; best run 50.06 is cherry-pick. FFN-width axis CLOSED at 1.333.** |
+| ✗ **#4491** | **tanjiro** | **β1 bracket (0.85, 0.95) on eps=1e-9 stack** | **51.10 (best arm)** | ✗ **Closed R41 — both arms regress. β1-axis CLOSED at default 0.9 on full stack. Architecture axis (n_head) assigned as #4573.** |
 
 ## Prior closures (rounds 37/32)
 
@@ -114,7 +115,7 @@ Total improvement since raw seed: **−64.9%** on val.
 ## What does NOT work
 
 - FiLM conditioning on camber M (scalar M conditioning, post-block residual modulation)
-- β1 axis: β1=0.85 or β1=0.95 on OLD pre-Lookahead stack (retesting on new full stack via #4491)
+- β1 axis: β1=0.85 and β1=0.95 both regress on both old stack AND new eps+Lookahead stack (#4491, R41). β1-axis CLOSED at default 0.9.
 - β2=0.95 under Lookahead k=3 (substitutive at short excursion window)
 - n_layers=7 (too few epochs, severe under-training at 30-min budget)
 - mlp_ratio ≠ 1.333 (both 1.0 and 1.667 regress at median; FFN-width axis closed)
@@ -135,8 +136,10 @@ Total improvement since raw seed: **−64.9%** on val.
 
 1. **#4552 alphonse — n_layers=4 + eps=1e-9 stack** ← **HIGHEST PRIORITY, expected to clear BOTH targets** if axes compound at ≥60% additivity (expected val≈49.9, test≈49.9)
 2. **#4554 askeladd — wd bracket on n_layers=4** ← orthogonal probe; wd untested on current stack
-3. **#4490 edward — eps fine grid** ← will tell us the eps floor on n_layers=5; informs whether eps stacking adds on top of n_layers=4 change
-4. **#4491 tanjiro — β1 bracket** ← β1 untested on current configuration
+3. **#4573 tanjiro — n_head bracket (1, 4) on n_layers=4** ← architecture axis untested at new depth; n_head=4 lost on n_layers=5 but depth change may shift optimum
+4. **#4570 thorfinn — lr bracket on n_layers=4** ← lr axis may have shifted at new epoch budget (~22 epochs vs 17)
+5. **#4569 fern — T_max-matched cosine** ← tests whether schedule alignment unlocks lower final LR convergence
+6. **#4490 edward — eps fine grid** ← tells us the eps floor on n_layers=5; informs eps stacking on n_layers=4
 5. **#4534 nezuko — k=4 retest** ← k-axis with smoother eps trajectory
 6. **#4469/#4404/#4400** — axis characterization on old stack; useful reference data even if they don't clear new bar
 
