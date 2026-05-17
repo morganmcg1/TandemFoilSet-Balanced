@@ -1,5 +1,39 @@
 # SENPAI Research Results
 
+## 2026-05-17 10:45 — #4505 MERGED (Finding #56: spec_norm output pi=3 is new BL val 46.80/test 40.49); #4503 CLOSED (Finding #55: Huber β axis closed, β=0.05 local minimum asymmetric); edward→#4560 (R13 H98 spec_norm pi=5/pi=10), alphonse→#4557 (R13 H97 grad_clip)
+
+### #4505 edward — R13 H92: spec_norm output {pi=1,pi=3} at T_max=22 (MERGED — Finding #56, NEW BEST)
+
+| Arm | spec_norm pi | W&B | val_avg | Δ vs BL | test_avg | Δ vs BL |
+|-----|-------------|-----|---------|---------|---------|---------|
+| BL | — | 1neonugr | 49.7515 | — | 42.8929 | — |
+| A | pi=1 | 1xy56nr6 | 48.0400 | −1.71 | 41.3794 | −1.51 |
+| **B (MERGED)** | **pi=3** | **b4txs5yb** | **46.7952** | **−2.96** | **40.4866** | **−2.41** |
+
+Per-split B vs BL: in_dist (−1.20 val / +0.40 test), camber_rc (−3.01 val / −2.59 test), camber_cruise (−4.16 val / −3.35 test), re_rand (−3.46 val / −4.08 test). Win broad-based — cruise and rc largest gains. No wall-clock overhead (pi=3: 142s/epoch vs pi=1: 144s/epoch).
+
+**Finding #56**: spec_norm output pi=3 wins at T_max=22 — **new best val 46.7952 / test 40.4866**. Finding #13 (diminishing returns with lr) does NOT extend to T_max=22+ls=1e-4 substrate. Mechanism: ls=1e-4 keeps residual block contributions tiny early in training, making the output layer's Lipschitz constraint proportionally more impactful. Higher pi (tighter Lipschitz bound) helps because T_max=22's high mean lr makes more aggressive updates throughout training — stronger constraint pays off. Per-split structure: camber_cruise (−4.16) and camber_rc (−3.01) benefit most — generalization-oriented, not fitting. in_dist slightly regresses on test (+0.40) — spec_norm is a regularizer, not a fitting accelerator. **Student analysis excellent** — correctly identified the ls×spec_norm synergy and the pi-monotonicity. Follow-up: pi={5,10} in flight (#4560).
+
+New assignment: edward → #4560 (R13 H98 spec_norm output {pi=5, pi=10} — close power-iteration axis).
+
+---
+
+### #4503 alphonse — R13 H91: Huber β downward {0.03,0.04} at T_max=22 (CLOSED — Finding #55)
+
+| Arm | β | W&B | val_avg | Δ vs BL |
+|-----|---|-----|---------|---------|
+| BL | 0.05 | 1neonugr | 49.7515 | — |
+| A | 0.04 | ywhpbgqi | 54.3786 | +4.63 |
+| B | 0.03 | jff9xbfh | 55.3240 | +5.57 |
+
+Combined with #4434, β landscape at T_max=22: β=0.03(+5.57), β=0.04(+4.63), **β=0.05(0.00)**, β=0.10(+2.69), β=0.15(+2.21). β=0.05 is a local minimum.
+
+**Finding #55**: Huber β axis fully closed at T_max=22. β=0.05 is the local minimum with **asymmetric landscape** — L1 side (β<0.05) hurts ~2× more than L2 side (β>0.05). Mechanism: Lion's sign-update + very narrow L2 region (β=0.03) = most residuals already in the L1 zone → constant ±1 gradient in normalized space → flat-magnitude loss landscape on small residuals → slows late convergence. The per-split regression concentrated on in_dist (+7-9 val) not camber_rc as predicted — in_dist has highest dynamic range/outliers and benefits most from BL's β=0.05 smoothing. **β axis closed in both directions at T_max=22.**
+
+New assignment: alphonse → #4557 (R13 H97 grad_clip {0.7, 1.5} at T_max=22 — untested axis).
+
+---
+
 ## 2026-05-17 10:30 — #4471 #4420 CLOSED (Findings #53-54: lr×T_max=22 grid closed, surf_weight upward closed); thorfinn→#4531 (R13 H95 basin-pairing), nezuko→#4533 (R13 H96 surfw-down)
 
 ### #4471 thorfinn — R13 H89: lr downward probe {1.5e-4,1.7e-4} at T_max=22 (CLOSED — Finding #53)
