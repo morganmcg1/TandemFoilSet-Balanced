@@ -81,12 +81,14 @@ H128's −1.08 pts val_avg gain and −0.44 pts test gain are inside the noise b
 | **#4480** | fern | **H131: LE+TE dual coord features (4/8 extra dims)** | HIGH (input repr, OOD-targeted) | ~32-34 |
 | **#4527** | edward | **H133: spectral norm on in_project_slice** | HIGH (Lipschitz regularization) | ~32.5-34 |
 | **#4529** | nezuko | **H135: condition-only Mixup α={0.2,0.5}** | HIGH (camber-axis augmentation) | ~32-34 |
-| **#4460** | frieren | **H126: FFN dropout {0.1, 0.2} at K=1** | MED (baseline shifted twice since assignment) | ~33-34.5 |
+| **#4563** | frieren | **H137: SAM (Sharpness-Aware Minimization) ρ={0.05, 0.1}** | HIGH (flat-minimum OOD generalization) | ~32-34 |
 | **#4466** | tanjiro | **H130: AdamW vs Lion revalidation at K=1** | LOW (sanity check, baseline shifted) | likely confirms Lion |
 
-**Note on H126/H130:** These were started on wd=1e-3 baseline (35.6651) before two improvements landed. Compare to new baseline (33.4710) — if they beat their assignment baseline but not the new one, rerun on updated stack.
+**Note on H130:** Started on pre-H128 baseline. Compare to new baseline (33.4710) — if it beats old but not new, rerun on updated stack.
 
 **Note on H136:** thorfinn's H128 win used wd=1e-3 (assigned before H125 merge). H136 tests whether wd=5e-3 + T_max=24 + compile compounds. Critical to resolve which weight decay is now optimal.
+
+**Note on H137 (frieren):** Reassigned from H126 FFN dropout (closed). H126 diagnostic: train-val gap unchanged → model not overfitting via co-adaptation. SAM attacks flat-minimum hypothesis — seeks flatter loss basins for distributional OOD generalization.
 
 ## Lever Status
 
@@ -94,7 +96,8 @@ H128's −1.08 pts val_avg gain and −0.44 pts test gain are inside the noise b
 |-------|--------|-------------|-------|
 | Optimizer | 🔬 H130 revalidating AdamW vs Lion | 35.67 (Lion at K=1) | First retest since H73 |
 | Weight decay | 🔬 H136 retesting wd=5e-3 on new stack | 34.55 (wd=5e-3 at H125 stack) | H128 used wd=1e-3 — compound test needed |
-| FFN dropout | 🔬 H126 sweep {0.1, 0.2} | none (no dropout currently) | First test |
+| SAM optimizer wrapper | 🔬 H137 active ρ={0.05, 0.1} | none | Flat-minimum generalization via Lion+SAM |
+| FFN dropout | ❌ CLOSED — negative, all p values wrong direction (H126) | none | Train-val gap unchanged; OOD gap is geometric extrapolation not co-adaptation |
 | Spectral norm (in_project_slice) | 🔬 H133 active | none | Lipschitz-1 constraint on slice assignment |
 | Condition-only Mixup | 🔬 H135 active | none | Geometry-safe Mixup on NACA+flow params; H129 literal-Mixup closed |
 | LE+TE dual coords | 🔬 H131 active | none | OOD-targeted input repr; Texas A&M arXiv 2412.09399 |
@@ -144,7 +147,7 @@ Total merged gain: **−81.17 pts val (70.8% reduction from 114.63).**
 1. Does wd=5e-3 compound with T_max=24 + compile? (H136)
 2. Do architecture/representation experiments (H131-H135) further reduce the now-12.3-pt camber gap on top of the new baseline?
 
-**Cycle 49 batch focus:**
+**Cycle 50 batch focus:**
 - **Tier 1 (OOD-targeted, architecture/representation):** H131 LE+TE coords, H132 DSDF Fourier, H134 GALE cross-attention.
 - **Tier 2 (compound/regularization):** H133 spectral norm, H135 condition-Mixup, H136 wd-compound.
 - **Tier 3 (revalidation):** H126 dropout, H130 AdamW.

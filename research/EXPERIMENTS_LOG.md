@@ -2844,3 +2844,61 @@ Artifacts: `models/model-h128-arm-a-compile-tmax24-rerun-20260517-085024/`
 Independent wins H125 (wd=5e-3) and H128 (T_max=24) on same prior baseline. Single arm: compound at wd=5e-3 + T_max=24 + compile. Win condition: val_avg < 33.4710. If wins, wd=5e-3 lock restored.
 
 **7 WIP remaining (H126, H130-H136), 0 idle.**
+
+---
+
+## 2026-05-17 — PR #4460: H126 FFN dropout p={0.1, 0.2} (frieren) — CLOSED, negative result, critical diagnostic
+
+- Branch: `charliepai2i48h3-frieren/h126-ffn-dropout`
+- Hypothesis: FFN dropout prevents memorization of spatial detail → improves val_avg and specifically val_geom_camber_rc.
+
+### Results
+
+| Run | val_avg/mae_surf_p | Δ vs H128 baseline (33.4710) | test 3-split |
+|-----|-------------------:|-----------------------------:|-------------:|
+| H126 Arm A seed 1 (drop=0.1) | 35.5221 | +2.05 | 34.58 |
+| H126 Arm A seed 2 (drop=0.1) | 36.1814 | +2.71 | 34.46 |
+| **Arm A mean (drop=0.1)** | **35.8517** | **+2.38** | **34.52** |
+| H126 Arm B (drop=0.2) | 38.1438 | +4.67 | 36.13 |
+
+Per-split val (Arm A mean vs H128 baseline):
+
+| Split | H128 baseline | Arm A mean | Arm B |
+|-------|-------------:|----------:|------:|
+| val_single_in_dist | 31.74 | 35.33 | 35.80 |
+| val_geom_camber_rc | 45.76 | 47.94 | 50.76 |
+| val_re_rand | 36.74 | 38.22 | 41.62 |
+
+Artifacts: `models/model-h126-arm-a-drop01-*/`, `models/model-h126-arm-b-drop02-*/`
+
+### Analysis
+
+**Train-val gap diagnostic (critical finding):** Gap is essentially unchanged across all configs (~0.060 surf_loss). Dropout raised both train and val loss by the same amount — no co-adaptation memorization to attack.
+
+- drop=0.1: at noise floor vs OLD H120 baseline (+0.19 mean, two seeds bracket it). Well above new H128 baseline (+2.38).
+- drop=0.2: clearly worse everywhere (+4.67 vs H128, +3.2 on val_geom_camber_rc).
+- OOD splits regress on both arms; marginal help only on val_single_in_dist.
+
+**Why the hypothesis missed:** The OOD bottleneck (val_geom_camber_rc, M=6-8 camber held out) is **geometric extrapolation, not FFN co-adaptation**. Capacity-reduction regularizers cannot address structural distributional shift — they just reduce precision everywhere. FFN dropout lever is CLOSED.
+
+### Decision
+
+Closed. No send-back — running drop=0.05 would just approach baseline within seed noise, directionally wrong.
+
+**Lever: FFN dropout ❌ CLOSED. All p values directionally wrong for OOD camber gap.**
+
+**7 WIP remaining (H130-H136), 0 idle → frieren reassigned to H137 SAM.**
+
+---
+
+## 2026-05-17 — Cycle 50: H137 SAM (Sharpness-Aware Minimization) with Lion (frieren, #4563)
+
+Frieren's H126 train-val gap diagnostic → flat-minimum hypothesis. SAM finds flatter loss basins, which correspond to better distributional generalization. Two-step perturbation wraps Lion optimizer: (1) ascent step at ρ × grad/||grad||, (2) Lion step on perturbed gradient. Cost: 2× forward+backward → ~92 s/ep vs 46 s/ep with compile.
+
+Two arms:
+- Arm A: ρ=0.05 (standard SAM, Foret et al. 2021 default)
+- Arm B: ρ=0.1 (stronger perturbation)
+
+Win condition: val_avg < 33.4710. Expected: ρ=0.05 reduces val_geom_camber_rc by 1-3 pts via flatness-seeking.
+
+**8 WIP remaining (H130-H137), 0 idle.**
