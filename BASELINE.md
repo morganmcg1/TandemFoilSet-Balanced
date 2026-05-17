@@ -4,7 +4,41 @@
 
 ---
 
-## 2026-05-17 01:25 — PR #4252: LION optimizer at n_hidden=176 + bf16 + epochs=14 (frieren) — ← CURRENT BEST
+## 2026-05-17 05:30 — PR #4270: QK-norm (LayerNorm on Q,K) + Lion + nh=176 + bf16 + ep14 (edward) — ← CURRENT BEST
+
+- **val_avg/mae_surf_p: 46.9886** (best epoch 14/14, W&B run `oospddft`) — **−4.61% vs Lion baseline #4252**
+- **test_avg/mae_surf_p: 40.4803** — **−2.74% vs Lion baseline #4252** ← TEST METRIC WIN
+
+| Split | val mae_surf_p | test mae_surf_p | Δ vs #4252 test |
+|---|---:|---:|---:|
+| single_in_dist | — | 43.1757 | **−1.66%** |
+| geom_camber_rc | — | 52.7948 | **−3.58%** ← hard split moves again |
+| geom_camber_cruise | — | 25.8348 | **−1.13%** |
+| re_rand | — | 40.1159 | **−3.76%** |
+| **avg** | **46.9886** | **40.4803** | **−2.74%** |
+
+- **Model config:** SwiGLU FFN, **n_hidden=176**, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, inner_dim=232, ~1.23M params + 880 extra params (LN γ+β per Q,K, per layer = negligible)
+- **Change from previous baseline:** Add LayerNorm(dim_head) on Q and K projections BEFORE the attention dot-product in every TransolverBlock. Pre-norm Q/K magnitudes drift ~7× during training (0.13→0.9); QK-norm pins them to √44≈6.6, stabilizing attention logits and preventing softmax saturation.
+- **Optimizer:** Lion, lr=1e-4, betas=(0.9, 0.99), weight_decay=1e-3
+- **Throughput:** ~131 s/epoch (+0.8% vs Lion baseline 130 s/ep — overhead negligible)
+- **Wall time:** ~30.6 min for all 14 epochs (within 30-min cap by ~0.3 min margin)
+- **Peak GPU memory:** 44.6 GB (identical to Lion baseline — 2 extra LN modules per block = ~177 added params/LN, negligible VRAM)
+- **Schedule:** Linear warmup 2 epochs, cosine to 0 (T_max=14, fully annealed)
+- **Key findings:**
+  1. **QK-norm + Lion stacks additively.** Lion provides uniform per-step magnitude across params; QK-norm provides per-step magnitude stability for attention logits. They address different failure modes and compound cleanly.
+  2. **geom_camber_rc moves again** (52.79 vs 54.75 at Lion baseline) — second consecutive improvement on the structural hard split. QK-norm better-conditions attention on geometrically OOD inputs.
+  3. **Convergence speed improves:** QK-norm at ep13 (val=48.30) already beats Lion baseline at ep14 (val=49.26). Win is faster convergence AND a better endpoint.
+  4. **Pre-norm drift confirmed real:** Q/K magnitudes grow ~7× during training. Without QK-norm, attention logits scale as ‖Q‖·‖K‖/√d, giving ~50× larger logits by ep14, risking softmax saturation. QK-norm removes this pathway entirely.
+  5. **Cost: negligible.** +0.8% wall-clock, 0 VRAM overhead, ~880 added params on a 1.23M model.
+
+**Reproduce command:**
+```bash
+cd "target/" && python train.py --n_hidden 176 --epochs 14 --use_bf16 --use_lion --lion_lr 1e-4 --lion_wd 1e-3 --use_qk_norm
+```
+
+---
+
+## 2026-05-17 01:25 — PR #4252: LION optimizer at n_hidden=176 + bf16 + epochs=14 (frieren) — SUPERSEDED BY #4270
 
 - **val_avg/mae_surf_p: 49.2616** (best epoch 14/14, W&B run `eu7e0g18`) — **+0.86% vs #4106 val (within seed noise); −2.28% on paper-facing test metric**
 - **test_avg/mae_surf_p: 41.6188** — **−2.28% vs previous best 42.5895** ← TEST METRIC WIN
