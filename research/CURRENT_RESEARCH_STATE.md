@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-17 10:35 UTC
+- **Last updated:** 2026-05-17 11:00 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Primary metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -24,16 +24,16 @@ No GitHub Issues open for this track as of 2026-05-17 06:30 UTC. Proceeding from
 
 | PR | Student | Axis being tested | Status |
 |---|---|---|---|
-| **#4510** | frieren | **Variance+Mean Composite Loss** (Hanna 2024, α=0.8) | WIP — Round-13 (loss-tier) |
-| **#4530** | fern | **GeoMix camber interpolation** (Chen 2024 ICML, p_mix=0.15) | WIP — Round-13 (data-tier) |
 | **#4532** | tanjiro | **2D RoPE on mesh coords** (Su 2021 / EVA-02, d_rope=32) | WIP — Round-13 (position-encoding tier) |
 | **#4535** | thorfinn | **LinearNO drop-in linear attention** (Wu 2024 NeurIPS) | WIP — Round-13 (attention-compute tier) |
-| **#4548** | askeladd | **LE-emphasis-only loss** (w=3 on x_norm<0.1, w=1 elsewhere) | WIP — Round-14 #1 (loss-zonal LE-only) |
-| **#4549** | alphonse | **Lion LLRD α=0.7** layer-wise lr decay | WIP — Round-14 #2 (optimization geometry) |
-| **#4550** | edward | **Per-foil chord-relative coords + foil_id** | WIP — Round-14 #3 (input features) |
-| **#4551** | nezuko | **Stokes incompressibility aux** (λ=0.01, kNN div(u)) | WIP — Round-14 #4 (physics regularizer) |
+| **#4548** | askeladd | **LE-emphasis-only loss** (w=3 on x_norm<0.1, w=1 elsewhere) | WIP — Round-14 (loss-zonal LE-only) |
+| **#4549** | alphonse | **Lion LLRD α=0.7** layer-wise lr decay | WIP — Round-14 (optimization geometry, NOW TRAINING) |
+| **#4550** | edward | **Per-foil chord-relative coords + foil_id** | WIP — Round-14 (input features) |
+| **#4551** | nezuko | **Stokes incompressibility aux** (λ=0.01, kNN div(u)) | WIP — Round-14 (physics regularizer) |
+| **#4567** | fern | **Camber-M jittering** (σ=0.5 on x[:, 15] training-only) | WIP — Round-14 (pair-free augmentation) |
+| **#4568** | frieren | **Adaptive surface focal-loss** (γ=0.5 mean-normalized) | WIP — Round-14 (error-mag-aware loss) |
 
-**Zero idle students. Zero idle GPUs.** 4 of 8 in-flight are fresh Round-14 PRs targeting the askeladd zone-diagnostic findings.
+**Zero idle students. Zero idle GPUs.** 6 of 8 in-flight are fresh Round-14 PRs. All Round-13 PRs reviewed except #4532 RoPE and #4535 LinearNO (architectural — may take longer).
 
 ### Round-13 / Round-14 design logic
 
@@ -82,12 +82,18 @@ No GitHub Issues open for this track as of 2026-05-17 06:30 UTC. Proceeding from
 | **#4489** | edward | Focal-L1 α=0.5: val=49.56 (+5.5%), geom_camber_rc=55.98 (+6.0%) — TWO-SIDED NULL with #4410 Huber | CLOSED (loss-shaping axis dead) |
 | **#4511** | askeladd | Zonal w=3 TE + w=2 LE: val=48.21 (+2.60%); **valuable diagnostic: LE-MAE 2× larger than TE-MAE**, inverting Kutta hypothesis | CLOSED — diagnostic motivates #4548 LE-only follow-up |
 | **#4478** | nezuko | eta_min=0.05 rerun: val=47.92 (+0.93), test=41.68 (+1.20), all splits regress; NON-MONOTONE vs 0.10 floor | CLOSED (eta_min axis dead) |
+| **#4530** | fern | GeoMix p=0.15: val=48.15. **DATASET-STRUCTURAL FINDING:** unique mesh topology per sample (0/457 racecar_tandem pairs feasible). Rules out per-node pairing methods. | CLOSED (axis untestable as-stated) |
+| **#4510** | frieren | Variance+Mean α=0.8: val=48.81 (+1.82), geom_camber_rc=53.20 (+0.41 wrong dir). Spatial uniformity regularizer pulls capacity FROM physically-real spikes. | CLOSED (variance-loss axis dead) |
 
-## PLATEAU PROTOCOL EXTENDED (2026-05-17 10:35 UTC)
+## PLATEAU PROTOCOL EXTENDED (2026-05-17 11:00 UTC)
 
-**26 consecutive non-improvements since #4270 merged at 05:30 UTC.** +4 closures this cycle (#4474 skip-scale via W&B, #4511 zonal, #4489 focal, #4478 eta_min-0.05). Round-13 wave reviewed cleanly except for #4474 (pod was stuck — closed via W&B).
+**28 consecutive non-improvements since #4270 merged at 05:30 UTC.** +2 closures this cycle (#4530 GeoMix, #4510 variance-loss). Round-13 wave fully reviewed (except #4532 RoPE-2D and #4535 LinearNO — architectural, may take longer wall).
 
-**Strongest finding this cycle:** askeladd's zone-breakdown diagnostic on #4511 revealed that **LE is the dominant error zone (2× larger MAE than TE/wake)** across all 4 test splits. Also exposed a structural feature gap in tandem geometry (x>0.6 captures all of foil-2, not Kutta zone). Both findings drive Round-14 (#4548 LE-only loss, #4550 per-foil coords).
+**Two valuable diagnostic findings this cycle:**
+1. **Dataset-structural (fern #4530):** TandemFoilSet has unique mesh topology per sample. Rules out per-node pairing methods (MixUp, GeoMix as-stated, paired distillation, sample interpolation). The only pair-based augmentation possible without infra work is at INPUT scalar level (NACA params) — implemented in fern's follow-up #4567 camber-M jittering.
+2. **Loss-mechanism (frieren #4510):** Spatial-uniformity regularization (variance-loss) is the WRONG direction. Stagnation/TE error spikes are physically real, not artifacts. The right direction is error-MAGNITUDE-aware concentration (frieren's #4568 follow-up), NOT uniformity.
+
+**6 of 8 in-flight are Round-14 PRs testing complementary mechanisms** triggered by askeladd's LE-dominance finding and frieren's variance diagnosis. All target geom_camber_rc plateau from different angles.
 
 ### Most promising signal — but technically not a win
 

@@ -1,5 +1,41 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-17 11:00 — Round-13 wave wraps up: 2 more closures (fern GeoMix, frieren variance); **dataset-structural finding (unique mesh topology)** rules out per-node augmentation methods; 2 Round-14 follow-ups assigned
+
+### #4530 fern GeoMix camber interpolation — **CLOSED (val=48.15 > 47.5, but the close is "axis untestable", not "axis falsified")**
+- W&B run: `9q6hjo5a`. val=48.1460 (+1.16 within noise), test=40.6986 (+0.22 within noise), test_geom_camber_rc=52.38 (-0.41 within noise floor 1.14).
+- **CRITICAL DATASET-STRUCTURAL DIAGNOSTIC (the most valuable finding of this PR):** TandemFoilSet has UNIQUE mesh topology per sample:
+  - racecar_single: 567 unique mesh sizes / 599 samples → 4/599 (0.7%) feasible mix neighbors
+  - **racecar_tandem: 457 unique / 457 samples → 0/457 (0%) feasible** ← plateau-target domain
+  - cruise: 443 unique / 443 samples → 0/443 (0%) feasible
+- The GeoMix PR-as-stated is structurally untestable on this dataset. The 12 actual mixes (vs 3148 attempted) all came from racecar_single, NOT geom_camber_rc's domain. **Effective mix rate in target domain: 0.000%.**
+- **This rules out an entire family of pairing-based augmentation methods** (per-node MixUp, GeoMix, paired distillation, sample interpolation) unless the topology problem is resolved via barycentric/mesh-aware interpolation (~1 day infra).
+- **Follow-up assigned (#4567 camber-M jittering):** cheapest pair-free variant that tests the same "is the model smooth in camber" hypothesis.
+
+### #4510 frieren Variance+Mean Composite Loss (α=0.8) — **CLOSED (val=48.81 +1.82, falsifying outcome triggered, sharp mechanism diagnosis)**
+- W&B run: `cx2shzhj`. val=48.81 (+1.82), test=41.47 (+0.99), **test_geom_camber_rc=53.20 (+0.41 wrong direction on primary target)**. All 3 OOD splits regressed.
+- **Frieren's mechanism diagnosis is sharp:** "surf_std is on the same order as surf_mean. The composite weighs them 0.8/0.2, so the std contributes ~10–30% of the gradient signal. This regularizer pulls the model toward spatially-uniform errors rather than concentrating residuals on physically-easy regions."
+- In CFD-surrogate land: stagnation/TE error spikes are physically real, not artifacts to regularize away. Flattening them costs capacity.
+- **Hanna 2024 PINN result does NOT transfer.** PINN residuals have analytically-zero ground truth → flattening them improves physics consistency. Our targets are noisy CFD samples → flat error ≠ correct.
+- **Follow-up assigned (#4568 adaptive surface focal-loss):** frieren's own suggestion — w_i = (|e_i|/e_mean)^γ at γ=0.5, mean-normalized (distinguishes from #4489 which inflated loss scale). Error-magnitude-aware (orthogonal to #4548 askeladd LE-emphasis which is position-aware).
+
+### Round-14 assignments to 2 newly idle students (round-13 wave fully closed)
+
+| PR | Student | Hypothesis | Mechanism surface |
+|---|---|---|---|
+| **#4567** | fern | **Camber-M jittering** (σ=0.5 on x[:, 15] at training only) — pair-free OOD smoothness regularizer | Data augmentation (pair-free) |
+| **#4568** | frieren | **Adaptive surface focal-loss** (w_i = (|e_i|/e_mean)^0.5, mean-normalized, surface only) | Error-magnitude-aware loss |
+
+Round-13 wave fully closed except for the merged baseline (#4270). 8 PRs total: 4 Round-13 closed (zonal #4511, focal-L1 #4489, eta_min #4478, GeoMix #4530, variance #4510 — wait, 5 actually) + 1 Round-13 closed via W&B (#4474 skip-scale) + 6 Round-14 assigned (#4548 LE-only, #4549 LLRD, #4550 per-foil, #4551 Stokes, #4567 camber-jitter, #4568 adaptive-focal) + 2 Round-13 still in flight (#4532 RoPE-2D, #4535 LinearNO).
+
+### Plateau count: 28 consecutive non-improvements
+
+Sequence: [26 prior] → #4530 close → #4510 close. Round-13 wave fully reviewed.
+
+**Operational note:** alphonse pod recovered from rate-limit loop after assignment of fresh #4549; now actively training at GPU 60GB @ 100%.
+
+---
+
 ## 2026-05-17 10:35 — Round-13 wave reviewed: 4 closures (+1 closed via W&B); **askeladd's zone-diagnostic is the strongest finding of the day**; 4 Round-14 PRs assigned
 
 ### #4474 alphonse skip-scale 1/√2 — **CLOSED (axis fully exhausted, closed via W&B since student pod was stuck in rate-limit loop)**
