@@ -624,7 +624,7 @@ class Config:
     film_mode: str = "output_only"  # "output_only" or "all_blocks"
     ema_decay: float = 0.0   # 0 disables EMA; e.g. 0.999 enables EMA-of-weights
     grad_clip: float = 0.0   # 0 disables; e.g. 1.0 clips global grad norm
-    spec_norm_target: str = "none"  # "none" | "output" | "output+film"
+    spec_norm_target: str = "none"  # "none" | "output" | "output+film" | "input"
     spec_norm_n_power_iter: int = 1  # power iterations per forward (Miyato default = 1)
     layer_scale_init: float = 1.0  # CaiT/DeiT-III layer scale on attn/mlp sub-blocks (1.0 = identity at init)
 
@@ -661,13 +661,29 @@ def apply_spectral_norm(model: "Transolver", target: str, n_power_iter: int = 1)
         a zero matrix produces sigma=0 -> weight/0 = NaN. Constraining only
         ``mlp[0]`` still bounds FiLM's first layer; the second is left free to
         retain the identity-at-init property of FiLM.
+      ``"input"``: both linears in ``model.preprocess`` (the input feature
+        projection MLP — ``Linear(fun_dim+space_dim, n_hidden*2)`` and
+        ``Linear(n_hidden*2, n_hidden)``). Wrapping both bounds the
+        preprocess Lipschitz constant by the same product-of-norms argument,
+        constraining how rapidly input variations propagate into the first
+        TransolverBlock. Structurally mirrors ``"output"`` (both linears in
+        a ``Sequential(Linear, GELU, Linear)``).
     """
     if target == "none":
         return []
-    if target not in ("output", "output+film"):
+    if target not in ("output", "output+film", "input"):
         raise ValueError(f"Unknown spec_norm_target: {target!r}")
     from torch.nn.utils.parametrizations import spectral_norm as p_spectral_norm
     wrapped: list[str] = []
+    if target == "input":
+        # model.preprocess is an MLP: linear_pre=Sequential(Linear, GELU),
+        # linear_post=Linear. Wrap both linears.
+        pre = model.preprocess
+        pre.linear_pre[0] = p_spectral_norm(pre.linear_pre[0], n_power_iterations=n_power_iter)
+        wrapped.append("preprocess.linear_pre[0]")
+        pre.linear_post = p_spectral_norm(pre.linear_post, n_power_iterations=n_power_iter)
+        wrapped.append("preprocess.linear_post")
+        return wrapped
     head = model.blocks[-1].mlp2  # Sequential(Linear, GELU, Linear)
     head[0] = p_spectral_norm(head[0], n_power_iterations=n_power_iter)
     wrapped.append("blocks[-1].mlp2[0]")
