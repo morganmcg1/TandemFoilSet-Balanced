@@ -1811,3 +1811,42 @@ Per-split test (slice24): test_re_rand=23.56, test_geom_camber_rc=38.43, test_si
 - **#4539 edward**: variant-tmax30-slice32 at ep8/50, val=65.04 (early, unclear trajectory).
 - **#4540 fern**: variant-lr25e4-slice32 at ep20/50, val=32.06 (lr=2.5e-4 ARM not push; would not have beaten).
 - **#4541 thorfinn**: variant-slice16 at ep2/50, val=239.04 (very early; sister arm slice24 produced the strong signal).
+
+---
+
+## 2026-05-17 11:42 — PR #4504 (nezuko): EMA decay sweep {0.995, 0.999} at T_max=20 — **CLOSED (ema=0.99 confirmed optimal)**
+
+- Branch: `willowpai2i48h3-nezuko/ema-decay-sweep-tmax20`
+- W&B runs: `y0tidfsv` (ema=0.995), `889okvim` (ema=0.999). Note: `1ubtzm75` was transient OOM at Arm 1 ep1 on shared GPU; retried as `y0tidfsv`.
+- Stack: T_max=20, slice_num=64, n_head=4 (stale — assigned before #4296/#4348 merged)
+
+| Variant | Run | val_avg/mae_surf_p | test_avg_excl_cruise | Δ val (intra-PR) |
+|---|---|---|---|---|
+| Baseline (ema=0.99) | r1trjd2d | 34.5662 | 35.5786 | — |
+| Arm 1 (ema=0.995) | y0tidfsv | 34.7284 | 35.5063 | +0.47% |
+| Arm 2 (ema=0.999) | 889okvim | 38.4494 | 38.2597 | +11.23% |
+
+**Analysis:** ema=0.99 is robust at T_max=20/slice64/n_head=4 — the fourth stack this has been validated on (PR #3591, #3728, #4161 context, here). ema=0.999 catastrophically worse: ~1000-step EMA window over 20 epochs (7500 total steps) means only ~13% effective memory — severely lags converged weights. ema=0.995 is noise-level vs baseline. Cross-stack: best arm 34.7284 vs new canonical 31.1882 = +11.0% regression (stale stack). **Closes EMA decay sweep entirely.**
+
+**Decision: CLOSED (informative, confirms ema=0.99 optimal).**
+
+---
+
+## 2026-05-17 11:42 — PR #4538 (askeladd): warmup=1 on slice_num=32 canonical — **MERGED (19th winner, val=31.1882, −1.51%)**
+
+- Branch: `willowpai2i48h3-askeladd/warmup1-slice32-sweep`
+- W&B runs: `kfvxe6fa` (baseline warmup=3), `e82orn7k` (variant warmup=1)
+- Stack: warmup_epochs ∈ {3,1}, slice_num=32, **n_head=4 (default, pre-#4348)**, T_max=25, lr=2e-3, all other canonical
+
+| Arm | warmup_epochs | n_head | val_avg/mae_surf_p | test_avg_excl_cruise | Δ val (intra-PR) | Δ test (intra-PR) | best_epoch |
+|---|---|---|---|---|---|---|---|
+| **Baseline** | 3 | 4 | 31.9978 | 32.0170 | — | — | 21 |
+| **Variant (W)** | **1** | **4** | **31.1882** | **32.0013** | **−2.53%** | **−0.05%** | **21** |
+
+Per-split test (warmup=1): test_re_rand=23.7618, test_geom_camber_rc=39.2793, test_single_in_dist=32.9628.
+
+**Analysis:** warmup=1 wins val by −2.53% with flat test (−0.05%) on the same n_head=4/slice32 stack. Mechanism confirmed: 2 extra peak-LR epochs (epoch 1-2 at full lr=2e-3 instead of LinearLR ramp). SOAP preconditioner + grad_clip handles aggressive early steps safely; EMA smooths the early high-LR noise. Signal previously validated on T_max=25/slice64 in PR #4421 (−3.18%); magnitude slightly reduced with slice32 (−2.53%) due to different epoch profile.
+
+**Cross-stack caveat:** val=31.1882 beats canonical 31.6653 (n_head=2/slice64) by −1.51%; test=32.0013 vs canonical test=31.502 (n_head=2/slice64) = +1.59% apparent regression. This cross-stack test comparison is confounded — the within-PR test delta is the clean signal (essentially flat). **warmup=1 + n_head=2 + slice32 is unmeasured and is the highest-priority follow-up.**
+
+**Decision: MERGED as 19th winner. New canonical val=31.1882, test=32.0013 (measured on warmup=1+slice32+n_head=4 stack).**

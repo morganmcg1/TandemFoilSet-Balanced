@@ -1,9 +1,9 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 11:25 — **Final harvest tick.** Launch ends ~12:00 UTC (~35 min). **NEW STRONG SIGNAL discovered this tick: thorfinn #4541 `variant-slice24` (run `mlcvi650`) finished at val=31.3233 (best_epoch=22), test_re_rand=23.56, test_geom_camber_rc=38.43, test_single_in_dist=32.32 — beats current canonical (31.6653) by −1.05%.** ⚠ Important caveat: ran on n_head=4 (default), NOT n_head=2 (current canonical from #4348). Asked thorfinn to interrupt slice16 (won't finish) and post terminal SENPAI-RESULT for slice24 ASAP. Pending: 6 active WIP runs (#4564, #4565, #4538, #4539, #4540, #4541) at ep1-22; only #4541 slice24 has terminal arm. Previous tick: #4348 alphonse MERGED (n_head=2, val=31.6653, −1.04%, **18th winner**); #4296 thorfinn MERGED (slice_num=32, val=31.9978, −7.42%, **17th winner**).
+- **Date:** 2026-05-17 11:42 — **Tick 6. 19th winner merged.** PR #4504 nezuko CLOSED (ema=0.99 confirmed optimal across 4 stacks). PR #4538 askeladd MERGED (warmup_epochs=1, val=31.1882, −1.51% vs canonical, **19th winner**). NOTE: stack confusion — 17th/18th/19th all measured on different n_head stacks (4, 2, 4 respectively). Combined canonical (n_head=2 + slice32 + warmup=1) is UNMEASURED — top priority. Assigning askeladd to measure this NOW. Assigning nezuko to slice24+warmup1 probe. Launch ends ~12:00 UTC (~35 min). **NEW STRONG SIGNAL discovered this tick: thorfinn #4541 `variant-slice24` (run `mlcvi650`) finished at val=31.3233 (best_epoch=22), test_re_rand=23.56, test_geom_camber_rc=38.43, test_single_in_dist=32.32 — beats current canonical (31.6653) by −1.05%.** ⚠ Important caveat: ran on n_head=4 (default), NOT n_head=2 (current canonical from #4348). Asked thorfinn to interrupt slice16 (won't finish) and post terminal SENPAI-RESULT for slice24 ASAP. Pending: 6 active WIP runs (#4564, #4565, #4538, #4539, #4540, #4541) at ep1-22; only #4541 slice24 has terminal arm. Previous tick: #4348 alphonse MERGED (n_head=2, val=31.6653, −1.04%, **18th winner**); #4296 thorfinn MERGED (slice_num=32, val=31.9978, −7.42%, **17th winner**).
 - **Branch:** `icml-appendix-willow-pai2i-48h-r3`
 - **Most recent human researcher directive:** None this launch.
-- **Canonical baseline (merged):** `val_avg/mae_surf_p = 31.6653`, `test_avg/mae_surf_p (excl cruise) = 31.502`
+- **Canonical baseline (merged):** `val_avg/mae_surf_p = 31.1882`, `test_avg/mae_surf_p (excl cruise) = 32.0013` (19th winner; n_head=4 stack)
   - Achieved via: Huber loss (PR #3155) + LR warmup 1e-3 (PR #3147) + **SOAP (PR #3283)** + SOAP precond_freq=5 (PR #3495) + **EMA(0.999) (PR #3430)** + EMA decay=0.99 (PR #3591) + Huber beta=0.5 (PR #3316) + Cauchy c=1.0 (PR #3612) + Huber beta=0.1 (PR #3868) + **Lookahead k=5 (PR #3947)** + **grad_clip=1.0 (PR #3497)** + **Huber beta=0.01 (PR #4037)** + **bfloat16 autocast (PR #3975)** + **cosine T_max=25 (PR #4263)** + **lr=2e-3 (PR #4336)** + cosine T_max=20 (PR #4447) + **slice_num=32 (PR #4296)**
   - Full stack: SOAP **precondition_frequency=5**, **lr=2e-3**, warmup_epochs=3, ema_decay=0.99, **huber_beta=0.01**, **use_lookahead=True, lookahead_k=5, lookahead_alpha=0.5**, **grad_clip=1.0**, **use_bf16=True**, **cosine_t_max=25**, **slice_num=32**, **n_head=2**
   - **best_epoch=21** (n_head=2+slice_num=32 combined may fit more) (slice_num=32 fits more epochs in 30-min cap); epoch_time ~87s; Peak VRAM ~33.0 GB
@@ -43,8 +43,9 @@
 | **#4447** | **tanjiro** | **cosine T_max=20 (more aggressive cooldown)** | **−2.72%** | **34.5662** |
 | **#4296** | **thorfinn** | **slice_num=32 (coarser attention, +4 free epochs)** | **−7.42%** | **31.9978** |
 | **#4348** | **alphonse** | **n_head=2 (wider per-head scope, +4 free epochs)** | **−1.04%** | **31.6653** |
+| **#4538** | **askeladd** | **warmup_epochs=1 (extra peak-LR epochs at slice32)** | **−1.51%** | **31.1882** |
 
-Old launch baseline: 135.30. Total gain: **−76.6%** over 18 compounding improvements.
+Old launch baseline: 135.30. Total gain: **−76.9%** over 19 compounding improvements.
 
 ## Closed hypotheses (complete)
 
