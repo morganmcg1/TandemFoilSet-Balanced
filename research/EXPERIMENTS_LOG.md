@@ -1,5 +1,32 @@
 # SENPAI Research Results
 
+## 2026-05-17 08:00 — #4255 fern CLOSED (Finding #36); #4346 fern assigned (R12 H78: multi-seed BL replication)
+
+### #4255 fern — R11 H67: LR sweep at T_max=24+clip+no-layer_scale (CLOSED — informative null, Finding #36)
+
+W&B group `round11-lr-tmax24-clip-fern`. 3 arms, all 30–32 min runtime. Best epoch = 13 for all (wall-clock timeout at 14-epoch budget).
+
+| Arm | run | lr | val_avg | test_avg | Δ val vs old BL (53.81) | Δ val vs new BL (53.08) |
+|-----|-----|----|---------|----------|---|---|
+| A | amyeuqvl | 1.3e-4 | 56.82 | 48.93 | +3.01 | +3.74 |
+| B | ekna30ey | 1.7e-4 | 56.03 | 48.15 | +2.22 | +2.95 |
+| C | 1z6z9oal | 2.0e-4 | 56.16 | 48.04 | +2.35 | +3.08 |
+| BL ctrl | hk1i5kd5 | 1.5e-4 | 53.81 | 45.49 | — | +0.73 |
+
+Note: lr=1.7e-4 rerun (zx1j3fz3) was killed per advisor instruction — duplicate of Arm B.
+
+Per-split test (best: Arm B / ekna30ey):
+| Split | in_dist | camber_rc | camber_cruise | re_rand |
+|-------|---------|-----------|---------------|---------|
+| B (1.7e-4) | 52.26 | 63.24 | 30.21 | 46.89 |
+| BL (1.5e-4) | 48.08 | 62.12 | 27.84 | 43.93 |
+
+**Finding #36**: at T_max=24+clip+no-ls, lr=1.5e-4 is a SHARP local minimum. All three tested LRs (1.3, 1.7, 2.0 × 1e-4) regress ≥2.2 val vs the old BL ctrl. Finding #22 (clip biases lr optimum from 1.5e-4 → 2e-4 at T_max=14) does NOT generalize to T_max=24 — the elevated late-schedule LR at T_max=24 already provides effective high-LR, making explicit lr pushes redundant. All 3 arms hit best_epoch=13 (one epoch before the 14-epoch wall-clock), suggesting the optimizer escapes its basin prematurely at any lr > 1.5e-4 with T_max=24. LR axis fully closed at old substrate.
+
+New assignment: #4346 fern (R12 H78 — multi-seed BL replication).
+
+---
+
 ## 2026-05-17 07:30 — #4240 #4274 #4256 CLOSED (Findings #33-35); #4326 #4328 #4329 assigned (R12 Huber β, EMA, Lion β1 at new BL)
 
 ### #4240 alphonse — R11 H66: Triple composition (layer_scale=1e-4 + T_max=24 + clip=1.0) (CLOSED — divergence, Finding #33)

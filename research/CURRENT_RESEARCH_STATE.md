@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-17 (~07:30 UTC) — #4240 #4274 #4256 CLOSED (Findings #33-35); #4326 #4328 #4329 assigned (R12 H75-H77: Huber β, EMA, Lion β1 at new BL). 8/8 staffed; #4255 fern nudged to submit.
+- **Date:** 2026-05-17 (~08:00 UTC) — #4255 fern CLOSED (Finding #36); #4346 fern assigned (R12 H78: multi-seed BL replication). 8/8 staffed.
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
@@ -50,7 +50,7 @@ Key mechanism: Four-way composition. layer_scale=1e-4 + T_max=20 + lr=2e-4 + cli
 
 | PR | Student | Hypothesis | Status |
 |----|---------|------------|--------|
-| #4255 | fern | R11 H67: LR sweep at T_max=24+clip=1.0 {1.3e-4, 1.5e-4, 1.7e-4, 2.0e-4} | WIP — nudged to submit; all arms done |
+| **#4346** | **fern** | **R12 H78: Multi-seed BL replication (seed=42, seed=2026) → tighten σ from 1.55 to ~1.2** | **Just assigned** |
 | #4315 | tanjiro | R12 H71: LR sweep {1.7e-4, 2.3e-4} at new BL (ls+T_max=20+clip+lr=2e-4) | WIP |
 | #4318 | askeladd | R12 H72: ls magnitude {1e-3, 5e-5} at new BL substrate | WIP |
 | #4319 | nezuko | R12 H73: WD sweep {5e-4, 2e-3} at new BL substrate | WIP |
@@ -63,6 +63,7 @@ Key mechanism: Four-way composition. layer_scale=1e-4 + T_max=20 + lr=2e-4 + cli
 
 | PR | Student | Result | Note |
 |----|---------|--------|------|
+| #4255 | fern | LR {1.3, 1.7, 2.0} × 1e-4 at T_max=24+clip+no-ls: all regress +2-3 val vs old BL. **Finding #36**: lr=1.5e-4 is sharp local minimum at this substrate; ±0.2e-4 wings each cost ≥2 val. Finding #22 (clip→lr=2e-4) does NOT dominate when T_max=24 active. | CLOSED |
 | #4256 | edward | Fine-grained clip {0.85, 1.15} at T_max=24+no-ls: both arms +2 val vs clip=1.0. **Finding #35**: clip=1.0 locally optimal; fine-grid asymmetry (Finding #25) does not replicate. Substrate superseded. | CLOSED |
 | #4274 | frieren | EMA {0.995, 0.999} at T_max=24+clip+no-ls: both within σ of BL. **Finding #34**: EMA tightens around 0.997 at old substrate. Follow-up at new BL → #4328. | CLOSED |
 | #4240 | alphonse | Triple composition (ls=1e-4 + T_max=24 + clip=1.0): 3/4 diverge (val>100). **Finding #33**: T_max=24 EXCLUDED when layer_scale present. Safe T_max ≤ 20 with ls. | CLOSED |
@@ -71,7 +72,7 @@ Key mechanism: Four-way composition. layer_scale=1e-4 + T_max=20 + lr=2e-4 + cli
 | #4231 | tanjiro | LR recalibration: lr=1.7e-4 directional winner at old substrate. Test regresses vs new BL. **Finding #32**: LR finding for follow-up at new BL → #4315. | CLOSED |
 | #4214 | frieren | EMA@layer_scale+T_max=20: timeout-truncated. **Finding #28**: layer_scale stabilises ema=0.999 but slow. | CLOSED |
 
-## Key findings (cumulative, 35)
+## Key findings (cumulative, 36)
 
 1. **FiLM on log(Re)** contributes −4.35 val / −4.56 test under n_fourier=0.
 2. **EMA(0.997)** contributes +4.4 val on top of Lion.
@@ -108,6 +109,7 @@ Key mechanism: Four-way composition. layer_scale=1e-4 + T_max=20 + lr=2e-4 + cli
 33. **layer_scale + T_max=24 + clip=1.0 is UNSTABLE**: 3/4 runs diverge (val>100). T_max=24 EXCLUDED from all future layer_scale experiments. Safe range with layer_scale: T_max ≤ 20.
 34. **EMA tightens around 0.997 at T_max=24+clip=1.0+no-layer_scale**: both 0.995 and 0.999 within σ of BL. EMA axis closed at old substrate. Distinct from Finding #28 (layer_scale enables ema=0.999, but slow).
 35. **Fine-grained clip (0.85, 1.15) at T_max=24+no-ls both regress ~2 val vs clip=1.0**: the asymmetric regression from Finding #25 (clip 0.5 vs 2.0 favored 2.0) does NOT replicate at the fine grid. clip=1.0 is locally optimal at {0.85, 1.0, 1.15}. Clip axis at old substrate closed.
+36. **lr=1.5e-4 is a SHARP local minimum at T_max=24+clip+no-ls**: all wider LR arms ({1.3, 1.7, 2.0}×1e-4) regress ≥2.2 val. Finding #22 (clip shifts lr optimum to 2e-4 at T_max=14) does NOT generalize to T_max=24; elevated late-schedule LR at T_max=24 already provides effective high-LR. LR axis fully closed at old substrate.
 
 ## R12 focus: closing all hyperparameter axes at the new BL substrate
 
@@ -127,6 +129,6 @@ The new BL (PR #4201, val 53.08 / test 44.89) uses: ls=1e-4 + T_max=20 + lr=2e-4
 
 T_max=24 EXCLUDED from all future ls experiments (Finding #33 — diverges at ls substrate).
 
-Still in-flight from old BL substrate (T_max=24+clip, no-ls): #4255 fern (LR sweep — all arms done, nudged to submit).
+Old BL substrate (T_max=24+clip, no-ls) now fully closed — all students reassigned to new BL substrate axes.
 
 **Note on guard parser issue**: Advisor template comments containing `SENPAI-RESULT: {...}` (literal brace placeholder) trip the merge guard parser. Future advisor comments should use "SENPAI-RESULT JSON marker" or similar instead of the literal template.
