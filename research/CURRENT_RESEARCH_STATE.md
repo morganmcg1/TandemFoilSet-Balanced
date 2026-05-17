@@ -48,7 +48,7 @@ cd target && python train.py --agent <student> \
 | PR | Student | Theme | Status | Baseline context |
 |----|---------|-------|--------|-----------------|
 | #4308 | alphonse | FFN dropout: p=0.05 (Arm A), p=0.10 (Arm B) in MLP blocks on slice=48 stack | WIP — NEW | #4235 closed; mlp-ratio throughput-bound; MLP over-driven per #4154 → regularize instead of expand |
-| #4287 | frieren | Batch size sweep: 8 (Arm A), 12 (Arm B) vs current 4 on 13-mech stack | WIP | #4236 closed; 22.60/80 GB VRAM headroom on new slice=48 baseline |
+| #4327 | frieren | Huber loss: δ=1.0 (Arm A), δ=0.5 (Arm B) replacing MSE on 13-mech stack | WIP — NEW | #4287 closed; batch axis closed; loss formulation untouched axis — Huber caps gradient on large errors |
 | #4295 | fern | Per-group LR: lr_attn_mult vs lr_other_mult to rebalance MLP/attn updates | WIP | #4237 closed; depth throughput-bound; MLP/attn 5× grad-norm imbalance (PR #4154) still unaddressed |
 | #4253 | edward | SGDR warm restarts: T_0=17 (Arm A), T_0=12 (Arm B) on 13-mech stack | WIP | #4181 closed (LR axis locked at 1.7e-4); val descending at timeout in every arm |
 | #4306 | askeladd | slice_num coarser: 40 (Arm A), 32 (Arm B) — below new baseline slice=48 | WIP — NEW | #4243 MERGED (slice=48 strong win); continue coarser direction; trend clear |
@@ -64,7 +64,7 @@ cd target && python train.py --agent <student> \
 2. **Does SWA find flatter minima than EMA on the timeout-limited trajectory?** (#4312 thorfinn) — every arm shows val descending at cutoff; SWA averages later-epoch snapshots to find wider loss basin vs EMA's exponential tracking.
 3. **Do even coarser slices (32, 40) continue the slice_num winning trend?** (#4306 askeladd) — slice=48 strong win vs slice=64/96; val still descending at ep35; monotone coarser trend may continue.
 4. **Does FFN/MLP dropout regularize the over-driven MLP parameter group?** (#4308 alphonse) — MLP/other grad-norm ~5× attn (PR #4154); mlp-ratio expansion failed → MLP is over-absorbing, not under-parameterised; FFN dropout should correct this.
-5. **Does larger batch_size (8, 12) unlock better convergence at fixed LR?** (#4287 frieren) — 22.60/80 GB VRAM headroom on new baseline; batch=4 gives only ~9 steps/epoch.
+5. **Does Huber loss outperform MSE on the asinh-compressed pressure + raw uxuy channels?** (#4327 frieren) — small-data regime (~36 train geometries) may have outlier samples pulling the loss; Huber caps gradient on large errors while preserving quadratic behaviour on the bulk.
 6. **Does per-group LR rebalancing address the MLP/attn update magnitude imbalance?** (#4295 fern) — Arm A reins in MLP (lr_other×0.5), Arm B boosts attn (lr_attn×2.0); Lion sign-update may mask the imbalance — critical test.
 7. **Does attention dropout (p=0.05, 0.10) reduce OOD over-fitting on geom_camber_rc?** (#4278 nezuko) — dominant val error is rc-camber split (51.62 on new baseline); now competing against tighter bar of 38.675.
 8. **Does n_head=2 or 8 outperform current n_head=4?** (#4273 tanjiro) — head_dim controls attention subspace rank; now on new slice=48 baseline where fewer tokens give different attention geometry.
@@ -126,6 +126,7 @@ cd target && python train.py --agent <student> \
 | #4237 (fern n-layers-sweep) | no_improvement: A (n=6) val=42.33 (+2.50, 28ep, 66s/ep), B (n=7) val=46.99 (+7.16, 24ep, 76s/ep); throughput-bound AND no iso-epoch advantage; MLP/attn imbalance amplified by depth → #4295 per-group-lr |
 | #4235 (alphonse mlp-ratio-sweep) | no_improvement: A (r=3) val=40.26 (+1.08%, 31ep), B (r=4) val=43.10 (+8.20%, 29ep); throughput-bound, monotone: more MLP width → slower → fewer epochs → worse val; MLP-ratio axis closed at r=2 → #4308 ffn-dropout |
 | #4230 (thorfinn weight-decay-sweep) | no_improvement: A (wd=1e-4) val=41.99 (+5.4%, stop), B (wd=5e-4) val=43.48 (+9.2%, stop); both hit stop cond (>41.0); monotone ordering confirms wd=3e-4 at optimum → #4312 swa |
+| #4287 (frieren batch-size-sweep) | failure: A (batch=8) val=45.26 (+13.6%, fail >45), B (batch=12) val=63.51 (+59.4%, fail); sub-linear time scaling, fewer gradient updates dominate, in-dist split suffered most (undertraining); batch axis closed at batch=4 with LR locked → #4327 huber-loss |
 
 ## Potential next research directions
 
@@ -138,7 +139,8 @@ cd target && python train.py --agent <student> \
 - **Depth sweep** — CLOSED as #4237 (fern); throughput-bound AND no iso-epoch advantage; depth axis closed
 - **Per-group LR scaling** — IN PROGRESS as #4295 (fern); lr_attn×2.0 or lr_other×0.5; tests MLP/attn update-magnitude rebalancing
 - **Warmup-cosine** — CLOSED as #4236 (frieren); Arm A (warmup=2) val=41.28 (+3.6%), stop triggered; direction closed (2nd failure)
-- **Batch size sweep** — IN PROGRESS as #4287 (frieren); batch_size=8 and 12 vs current 4; 22.60/80 GB VRAM headroom on new baseline
+- **Batch size sweep** — CLOSED as #4287 (frieren); failure: A (batch=8) val=45.26, B (batch=12) val=63.51; sub-linear time scaling + fewer gradient updates dominate; batch=4 locked → #4327 huber-loss
+- **Huber loss** — IN PROGRESS as #4327 (frieren); δ=1.0 (Arm A), δ=0.5 (Arm B) replacing MSE in train loss; tests outlier-robust gradient formulation on small-data regime
 - **SGDR warm restarts** — IN PROGRESS as #4253 (edward); T_0=17 and T_0=12 — mid-training LR reset
 - **Slice_num sweep** — MERGED as #4243 (askeladd); slice=48 STRONG WIN (val=38.675, test=33.495); new baseline established
 - **Slice_num coarser** — IN PROGRESS as #4306 (askeladd); slice_num=40 (Arm A), 32 (Arm B) — continuing winning coarser direction

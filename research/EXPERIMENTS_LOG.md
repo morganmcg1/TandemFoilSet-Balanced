@@ -1062,3 +1062,28 @@ Stop condition triggered (val > 41.0 threshold); Arm B (warmup=3) correctly not 
 
 - **Analysis:** Both arms hit the >41.0 stop threshold. Monotone ordering: wd=3e-4 (baseline) < wd=1e-4 < wd=5e-4 in terms of val error. Confirms wd=3e-4 is at or near the local minimum. Student's analysis: Lion's sign-based update applies uniform step sizes; the right wd balances regularization against effective learning and 3e-4 hits it correctly at this batch/LR/EMA configuration. Both directions (more and less regularization) regress — the wd axis is fully closed.
 - **Decision:** CLOSED — no_improvement, stop condition hit. wd=3e-4 locked. Assigned thorfinn to SWA (#4312) — testing alternative model averaging vs current EMA(0.995).
+
+---
+
+## 2026-05-17 03:30 — PR #4287: batch-size-sweep (frieren) — failure → closed
+
+- **Student:** charliepai2i48h2-frieren
+- **Hypothesis:** Larger batches (8, 12 vs current 4) might unlock better convergence via better gradient quality or improved wall-clock throughput, given the GPU is at 30% VRAM utilization at batch=4 (~24 GB / 80 GB).
+- **Results:**
+
+| Metric | Arm A (batch=8) | Arm B (batch=12) | Baseline (#4243, batch=4) |
+|--------|-----------------|------------------|----------------------------|
+| **val_avg/mae_surf_p** | 45.2559 (+13.6%) | 63.5112 (+59.4%) | 38.6750 |
+| **test_avg/mae_surf_p** | 39.0534 | 54.8841 | 33.4948 |
+| Best epoch | 31 (timeout, descending) | 31 (timeout, descending) | 35 |
+| Sec/epoch | 57.37 | 58.94 | 51.7 |
+| Peak VRAM | 47.66 GB | 71.48 GB | 22.60 GB |
+| Stop condition | FAIL (val > 45) | FAIL (val > 45) | — |
+| Metric artifacts | `models/model-charliepai2i48h2-frieren-batch-size-sweep-A-20260517-014947/metrics.jsonl` | `models/model-charliepai2i48h2-frieren-batch-size-sweep-B-20260517-022433/metrics.jsonl` | |
+
+- **Analysis:** Three clean diagnoses from the student:
+  1. **No wall-clock speedup** — per-epoch time only rose from 54.2 s (b=4) → 57.4 s (b=8) → 58.9 s (b=12). The Transolver was not compute-bound at batch=4; attention/index ops scale sub-linearly. Net: ~½ (A) or ⅓ (B) the gradient updates per epoch with no compensating reduction in epoch count.
+  2. **Fewer gradient updates dominate** — classic "no LR scaling at larger batch" failure mode. Goyal et al. linear scaling would suggest lr=3.4e-4 (A) and 5.1e-4 (B), but LR axis was locked at 1.7e-4 in PR #4181. 2D batch×lr sweep not affordable in this budget.
+  3. **In-distribution split suffered most** (Arm B val_single_in_dist=92.1 vs baseline 43.7 = 2.1×) — pure undertraining signature, not generalization. With fewer updates the model never reaches the in-distribution basin.
+  - Bonus: corrected a misconception in the PR body — `train_samples=1499` per config.yaml (not ~36 geometries per epoch); the ratio interpretation still holds.
+- **Decision:** CLOSED — failure on both arms. Batch axis closed at batch=4 with LR locked. Assigned frieren to huber-loss (#4327) — fresh loss-formulation axis, untested.
