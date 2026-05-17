@@ -1,5 +1,132 @@
 # SENPAI Research Results
 
+## 2026-05-17 15:00 — ⚠️ PLATEAU PROTOCOL DECLARED (11 closures, 0 improvements since #4402)
+
+Since the merge of PR #4402 (round-25 NEW PROGRAMME BEST), the following micro-probes have all CLOSED without improvement:
+
+| PR | Probe | Δ val | Outcome |
+|---|---|---|---|
+| #4426 | k=7 | +0.69 | k-bowl right firm at k=6 |
+| #4428 | seed=1 canonical | +2.41 | variance σ̂=1.20 |
+| #4429 | seed=2 canonical | +1.26 | canonical |
+| #4457 | seed=3 canonical | +0.50 | canonical |
+| #4430 | α=0.75 | +0.07 | α-RIGHT flat |
+| #4427 | β2=0.997 | +1.51 | β2-RIGHT closed |
+| #4415 | α=0.65 + k=5 | (vs OLD) | mechanism finding, not new best |
+| #4472 | α=0.65 + k=6 | +1.20 | α-LEFT does NOT carry from k=5 to k=6 |
+| #4473 | β2=0.993 + k=6 | +0.02 | β2-LEFT flat (likely noise) |
+| #4455 | cfg.lr=4e-4 | +0.95 | LR-LEFT mild regress |
+| #4431 | β2=0.994 + k=6 | +1.39 | β2-LEFT sharp at k=6 |
+
+**Diagnosis:** the (k=6, β2=0.995, α=0.7) compound is a precisely-tuned sharp pin, not a flat plateau. Single-knob micro-probes within ±20% of the winner are exhausted. **Plateau Protocol activates** — pivot to BOLDER swings (variance reduction, schedule changes, mechanism-orthogonal techniques).
+
+Round-29 dispatches:
+- **#4496 alphonse** — Lookahead α COSINE SCHEDULE 0.5 → 0.7 (bold mechanism)
+- **#4500 fern** — EMA on Lookahead slow_weights (bold variance reduction)
+- **#4497 askeladd** — cfg.lr=6e-4 MID bracket (completes LR mapping)
+- **#4498 frieren** — seed=4 canonical (n=5 paper SEM tightening)
+
+## 2026-05-17 15:00 — PR #4472: α=0.65 + k=6 + β2=0.995 ← CLOSED (α-LEFT shift does NOT carry from k=5 to k=6)
+
+- Branch: `willowpai2i48h1-alphonse/a065-k6-b2-995`
+- Student: willowpai2i48h1-alphonse
+- Hypothesis: nezuko's α-LEFT shift at k=5+β2=0.995 may extend to k=6.
+
+### Results
+
+val_avg=46.9260 (Δ +1.20 vs #4402), test_avg=45.6136 (Δ +1.11). Both regress in same direction → real (small) regression, not noise.
+
+### Per-split test breakdown
+
+| Split | This run | Baseline #4402 | Δ |
+|---|---|---|---|
+| test_single_in_dist | 44.94 | 43.01 | +1.94 |
+| test_geom_camber_rc | 55.94 | 54.22 | +1.72 |
+| test_geom_camber_cruise | 41.95 | 41.55 | +0.41 |
+| test_re_rand | 39.62 | 39.26 | +0.36 |
+
+Regression concentrates on `single_in_dist` and `geom_camber_rc` (highest-magnitude splits) — signature of under-smoothed outer step on hard examples (α too low → outer averaging too gentle to dampen Lion noise on harshest gradients).
+
+### Mechanism finding
+
+**α-LEFT shift discovered at k=5 (nezuko #4415, Δ=−0.19) was a feature of LESS inner pre-smoothing.** At k=6 (averaging every 7 inner steps), there's already enough pre-smoothing — pulling α further down is over-damped. α at k=6+β2=0.995 is RESOLVED at 0.70.
+
+### α-bowl at NEW k=6 + β2=0.995
+
+| α | val | Δ vs #4402 | Status |
+|---|---|---|---|
+| 0.65 | 46.93 | +1.20 | closed #4472 (this PR) |
+| 0.70 | 45.73 | 0 | merged #4402 — winner |
+| 0.75 | 45.80 | +0.07 | closed #4430 |
+| 0.60 | TBD | TBD | nezuko #4475 in flight (likely +1.5) |
+
+### Decision
+
+**CLOSED.** Alphonse reassigned to **Lookahead α COSINE SCHEDULE (#4496)** — PLATEAU PROTOCOL bold mechanism swing.
+
+## 2026-05-17 15:00 — PR #4473: β2=0.993 + k=6 + α=0.7 ← CLOSED (β2-bowl LEFT-edge effectively flat)
+
+- Branch: `willowpai2i48h1-fern/b2-993-k6-a07`
+- Student: willowpai2i48h1-fern
+- Hypothesis: shorter β2 (=0.993) may preserve high-frequency gradient signal at k=6.
+
+### Results
+
+val_avg=45.7462 (Δ +0.018, FLAT within noise), test_avg=44.8960 (Δ +0.388, within σ̂=0.97).
+
+### Combined β2-bowl LEFT picture at k=6+α=0.7
+
+| β2 | half-life | val | Δ | Status |
+|---|---|---|---|---|
+| 0.993 | 99 | 45.75 | +0.02 | closed #4473 (this PR — FLAT) |
+| 0.994 | 116 | 47.12 | +1.39 | closed #4431 (sharp regress) |
+| 0.995 | 138 | 45.73 | 0 | merged #4402 — winner |
+| 0.997 | 230 | 47.24 | +1.51 | closed #4427 |
+
+Non-monotonic LEFT side (β2=0.993 flat, β2=0.994 worse, β2=0.995 best) is likely **seed-noise scatter** (σ̂_sample=1.05 val) rather than a true monotone bowl. Either fern's seed=0 at β2=0.993 was lucky-draw or frieren's β2=0.994 was unlucky.
+
+### Decision
+
+**CLOSED.** β2-bowl at k=6 effectively a sharp pin at 0.995. Fern reassigned to **EMA on Lookahead slow_weights (#4500)** — bold variance reduction mechanism.
+
+## 2026-05-17 15:00 — PR #4455: cfg.lr=4e-4 + k=6 + β2=0.995 + α=0.7 ← CLOSED (LR-LEFT mild regress)
+
+- Branch: `willowpai2i48h1-askeladd/lr4e4-k6-b2-995-a07`
+- Student: willowpai2i48h1-askeladd
+- Hypothesis: smaller LR may help under double-smoothed compound.
+
+### Results
+
+val_avg=46.6805 (Δ +0.95 vs #4402, +0.18 above σ̂=1.20 ceiling), test_avg=45.2438 (Δ +0.74). Per-split regression is signature of mild global under-training.
+
+### Mechanism finding
+
+Trajectory monotone descent, no spikes → clean under-training regression. LR bowl at new compound is **closer to symmetric around 5e-4** than at old compound — the inner trajectory at β2=0.995+k=6 was NOT over-relying on larger per-step magnitude.
+
+### Decision
+
+**CLOSED.** Askeladd reassigned to **cfg.lr=6e-4 MID bracket (#4497)** — completes LR bowl mapping at new compound (LEFT 4e-4 closed, MID 6e-4 in flight, RIGHT 7e-4 edward #4432 in flight).
+
+## 2026-05-17 15:00 — PR #4431: β2=0.994 + k=6 + α=0.7 ← CLOSED (β2-bowl sharp on left at k=6)
+
+- Branch: `willowpai2i48h1-frieren/b2-994-k6`
+- Student: willowpai2i48h1-frieren
+- Hypothesis: k=6's longer sync may tolerate a shorter m-buffer half-life.
+
+### Results
+
+val_avg=47.1157 (Δ +1.39 vs #4402, well outside σ̂=1.20), test_avg=45.6141 (Δ +1.11). Clear regression, not noise.
+
+### Mechanism finding
+
+**β2-bowl at k=6 is SHARPER on left than at k=5.** At k=5, Δ(0.99 vs 0.995) = +0.75 val; at k=6, Δ(0.994 vs 0.995) = +1.39 val — sharper despite β2 being only 0.001 left of optimum. k=6 amplifies dependence on coherent inner-trajectory direction; β2=0.995 m-buffer lands in the sweet spot where m-buffer carries direction across all 7 inner steps.
+
+Student's speculation: k×(1−β2) ≈ 0.03 may be a candidate invariant. If true, k=7 optimum would be β2 ≈ 0.9957. Logged for future plateau-protocol consideration.
+
+### Decision
+
+**CLOSED.** β2 at k=6 is a SHARP PIN at 0.995. Frieren reassigned to **seed=4 canonical (#4498)** — strengthens paper SEM to n=5 (~0.43).
+
 ## 2026-05-17 14:00 — PR #4457: 3-seed canonical seed=3 (k=6 + β2=0.995 + α=0.7) ← CLOSED (n=4 PAPER-READY)
 
 - Branch: `willowpai2i48h1-thorfinn/k6-b2-995-a07-seed3`

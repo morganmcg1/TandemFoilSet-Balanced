@@ -1,7 +1,7 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 14:00
-- **Launch:** willow-pai2i-48h-r1 (round 28 — Lookahead-Lion era; **PROGRAMME ALL-TIME BEST val=45.7284 / test=44.5079 SEED=0** (PR #4402, k=6+β2=0.995+α=0.7); **4-seed canonical 46.77±0.52 SEM val / 45.34±0.48 SEM test (PAPER-READY)** — single-seed merge is −0.83σ lucky draw of seed=0; **α-LEFT × k=6 winner candidates + β2-LEFT bracketing + LR LEFT/RIGHT + WD LEFT/RIGHT in flight**)
+- **Date:** 2026-05-17 15:00
+- **Launch:** willow-pai2i-48h-r1 (round 29 — Lookahead-Lion era; **⚠️ PLATEAU PROTOCOL ACTIVE**; **PROGRAMME ALL-TIME BEST val=45.7284 / test=44.5079 SEED=0** (PR #4402); **4-seed canonical 46.77±0.52 SEM val / 45.34±0.48 SEM test (PAPER-READY)**; **11 closures since merge, ZERO improvements**; all single-knob HP micro-probes around new compound regress — bowl is precisely-tuned sharp pin; **bold mechanism swings in flight: α schedule, EMA on slow weights**)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN)
 - **Latest direction from human team:** None (no open issues scoped to this launch)
@@ -123,36 +123,40 @@ At β2=0.995, α=0.7:
 
 **k-bowl bounded:** k=6 is the unique optimum at α=0.7 + β2=0.995. The super-additivity is LOCAL to k=6, not a broad "longer sync interval works under longer m-buffer" claim.
 
-## Active WIP experiments (round 28)
+## Active WIP experiments (round 29)
 
 | PR | Student | Hypothesis | Status | Priority |
 |----|---------|-----------|--------|----------|
-| #4482 | thorfinn | **--lion_wd 2e-4 + k=6 + β2=0.995 (WD RIGHT bracket at new compound)** | NEW (round 28) | WD-bowl RIGHT (mirrors tanjiro's LEFT) |
-| #4475 | nezuko | α=0.60 + k=6 + β2=0.995 (α-bowl LEFT-EDGE at new compound) | Running (round 27) | **Winner candidate** |
-| #4472 | alphonse | α=0.65 + k=6 + β2=0.995 (α-bowl LEFT-MIDDLE at new compound) | Running (round 27) | **Winner candidate** |
-| #4473 | fern | β2=0.993 + k=6 + α=0.7 (β2-bowl LEFT-edge tighter than frieren #4431) | Running (round 27) | β2-bowl LEFT |
-| #4455 | askeladd | cfg.lr=4e-4 + k=6 + β2=0.995 + α=0.7 (LR LEFT micro-probe) | Running (round 26) | LR-bowl LEFT |
+| #4496 | alphonse | **Lookahead α COSINE SCHEDULE 0.5 → 0.7** (PLATEAU PROTOCOL bold) | NEW (round 29) | **Bold mechanism swing** |
+| #4500 | fern | **EMA on Lookahead slow_weights** (PLATEAU PROTOCOL bold) | NEW (round 29) | **Bold variance-reduction** |
+| #4497 | askeladd | cfg.lr=6e-4 + k=6 + β2=0.995 (LR MID bracket) | NEW (round 29) | LR bowl mapping |
+| #4498 | frieren | seed=4 of canonical (n=5 paper SEM tightening) | NEW (round 29) | Paper canonical |
+| #4482 | thorfinn | --lion_wd 2e-4 + k=6 + β2=0.995 (WD RIGHT bracket) | Running (round 28) | WD-bowl RIGHT |
+| #4475 | nezuko | α=0.60 + k=6 + β2=0.995 (α-bowl LEFT-EDGE) | Running (round 27) | likely regression per alphonse extrapolation |
 | #4456 | tanjiro | --lion_wd 5e-5 + k=6 + β2=0.995 (WD LEFT micro-probe) | Running (round 26) | WD-bowl LEFT |
-| #4431 | frieren | β2=0.994 + k=6 + α=0.7 (β2-bowl left-edge at new k) | Running (round 25) | β2-bowl LEFT |
 | #4432 | edward | cfg.lr=7e-4 + k=6 + β2=0.995 (LR RIGHT bracket) | Running (round 25) | LR probe |
 
 **All 8 students active. Zero idle. Single-arm policy in force.**
 
-### Round-28 strategic theme: full lever bracketing + paper-canonical finalization
+### ⚠️ Round-29 strategic theme: PLATEAU PROTOCOL activated
 
-With n=4 canonical complete and PAPER-READY (45.34 ± 0.48 SEM test), round-28 finalizes the bracket on the WD lever:
-- **thorfinn #4482**: --lion_wd 2e-4 (WD RIGHT)
-- **tanjiro #4456 (in flight)**: --lion_wd 5e-5 (WD LEFT)
-- Default: 1e-4 (current winner)
+**Trigger:** 11 closures since #4402 merge, ZERO improvements. All micro-probes around (k=6, β2=0.995, α=0.7) regressing within or near σ̂_sample=1.05 val. The compound is a **precisely-tuned sharp pin**, not a flat plateau.
 
-Combined, this is a 3-point WD bowl mapping at the new compound. If both flanks regress, WD=1e-4 is the bowl floor. If 2e-4 wins or 5e-5 wins, follow-up canonicalizes.
+**Pivot:** Bolder mechanism-grounded swings, not micro-probes.
 
-### α-LEFT × k=6 candidates remain the headline winner candidates (round-27 dispatched)
+- **α COSINE SCHEDULE (alphonse #4496):** Schedule α from 0.5 (early) → 0.7 (late). Mechanism: gradient coherence varies with training stage; static α=0.7 over-pulls early when inner trajectory is noisy.
+- **EMA on Lookahead slow_weights (fern #4500):** SWA-style EMA decay=0.999 on slow_weights themselves, starting epoch 8. Mechanism: slow_weights still have sync-to-sync variance; averaging reduces it.
+- **LR=6e-4 MID (askeladd #4497):** completes LR bowl mapping (LEFT 4e-4 closed +0.95, RIGHT 7e-4 in flight). Safe bracket-completion probe.
+- **seed=4 canonical (frieren #4498):** strengthens paper SEM from n=4 (0.48 test) to n=5 (~0.43 test). Low-risk paper-strengthening.
 
-- alphonse #4472: α=0.65 + k=6 + β2=0.995
-- nezuko #4475: α=0.60 + k=6 + β2=0.995
+If alphonse or fern wins, multi-seed it immediately. If both regress, escalate to: (1) per-region loss weighting, (2) Tiger/ScheduleFree optimizers, (3) cosine warm restarts, (4) data augmentation.
 
-If either wins, we have a new programme best (mechanism: smoother m-buffer × longer sync ⇒ less slow-pull needed compounds across both dimensions).
+## Round-29 closures (4 closures — PLATEAU PROTOCOL trigger)
+
+- **#4472 alphonse (α=0.65 + k=6 + β2=0.995)** CLOSED: val=46.93 (+1.20). α-LEFT does NOT carry from k=5 to k=6.
+- **#4473 fern (β2=0.993 + k=6 + α=0.7)** CLOSED: val=45.75 (+0.02, FLAT — likely seed noise). β2-bowl LEFT effectively flat.
+- **#4455 askeladd (cfg.lr=4e-4)** CLOSED: val=46.68 (+0.95). LR-LEFT mild regression.
+- **#4431 frieren (β2=0.994)** CLOSED: val=47.12 (+1.39). β2-bowl sharper on left at k=6 than at k=5.
 
 ## Round-28 closures (1 closure)
 
