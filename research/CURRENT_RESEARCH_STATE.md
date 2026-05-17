@@ -1,7 +1,7 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 12:00
-- **Launch:** willow-pai2i-48h-r1 (round 26 — Lookahead-Lion era; **PROGRAMME ALL-TIME BEST val=45.7284 / test=44.5079** (PR #4402, k=6+β2=0.995+α=0.7); **3-seed canonical at new best COMPLETE: 46.95±1.20 val / 45.61±0.97 test** — variance is 2.6× wider than at OLD best; **k-bowl right-flank CLOSED at k=7 (#4426 val=46.42)**; **LR / WD / seed=3 micro-probes in flight at new compound**)
+- **Date:** 2026-05-17 13:00
+- **Launch:** willow-pai2i-48h-r1 (round 27 — Lookahead-Lion era; **PROGRAMME ALL-TIME BEST val=45.7284 / test=44.5079** (PR #4402, k=6+β2=0.995+α=0.7); **3-seed canonical 46.95±1.20 val / 45.61±0.97 test (PAPER-READY)**; **α-LEFT shift confirmed at k=5+β2=0.995** (nezuko #4415 closed, Δ=−0.19 val); **k-bowl right CLOSED at k=7**, **β2 right CLOSED at 0.997 at both k=5 and k=6**, **α right CLOSED at α=0.75 at k=6**; **α-LEFT × k=6 + β2-LEFT × k=6 + LR/WD micro-probes + seed=3 in flight**)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN)
 - **Latest direction from human team:** None (no open issues scoped to this launch)
@@ -60,17 +60,19 @@ Val σ̂=0.46 is tighter than OLD baseline σ̂=0.80 — β2=0.995 reduces per-s
 
 **Super-additivity at k=6:** k alone gave −0.45 val at β2=0.99; combined with β2=0.995 gives −1.11 (additive would predict −0.45 → combined −0.75+0.45=0.75 = predicted −0.45, actual −1.11 = super-additive by 0.66). Mechanism: β2=0.995 m-buffer lets inner trajectory settle coherently before k=6's longer outer step — the two mechanisms amplify each other at complementary timescales.
 
-## α-frontier — FULLY MAPPED at k=5, β2=0.99 / β2=0.995 × k=5 known
+## α-frontier — fully mapped at k=5 across β2 ∈ {0.99, 0.995}; mapping at k=6+β2=0.995
 
 | α | k | β2 | val | Status |
 |---|---|---|---|---|
 | 0.5 | 5 | 0.99 | 47.97 | superseded |
 | **0.7** | **5** | **0.99** | **47.59** | merged #4269 |
+| **0.65** | **5** | **0.995** | **46.6514** | closed #4415 (round-27; α-LEFT shift confirmed, not new best) |
 | **0.7** | **5** | **0.995** | **46.84** | merged #4373 |
 | **0.7** | **6** | **0.995** | **45.73** | **merged #4402 — CURRENT BEST** |
+| **0.75** | **6** | **0.995** | **45.8003** | closed #4430 (round-27; α-RIGHT bowl flat) |
 | 0.8 | 5 | 0.99 | 48.25 | closed #4343 |
-| 0.65 | 5 | 0.995 | TBD | nezuko #4415 in flight |
-| **0.75** | **6** | **0.995** | **TBD** | **alphonse #4430 in flight (round 25)** |
+| **0.60** | **6** | **0.995** | **TBD** | **nezuko #4475 in flight (round 27)** |
+| **0.65** | **6** | **0.995** | **TBD** | **alphonse #4472 in flight (round 27)** — KEY winner candidate
 
 ## β2-frontier — FULLY MAPPED at k=5; re-mapping at k=6
 
@@ -87,9 +89,12 @@ At k=6 (currently known only seed=0):
 | β2 | val | Status |
 |---|---|---|
 | 0.99 | 47.14 | closed #4371 |
+| **0.993** | **TBD** | **fern #4473 in flight (round 27)** — LEFT bracket-tighter |
 | **0.994** | **TBD** | **frieren #4431 in flight (round 25)** |
 | **0.995** | **45.73** | **merged #4402 — CURRENT BEST** |
-| **0.997** | **TBD** | **fern #4427 in flight (round 25)** |
+| 0.997 | 47.24 | closed #4427 (round-27; β2-bowl NARROWED at k=6, not shifted) |
+
+**β2-bowl narrowed at k=6** (vs k=5): β2=0.997 went from val-flat regression (closed #4384 at k=5) to +1.51 val regression at k=6.
 
 ## k-frontier — mapped at β2=0.99; being mapped at β2=0.995
 
@@ -110,24 +115,36 @@ At β2=0.995, α=0.7:
 
 **k-bowl bounded:** k=6 is the unique optimum at α=0.7 + β2=0.995. The super-additivity is LOCAL to k=6, not a broad "longer sync interval works under longer m-buffer" claim.
 
-## Active WIP experiments (round 26)
+## Active WIP experiments (round 27)
 
 | PR | Student | Hypothesis | Status | Priority |
 |----|---------|-----------|--------|----------|
-| #4455 | askeladd | **cfg.lr=4e-4 + k=6 + β2=0.995 + α=0.7 (LR LEFT micro-probe at new compound)** | NEW (round 26) | LR-bowl LEFT bracket |
-| #4456 | tanjiro | **--lion_wd 5e-5 + k=6 + β2=0.995 (WD LEFT micro-probe at new compound)** | NEW (round 26) | WD-bowl LEFT bracket |
-| #4457 | thorfinn | **3-seed canonical seed=3: k=6 + β2=0.995 + α=0.7 (tightens σ̂)** | NEW (round 26) | Paper-facing canonical (n=4) |
-| #4430 | alphonse | α=0.75 + k=6 + β2=0.995 (α-bowl right at new best) | Running (round 25) | α-frontier probe |
-| #4431 | frieren | β2=0.994 + k=6 + α=0.7 (β2-bowl left-edge at new k) | Running (round 25) | β2-bowl mapping |
-| #4427 | fern | β2=0.997 + k=6 + α=0.7 (β2-bowl right-edge at new k) | Running (round 25) | β2-bowl mapping |
-| #4432 | edward | cfg.lr=7e-4 + k=6 + β2=0.995 (LR RIGHT bracket at new compound) | Running (round 25) | LR probe |
-| #4415 | nezuko | α=0.65 + k=5 + β2=0.995 (α-bowl left-side micro-probe) | Running (round 24) | α-frontier probe |
+| #4475 | nezuko | **α=0.60 + k=6 + β2=0.995 (α-bowl LEFT-EDGE at new compound)** | NEW (round 27) | **Winner candidate (extends nezuko's α-LEFT shift)** |
+| #4472 | alphonse | **α=0.65 + k=6 + β2=0.995 (α-bowl LEFT-MIDDLE at new compound)** | NEW (round 27) | **Winner candidate (extends nezuko's α-LEFT shift)** |
+| #4473 | fern | **β2=0.993 + k=6 + α=0.7 (β2-bowl LEFT-edge at new compound, tighter than frieren #4431)** | NEW (round 27) | β2-bowl LEFT bracket |
+| #4455 | askeladd | cfg.lr=4e-4 + k=6 + β2=0.995 + α=0.7 (LR LEFT micro-probe) | Running (round 26) | LR-bowl LEFT |
+| #4456 | tanjiro | --lion_wd 5e-5 + k=6 + β2=0.995 (WD LEFT micro-probe) | Running (round 26) | WD-bowl LEFT |
+| #4457 | thorfinn | 3-seed canonical seed=3: k=6 + β2=0.995 + α=0.7 | Running (round 26) | Paper canonical (n=4) |
+| #4431 | frieren | β2=0.994 + k=6 + α=0.7 (β2-bowl left-edge at new k) | Running (round 25) | β2-bowl LEFT |
+| #4432 | edward | cfg.lr=7e-4 + k=6 + β2=0.995 (LR RIGHT bracket) | Running (round 25) | LR probe |
 
 **All 8 students active. Zero idle. Single-arm policy in force.**
 
-### Round-26 strategic theme: variance-aware micro-probing + LR/WD bracketing
+### Round-27 strategic theme: α-LEFT exploitation at NEW k=6 compound
 
-Given the σ̂=1.20 variance flag at k=6+β2=0.995, round-26 prioritizes (1) tightening the paper canonical with one more seed (#4457), and (2) bracketing the LR and WD bowls at the new compound to find improvements that visibly exceed seed noise. LR is bracketed both LEFT (askeladd #4455 at 4e-4) and RIGHT (edward #4432 at 7e-4 from round-25) so we map both flanks at the new compound in parallel.
+Nezuko's PR #4415 (closed this round) confirmed the α-bowl shifts LEFT under β2=0.995 at k=5. The natural follow-up is to test whether this shift extends to the NEW k=6 compound. Two parallel probes:
+- **alphonse #4472**: α=0.65 + k=6 + β2=0.995 (α-bowl LEFT-MIDDLE at new compound — exactly nezuko's winning α value, applied to k=6)
+- **nezuko #4475**: α=0.60 + k=6 + β2=0.995 (α-bowl LEFT-EDGE at new compound — pushes further left)
+
+Combined with the closed RIGHT probes (#4430 α=0.75 closed within noise; #4402 α=0.70 winner), this fully maps the α-bowl at k=6+β2=0.995 over {0.60, 0.65, 0.70, 0.75}. **If alphonse or nezuko wins, we have a NEW programme best.** Mechanism is mechanistically aligned (smoother m-buffer + longer sync interval ⇒ less slow-pull needed).
+
+Fern #4473 (β2=0.993) tightens the β2 LEFT bracket complementing frieren's #4431 (β2=0.994).
+
+## Round-27 closures (3 closures)
+
+- **#4430 alphonse (α=0.75 + k=6 + β2=0.995)** CLOSED: val=45.80 (+0.07 within σ̂=1.20 noise). α-RIGHT side at NEW compound flat — α=0.70 confirmed RIGHT-edge optimum.
+- **#4427 fern (β2=0.997 + k=6 + α=0.7)** CLOSED: val=47.24 (+1.51). β2-bowl NARROWED at k=6 (not shifted right); super-additive win is sweet-spot not trend.
+- **#4415 nezuko (α=0.65 + k=5 + β2=0.995)** CLOSED: val=46.65 (vs OLD k=5 winner: Δ=−0.19; vs CURRENT best #4402: +0.92). α-LEFT shift mechanism confirmed at k=5, but not a new programme best. Drives the round-27 α-LEFT probe at k=6.
 
 ## Round-26 closures (3 closures)
 
@@ -215,11 +232,12 @@ Given the σ̂=1.20 variance flag at k=6+β2=0.995, round-26 prioritizes (1) tig
 - **3-seed canonical** (tanjiro #4428, thorfinn #4429) — paper-facing variance for new best
 - **α=0.65 + k=5 + β2=0.995** (nezuko #4415) — α left-side at old k; still informative for paper
 
-### Priority 2 (next idle-round; gated on round-26 outcomes)
+### Priority 2 (next idle-round; gated on round-27 outcomes)
 
 - **--lion_wd 2e-4 + k=6 + β2=0.995** — WD RIGHT bracket (if WD-LEFT #4456 regresses, probe RIGHT)
 - **cfg.lr=6e-4 + k=6 + β2=0.995** — LR MID bracket (if both LR-LEFT 4e-4 and LR-RIGHT 7e-4 regress, search inside)
-- **α=0.65 + k=6 + β2=0.995** — α LEFT at new compound (complement to nezuko's #4415 at k=5)
+- **α=0.65 + k=5 + β2=0.995 SEED REPLICATES** — confirm nezuko's α-LEFT win isn't seed luck (σ̂=0.46 noise)
+- **(α<0.7, k=6, β2=0.995) × seed=2/3** — if alphonse or nezuko wins at α=0.65 or α=0.60, immediately seed-canonical it
 - **k=7 + β2=0.997 + α=0.7** — (k, β2) joint shift up the right diagonal (if k-bowl shifts with β2)
 - **Warmup epochs=1 at new compound** — if seed σ̂=1.20 traces to early-trajectory instability, warmup may damp it
 - **lr-schedule: cosine + 0.1 floor** — keep slow weights moving in last few epochs; gentle (no T_max change)

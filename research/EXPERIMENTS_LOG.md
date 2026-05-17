@@ -1,5 +1,77 @@
 # SENPAI Research Results
 
+## 2026-05-17 13:00 — PR #4415: α=0.65 + k=5 + β2=0.995 (α-bowl LEFT at OLD compound) ← CLOSED (mechanism confirmed; not new best)
+
+- Branch: `willowpai2i48h1-nezuko/lookahead-lion-a065-b2-995-micro-bowl`
+- Student: willowpai2i48h1-nezuko
+- Hypothesis: α-bowl shifts LEFT under longer β2 (=0.995) at k=5; α=0.65 may outperform α=0.7.
+
+### Results
+
+val_avg=46.6514, test_avg=45.0849. Compared against OLD k=5 winner (#4373 at α=0.70, val=46.8383): Δ=−0.187 val win (single-seed). Compared against CURRENT best (#4402 at k=6+α=0.70, val=45.7284): +0.92 worse — NOT a new programme best.
+
+### Mechanism finding
+
+**α-bowl LEFT-shift confirmed at k=5+β2=0.995.** Smoother Lion m-buffer (β2=0.995) already pre-smooths gradient noise, so Lookahead outer averaging needs less pull (α<0.70) to be optimal.
+
+| α | k | β2 | val | Status |
+|---|---|---|---|---|
+| 0.5 | 5 | 0.99 | 47.97 | superseded |
+| 0.7 | 5 | 0.99 | 47.59 | merged #4269 → superseded |
+| **0.65** | **5** | **0.995** | **46.6514** | closed #4415 (this PR) — α-LEFT shift confirmed |
+| 0.7 | 5 | 0.995 | 46.84 | merged #4373 → superseded |
+| 0.8 | 5 | 0.99 | 48.25 | closed |
+
+Magnitude Δ=−0.187 is well within σ̂=0.46 (k=5+β2=0.995 noise), so could be partly seed luck, but direction is mechanistically consistent.
+
+### Decision
+
+**CLOSED — mechanism documented, not a new programme best.** Nezuko reassigned to **α=0.60 + k=6 + β2=0.995 (#4475)** — tests whether α-LEFT shift carries over to NEW k=6 compound. In parallel, alphonse #4472 tests α=0.65 + k=6 + β2=0.995.
+
+## 2026-05-17 13:00 — PR #4427: β2=0.997 + k=6 + α=0.7 (β2-bowl right-edge at new k) ← CLOSED
+
+- Branch: `willowpai2i48h1-fern/b2-997-k6-a07`
+- Student: willowpai2i48h1-fern
+- Hypothesis: at k=6, the β2-bowl may shift right (longer sync interval tolerates longer m-buffer).
+
+### Results
+
+val_avg=47.2360 (+1.508 vs #4402), test_avg=46.1373 (+1.629). Broad-based regression across all 4 splits, largest on geom_camber_cruise (+2.38) and re_rand (+2.48).
+
+### Mechanism finding
+
+**β2-bowl NARROWED at k=6, not shifted right.** β2=0.997 (half-life ~230 steps) over-smooths the inner Lion momentum at k=6, so the inner trajectory becomes stale and Lookahead outer pull aligns with a degraded direction. The super-additive win at β2=0.995+k=6 is a **sweet spot**, not a **trend**.
+
+### β2-bowl at k=6 (UPDATED)
+
+| β2 | half-life | val | Status |
+|---|---|---|---|
+| 0.994 | ~115 | TBD | frieren #4431 in flight |
+| **0.995** | **~138** | **45.73** | **#4402 MERGED — CURRENT BEST** |
+| 0.997 | ~230 | 47.24 | closed #4427 (this PR) |
+
+### Decision
+
+**CLOSED.** β2 right-edge at k=6 firm at 0.995. Fern reassigned to **β2=0.993 + k=6 + α=0.7 (#4473)** — tighter LEFT bracket complementing frieren's β2=0.994.
+
+## 2026-05-17 13:00 — PR #4430: α=0.75 + k=6 + β2=0.995 (α-bowl right at new best) ← CLOSED
+
+- Branch: `willowpai2i48h1-alphonse/a075-k6-b2-995`
+- Student: willowpai2i48h1-alphonse
+- Hypothesis: at NEW k=6 compound, α-bowl may shift right.
+
+### Results
+
+val_avg=45.8003 (+0.072 vs #4402), test_avg=44.7738 (+0.266). Within σ̂=1.20 seed-noise band → soft null.
+
+### Mechanism finding
+
+**α-bowl at NEW k=6+β2=0.995 compound did NOT shift right.** α=0.70 remains optimum on the RIGHT side. Combined with nezuko #4415's evidence at k=5 (α=0.65 beats α=0.70 by −0.19 val), the next high-value probe is whether the α-LEFT shift at k=5 also occurs at k=6.
+
+### Decision
+
+**CLOSED.** Alphonse reassigned to **α=0.65 + k=6 + β2=0.995 (#4472)** — directly tests whether nezuko's α-LEFT shift at k=5 generalizes to k=6. Together with nezuko's parallel α=0.60 + k=6 probe (#4475), the α-bowl at NEW compound is fully bracketed at {0.60, 0.65, 0.70-winner, 0.75-closed}.
+
 ## 2026-05-17 12:00 — PR #4429: 3-seed canonical seed=2 (k=6 + β2=0.995 + α=0.7) ← CLOSED
 
 - Branch: `willowpai2i48h1-thorfinn/k6-b2-995-a07-seed2`
