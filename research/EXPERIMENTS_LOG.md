@@ -1850,3 +1850,34 @@ Per-split test (warmup=1): test_re_rand=23.7618, test_geom_camber_rc=39.2793, te
 **Cross-stack caveat:** val=31.1882 beats canonical 31.6653 (n_head=2/slice64) by −1.51%; test=32.0013 vs canonical test=31.502 (n_head=2/slice64) = +1.59% apparent regression. This cross-stack test comparison is confounded — the within-PR test delta is the clean signal (essentially flat). **warmup=1 + n_head=2 + slice32 is unmeasured and is the highest-priority follow-up.**
 
 **Decision: MERGED as 19th winner. New canonical val=31.1882, test=32.0013 (measured on warmup=1+slice32+n_head=4 stack).**
+
+---
+
+## 2026-05-17 12:23 — PR #4541 (thorfinn): slice_num finer sweep — **CLOSED (informative; strong test signal)**
+
+- Branch: `willowpai2i48h3-thorfinn/slice-num-finer-sweep`
+- W&B runs: `mlcvi650` (variant-slice24, terminal), variant-slice16 (interrupted at ep14/50 per advisor instruction; recorded as crashed/killed)
+- Stack: T_max=25, slice_num=24, **n_head=4 (default, pre-#4348)**, warmup=3, lr=2e-3
+
+**slice_num=24 terminal result:**
+
+| Metric | slice32 baseline (PR #4296) | slice24 (this PR) | Δ vs slice32 | vs 19th winner (val=31.1882) | vs 18th winner (val=31.6653) |
+|---|---|---|---|---|---|
+| val_avg/mae_surf_p | 31.9978 | **31.3233** | −2.11% | **+0.43% (worse)** | **−1.08% (better)** |
+| test_avg_excl_cruise | 32.017 | **31.4356** | −1.81% | **−1.77% (BETTER)** | −0.21% (tied) |
+| test_single_in_dist | 32.904 | 32.3208 | −1.77% | — | — |
+| test_geom_camber_rc | 39.102 | 38.4255 | −1.73% | — | — |
+| test_re_rand | 24.045 | 23.5604 | −2.01% | — | — |
+| best_epoch | 21 | 22 | — | — | — |
+
+**Analysis:** slice24 (n_head=4) shows a clear val/test divergence vs the 19th winner. **Test improves by −1.77% but val regresses by +0.43%.** The 19th winner (askeladd, warmup=1) wins val but loses test compared to slice24. The 18th winner (alphonse, n_head=2) loses both axes vs slice24. Mechanism: slice_num=24 produces coarser global attention groups (24 vs 32 vs 64) — well-matched to TandemFoilSet's regional flow physics; consistent across all three test splits (no single-split-dominated win).
+
+**Decision: CLOSED — does not beat current canonical val 31.1882 (primary metric is val). But this is the cleanest test signal observed in the slice/warmup region. Direction: assign follow-ups testing slice_num=24 + n_head=2 (PR #4600 thorfinn) and slice24 + warmup=1 (PR #4598 nezuko).**
+
+---
+
+## 2026-05-17 12:23 — Assignment: #4600 thorfinn slice24-nhead2-compound
+
+- Hypothesis: slice_num=24 + n_head=2 stacks coarsening on both axes. Both PR #4296 (slice32) and PR #4348 (n_head=2) used the same mechanism — coarser attention better matches flow physics — but on different axes.
+- Single arm: slice_num=24 + n_head=2 + warmup=3 + T_max=25 on canonical stack.
+- Expected: val ~31.0-31.3, test ~31.0-31.4.
