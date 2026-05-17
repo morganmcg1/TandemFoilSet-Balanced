@@ -32,6 +32,7 @@ import torch.nn.functional as F
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
+from torch.optim.swa_utils import AveragedModel, update_bn
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -436,6 +437,11 @@ def write_experiment_summary(
     test_avg: dict | None,
     n_params: int,
     model_config: dict,
+    swa_val_metrics: dict | None = None,
+    swa_val_avg: dict | None = None,
+    swa_test_metrics: dict | None = None,
+    swa_test_avg: dict | None = None,
+    swa_n_updates: int = 0,
 ) -> None:
     """Write a local summary next to the best checkpoint."""
     summary: dict = {
@@ -463,6 +469,23 @@ def write_experiment_summary(
             for split_name, m in test_metrics.items():
                 for k, v in m.items():
                     summary[f"test/{split_name}/{k}"] = v
+
+    if cfg.swa:
+        summary["swa"] = True
+        summary["swa_start_epoch"] = cfg.swa_start_epoch
+        summary["swa_n_updates"] = swa_n_updates
+    if swa_val_avg is not None and "avg/mae_surf_p" in swa_val_avg:
+        summary["swa_val_avg/mae_surf_p"] = swa_val_avg["avg/mae_surf_p"]
+        if swa_val_metrics is not None:
+            for split_name, m in swa_val_metrics.items():
+                for k, v in m.items():
+                    summary[f"swa_val/{split_name}/{k}"] = v
+    if swa_test_avg is not None and "avg/mae_surf_p" in swa_test_avg:
+        summary["swa_test_avg/mae_surf_p"] = swa_test_avg["avg/mae_surf_p"]
+        if swa_test_metrics is not None:
+            for split_name, m in swa_test_metrics.items():
+                for k, v in m.items():
+                    summary[f"swa_test/{split_name}/{k}"] = v
 
     summary_path = model_dir / "metrics.yaml"
     with open(summary_path, "w") as f:
@@ -601,6 +624,8 @@ class Config:
     T_max: int = 15  # CosineAnnealingLR period; default preserves prior behavior
     fourier_pe: bool = False   # Tancik Fourier PE on (x, z) coords (H106)
     fourier_pe_freqs: int = 8  # Number of log-spaced frequencies; adds 4*K features
+    swa: bool = False   # Stochastic Weight Averaging (Izmailov 2018) over final epochs (H121)
+    swa_start_epoch: int = 18  # 1-indexed; SWA collects swa_model after each epoch >= this
 
 
 cfg = sp.parse(Config)
@@ -672,6 +697,14 @@ else:
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
     optimizer, T_max=cfg.T_max, eta_min=cfg.eta_min
 )
+
+# SWA (Izmailov et al. 2018): track a running-average copy of `model` collected
+# once per epoch from `swa_start_epoch` onward. update_bn is a no-op for
+# LayerNorm-only models (returns early if no BatchNorm) but called anyway.
+swa_model = AveragedModel(model) if cfg.swa else None
+swa_n_updates = 0
+if cfg.swa:
+    print(f"SWA enabled: start_epoch={cfg.swa_start_epoch} (per-epoch averaging)")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -752,6 +785,12 @@ for epoch in range(MAX_EPOCHS):
     epoch_surf /= max(n_batches, 1)
     epoch_grad_norm_pre /= max(n_batches, 1)
 
+    # --- SWA: average the just-trained weights once per epoch ---
+    swa_active = swa_model is not None and (epoch + 1) >= cfg.swa_start_epoch
+    if swa_active:
+        swa_model.update_parameters(model)
+        swa_n_updates += 1
+
     # --- Validate ---
     model.eval()
     split_metrics = {
@@ -793,6 +832,10 @@ for epoch in range(MAX_EPOCHS):
         "T_max": cfg.T_max,
         "fourier_pe": cfg.fourier_pe,
         "fourier_pe_freqs": fourier_pe_freqs,
+        "swa": cfg.swa,
+        "swa_active": swa_active,
+        "swa_start_epoch": cfg.swa_start_epoch,
+        "swa_n_updates": swa_n_updates,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "gate_stats": gate_stats,
@@ -818,8 +861,9 @@ if best_metrics:
 
     test_metrics = None
     test_avg = None
+    test_loaders = None
     if not cfg.skip_test:
-        print("\nEvaluating on held-out test splits...")
+        print("\nEvaluating on held-out test splits (best non-SWA checkpoint)...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
@@ -840,6 +884,47 @@ if best_metrics:
             "test_splits": test_metrics,
         })
 
+    # SWA evaluation: averaged model over the last `swa_n_updates` epochs.
+    swa_val_metrics = swa_val_avg = None
+    swa_test_metrics = swa_test_avg = None
+    if swa_model is not None and swa_n_updates > 0:
+        print(f"\n[SWA] {swa_n_updates} weight averages collected; running update_bn (no-op for LayerNorm).")
+        update_bn(train_loader, swa_model, device=device)
+        swa_model_path = model_dir / "swa_checkpoint.pt"
+        torch.save(swa_model.module.state_dict(), swa_model_path)
+        swa_model.eval()
+
+        print("\n[SWA] Evaluating swa_model on val splits...")
+        swa_val_metrics = {
+            name: evaluate_split(swa_model, loader, stats, cfg.surf_weight, device, use_bf16=cfg.use_bf16)
+            for name, loader in val_loaders.items()
+        }
+        swa_val_avg = aggregate_splits(swa_val_metrics)
+        print(f"\n  SWA VAL  avg_surf_p={swa_val_avg['avg/mae_surf_p']:.4f}")
+        for name in VAL_SPLIT_NAMES:
+            print_split_metrics(name, swa_val_metrics[name])
+
+        if test_loaders is not None:
+            print("\n[SWA] Evaluating swa_model on test splits...")
+            swa_test_metrics = {
+                name: evaluate_split(swa_model, loader, stats, cfg.surf_weight, device, use_bf16=cfg.use_bf16)
+                for name, loader in test_loaders.items()
+            }
+            swa_test_avg = aggregate_splits(swa_test_metrics)
+            print(f"\n  SWA TEST  avg_surf_p={swa_test_avg['avg/mae_surf_p']:.4f}")
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(name, swa_test_metrics[name])
+
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "swa_eval",
+            "swa_start_epoch": cfg.swa_start_epoch,
+            "swa_n_updates": swa_n_updates,
+            "swa_val_avg": swa_val_avg,
+            "swa_val_splits": swa_val_metrics,
+            "swa_test_avg": swa_test_avg,
+            "swa_test_splits": swa_test_metrics,
+        })
+
     write_experiment_summary(
         model_path=model_path,
         model_dir=model_dir,
@@ -850,6 +935,11 @@ if best_metrics:
         test_avg=test_avg,
         n_params=n_params,
         model_config=model_config,
+        swa_val_metrics=swa_val_metrics,
+        swa_val_avg=swa_val_avg,
+        swa_test_metrics=swa_test_metrics,
+        swa_test_avg=swa_test_avg,
+        swa_n_updates=swa_n_updates,
     )
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping test evaluation.")
