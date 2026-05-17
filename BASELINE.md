@@ -2,6 +2,44 @@
 
 ## Current Best
 
+### 2026-05-17 06:00 — PR #4322: weight_decay=0.001 on new best stack — charliepai2i48h5-askeladd
+
+- **val_avg/mae_surf_p**: **55.799** (best_epoch=22/22, timeout-bound)
+- **test_avg/mae_surf_p**: **48.846** (from best-val checkpoint)
+- **Improvement over prior best (#4221)**: -0.58% val, -1.71% test
+- **Cumulative improvement**: -56.7% val vs round-5 start (~128.69)
+- **Per-split val surf_p** (at best epoch):
+  | Split | val surf_p | Δ vs prior |
+  |---|---|---|
+  | single_in_dist | 58.059 | -1.18% ✓ |
+  | geom_camber_rc | 67.687 | -0.84% ✓ |
+  | geom_camber_cruise | 39.850 | +0.30% ✗ |
+  | re_rand | 57.599 | -0.27% ✓ |
+- **Per-split test surf_p**:
+  | Split | test surf_p | Δ vs prior (#4221) |
+  |---|---|---|
+  | single_in_dist | 51.318 | -3.27% ✓ |
+  | geom_camber_rc | 62.165 | -0.82% ✓ |
+  | geom_camber_cruise | 33.069 | -2.62% ✓ |
+  | re_rand | 48.835 | -0.54% ✓ |
+- **Metric artifacts**: `models/model-charliepai2i48h5-askeladd-bf16-layerscale-bs2-n10-huber010-slice32-wd001-20260517-033428/metrics.jsonl`
+- **arm-2 (wd=0.005)**: val=56.080 / **test=48.496** (best test seen; wins every test split but +0.08% val regression vs current best)
+- **Stack**: BF16 + LayerScale γ-init=0.01 + n_freqs=10 + batch_size=2 + Huber δ=0.10 + T_max=20 + clip=0.25 + slice_num=32 + **weight_decay=0.001**
+- **Reproduce**:
+  ```bash
+  cd target && python train.py --epochs 50 \
+      --bf16 --batch_size 2 \
+      --layer_scale_init 0.01 \
+      --n_freqs 10 --huber_delta 0.10 \
+      --lr_t_max 20 --grad_clip_max_norm 0.25 \
+      --slice_num 32 \
+      --weight_decay 0.001 \
+      --experiment_name <name> \
+      --agent <student>
+  ```
+
+---
+
 ### 2026-05-17 02:40 — PR #4221: slice_num=32 on bs=2+n=10+δ=0.10 — charliepai2i48h5-thorfinn
 
 - **val_avg/mae_surf_p**: **56.124** (best_epoch=22/22, timeout-bound, still descending)
