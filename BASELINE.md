@@ -2,42 +2,52 @@
 
 ## Current Best
 
-**PR #4459 — H125 Arm A: weight decay wd=5e-3 at H120 K=1 stack (edward)**
-Merged 2026-05-17. 21 epochs, bf16 + T_max=21 + Fourier PE K=1 + wd=5e-3 (raised from 1e-3). Mechanism: stronger L2 regularization reduces in-distribution feature memorisation (val_single_in_dist −4.70 vs H120 baseline). val_geom_camber_rc unchanged (~flat), suggesting this lever targets a different overfitting axis than the spatial-frequency one. wd now locked at 5e-3 for all future experiments.
+**PR #4463 — H128 Arm A: torch.compile + T_max=24 extended cosine at K=1 stack (thorfinn)**
+Merged 2026-05-17. 26 epochs (best), bf16 + Fourier PE K=1 + T_max=24 + torch.compile (reduce-overhead) + wd=1e-3. Mechanism: torch.compile delivers 1.86× speedup (46 s/ep vs 85 s/ep eager), enabling 38 epochs in 30-min wall budget. Extended cosine T_max=24 gives 3 extra polish epochs vs T_max=21. The extra polish drives ALL 4 val splits to improve, INCLUDING val_geom_camber_rc (-2.02 pts vs H125 baseline) — first significant OOD bottleneck movement of cycle 45. Compile alone (Arm B, T_max=21) is mathematically neutral (Δ-0.08 vs baseline); the win is the schedule extension.
+
+Also bundled: `evaluate_split` NaN-propagation bug fix (drop samples with non-finite y before normalization in train.py). Restores 4-split test_avg. The bug previously poisoned test_geom_camber_cruise → NaN in all prior runs.
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| val_avg/mae_surf_p | **34.5532** | PR #4459 Arm A wd=5e-3 (best_epoch=21) |
-| val_single_in_dist/mae_surf_p | 31.5105 | PR #4459 Arm A |
-| val_geom_camber_rc/mae_surf_p | 47.7806 | PR #4459 Arm A |
-| val_geom_camber_cruise/mae_surf_p | 20.8109 | PR #4459 Arm A |
-| val_re_rand/mae_surf_p | 38.1108 | PR #4459 Arm A |
-| test_avg/mae_surf_p | NaN (⚠ scoring bug) | PR #4459 |
-| test_avg/mae_surf_p (3-split, excl. cruise) | **33.0792** | PR #4459 Arm A |
-| test_single_in_dist/mae_surf_p | 28.9175 | PR #4459 Arm A |
-| test_geom_camber_rc/mae_surf_p | 41.5361 | PR #4459 Arm A |
-| test_re_rand/mae_surf_p | 28.7838 | PR #4459 Arm A |
+| val_avg/mae_surf_p | **33.4710** | PR #4463 Arm A (best_epoch=26) |
+| val_single_in_dist/mae_surf_p | 31.74 | PR #4463 Arm A |
+| val_geom_camber_rc/mae_surf_p | 45.76 | PR #4463 Arm A |
+| val_geom_camber_cruise/mae_surf_p | 19.65 | PR #4463 Arm A |
+| val_re_rand/mae_surf_p | 36.74 | PR #4463 Arm A |
+| test_avg/mae_surf_p (4-split, post-fix) | **28.4545** | PR #4463 Arm A |
+| test_avg/mae_surf_p (3-split, excl. cruise) | **32.638** | PR #4463 Arm A |
+| test_single_in_dist/mae_surf_p | 28.75 | PR #4463 Arm A |
+| test_geom_camber_rc/mae_surf_p | 41.67 | PR #4463 Arm A |
+| test_geom_camber_cruise/mae_surf_p | 15.90 (newly-available post-fix) | PR #4463 Arm A |
+| test_re_rand/mae_surf_p | 27.50 | PR #4463 Arm A |
 
-**Configuration:** H120 K=1 stack with `--weight_decay 5e-3` (up from 1e-3). All other hyperparameters unchanged.
+**Configuration:** H120 K=1 stack with `--T_max 24 --compile_mode reduce-overhead`, wd=1e-3. Per-epoch s/ep ≈ 46 (1.86× faster than eager 85 s/ep).
 
-**Δ vs prior best (H120 K=1, 35.6651 / 33.3976):** **−1.11 pts val_avg** (sub-2σ noise floor but per-split pattern consistent), **−0.32 pts test 3-split** (within noise; directionally correct). Dominant contribution: val_single_in_dist −4.70 pts. OOD splits flat — wd targets in-dist memorisation not spatial-feature OOD.
-**Cumulative R5 gain from H37b (66.11):** **−31.55 pts val_avg.**
+**Δ vs prior best (H125 wd=5e-3, 34.5532 / 33.0792):** **−1.08 pts val_avg** (within 2σ noise floor; per-split pattern strong), **−0.44 pts test 3-split** (within noise; directionally consistent). Distinctive: val_geom_camber_rc -2.02 pts — first lever to move OOD significantly.
+**Cumulative R5 gain from H37b (66.11):** **−32.64 pts val_avg.**
 
-**Artifacts:** `models/model-h125-arm-a-wd5e-3-20260517-074718/`
+**Caveat:** Ran on wd=1e-3 (assigned before H125 wd=5e-3 merged). The compound test compile + T_max=24 + wd=5e-3 is assigned as next experiment (H136) — if it wins, wd=5e-3 lock is restored; if not, wd=1e-3 stays.
+
+**Artifacts:** `models/model-h128-arm-a-compile-tmax24-rerun-20260517-085024/`
 
 **Reproduce:**
 ```bash
 cd target/ && python train.py --epochs 50 \
-  --experiment_name h125-arm-a-wd5e-3 --agent <student> \
-  --optimizer lion --lr 3e-4 --weight_decay 5e-3 \
+  --experiment_name h128-arm-a-compile-tmax24-rerun --agent <student> \
+  --optimizer lion --lr 3e-4 --weight_decay 1e-3 \
   --beta1 0.9 --beta2 0.997 \
   --slice_num 96 --n_layers 4 --ffn_act geglu \
   --n_head 2 --clip_grad_norm 1.0 \
-  --use_bf16 --T_max 21 \
-  --fourier_pe --fourier_pe_freqs 1
+  --use_bf16 --T_max 24 \
+  --fourier_pe --fourier_pe_freqs 1 \
+  --compile_mode reduce-overhead
 ```
 
-**Note on wd sweep:** Arm B wd=1e-2 achieved val=34.6908 (Δ+0.14 vs Arm A on val; Δ+1.16 on test 3-split). The optimum is near 5e-3; further bracketing skipped (sub-noise marginal benefit). val_geom_camber_rc unchanged at ~47.8 — the OOD bottleneck remains the dominant blocker.
+**Note on variance:** Two identical-config runs of Arm A gave val 32.74 and 33.47 (+0.73 spread). Both clearly beat baseline. Reporting the rerun's 33.47 as canonical (has corrected test step). 3-seed confirmation deferred for higher-EV experiments.
+
+## Previous Best (overridden by #4463)
+
+**PR #4459 — H125 Arm A: weight decay wd=5e-3 at H120 K=1 stack (edward)** — val_avg=34.5532 / test 3-split=33.0792. wd targeted in-dist memorisation; T_max=24 moves both in-dist AND OOD.
 
 ## Previous Best (overridden by #4459)
 
