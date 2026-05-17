@@ -518,7 +518,14 @@ for epoch in range(MAX_EPOCHS):
             surf_mask = mask & is_surface
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
             surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-            loss = vol_loss + cfg.surf_weight * surf_loss
+            # Surface-only fine-tune in last few epochs: epoch is 0-indexed in range(MAX_EPOCHS).
+            # baseline reaches ~42 epochs in 30-min cap; switch at epoch>=37 for last ~5 fine-tune epochs.
+            SURF_FINETUNE_WEIGHT = 100.0
+            if epoch >= 37:
+                effective_surf_weight = SURF_FINETUNE_WEIGHT
+            else:
+                effective_surf_weight = cfg.surf_weight
+            loss = vol_loss + effective_surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
