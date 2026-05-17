@@ -580,6 +580,7 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
     use_bf16: bool = False   # Enable bf16 mixed-precision via torch.autocast (H95)
+    n_hidden: int = 128  # Transolver hidden dim; default=128 (baseline)
 
 
 cfg = sp.parse(Config)
@@ -618,7 +619,7 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=cfg.n_hidden,
     n_layers=cfg.n_layers,
     n_head=cfg.n_head,
     slice_num=cfg.slice_num,
