@@ -564,6 +564,7 @@ class Config:
     lion_betas: str = "0.9,0.99"  # Lion (beta1, beta2) as comma-separated floats
     seed: int = 0  # RNG seed for model init + data sampler; enables paired-arm reproducibility
     n_layers: int = 5  # number of TransolverBlock layers
+    slice_num: int = 64  # number of learnable physical slice tokens in PhysicsAttention
 
 
 cfg = sp.parse(Config)
@@ -602,7 +603,7 @@ model_config = dict(
     n_hidden=128,
     n_layers=cfg.n_layers,
     n_head=4,
-    slice_num=64,
+    slice_num=cfg.slice_num,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
