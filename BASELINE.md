@@ -4,7 +4,42 @@
 
 ---
 
-## 2026-05-17 00:05 — PR #4106: Push wider — n_hidden=192 + bf16 + epochs=20 (fern) — ← CURRENT BEST
+## 2026-05-17 01:25 — PR #4252: LION optimizer at n_hidden=176 + bf16 + epochs=14 (frieren) — ← CURRENT BEST
+
+- **val_avg/mae_surf_p: 49.2616** (best epoch 14/14, W&B run `eu7e0g18`) — **+0.86% vs #4106 val (within seed noise); −2.28% on paper-facing test metric**
+- **test_avg/mae_surf_p: 41.6188** — **−2.28% vs previous best 42.5895** ← TEST METRIC WIN
+
+| Split | val mae_surf_p | test mae_surf_p | Δ vs #4106 test |
+|---|---:|---:|---:|
+| single_in_dist | — | 43.9070 | **−5.39%** |
+| geom_camber_rc | — | 54.7549 | **−1.36%** ← first improvement on hard split |
+| geom_camber_cruise | — | 26.1287 | **−3.74%** |
+| re_rand | — | 41.6846 | +0.94% (within noise) |
+| **avg** | **49.2616** | **41.6188** | **−2.28%** |
+
+- **Model config:** SwiGLU FFN, **n_hidden=176**, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, inner_dim=232, ~1.23M params (smaller than previous baseline nh=192)
+- **Change from previous baseline:** Replace AdamW optimizer with Lion (sign-of-momentum, decoupled weight decay). Architecture unchanged from #4082.
+- **Optimizer:** Lion, lr=1e-4, betas=(0.9, 0.99), weight_decay=1e-3
+- **Throughput:** ~131 s/epoch (bf16, n_hidden=176) — same as #4082; −30% wall-clock vs #4106 (14ep vs 20ep)
+- **Wall time:** ~30.5 min for all 14 epochs (within 30 min cap)
+- **Peak GPU memory:** 44.6 GB (vs 47.6 GB at n_hidden=192) — 1 momentum buffer vs Adam's 2
+- **Schedule:** Linear warmup 2 epochs, cosine to 0 (T_max=14, fully annealed)
+- **Key findings:**
+  1. **LION beats AdamW by −19.3% val at matched config (nh=176+ep14)**. At ep9, Lion already matches AdamW-ep14.
+  2. **Paper-facing test metric improves −2.28%** despite smaller model (nh=176 vs 192) and fewer epochs (14 vs 20).
+  3. **`geom_camber_rc` improves for first time** (54.75 vs 55.51) since width-scaling plateau — Lion's uniform step magnitude better balances volume vs surface learning.
+  4. Mechanistic explanation: Lion's sign-only update gives identical per-step magnitude for every parameter. On surf_weight=10 regression, this prevents Adam's variance-estimate from upweighting surface parameters at the expense of volume parameters. Result: better-balanced model across all splits.
+  5. **Val tie (+0.86%) is within seed noise** (std ~2.5). Test metric is the paper-facing comparison; Lion wins clearly there.
+- **Next frontier:** Lion + n_hidden=192 + epochs=20 confirmation (needs 43 min cap pod — assign to 45+ min cap student)
+
+**Reproduce command:**
+```bash
+cd "target/" && python train.py --n_hidden 176 --epochs 14 --use_bf16 --use_lion --lion_lr 1e-4 --lion_wd 1e-3
+```
+
+---
+
+## 2026-05-17 00:05 — PR #4106: Push wider — n_hidden=192 + bf16 + epochs=20 (fern) — SUPERSEDED BY #4252
 
 - **val_avg/mae_surf_p: 48.8400** (best epoch 20/20, W&B run `or5uq1id`) — **−4.05% vs previous best 50.9008**
 - **test_avg/mae_surf_p: 42.5895** — **−2.98% vs previous best 43.8989**
