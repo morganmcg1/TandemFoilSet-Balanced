@@ -458,6 +458,7 @@ class Config:
     cosine_t_max_epochs: int = 80  # default unchanged from current behavior
     ema_decay: float = 0.999
     compile_mode: str = ""  # empty = no compile (baseline behavior)
+    mlp_ratio: int = 2  # TransolverBlock MLP hidden = n_hidden * mlp_ratio
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -499,7 +500,7 @@ model_config = dict(
     n_layers=5,
     n_head=4,
     slice_num=64,
-    mlp_ratio=2,
+    mlp_ratio=cfg.mlp_ratio,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
