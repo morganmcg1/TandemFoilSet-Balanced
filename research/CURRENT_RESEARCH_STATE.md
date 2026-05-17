@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-17 02:50Z — round 15 of `icml-appendix-charlie-pai2i-48h-r2`
+- 2026-05-17 04:50Z — round 15 of `icml-appendix-charlie-pai2i-48h-r2`
 - No active research directives from the human research team
 - **New baseline: val=38.6750** (PR #4243 askeladd slice_num=48 merged, −2.91% from 39.83)
 
@@ -47,27 +47,27 @@ cd target && python train.py --agent <student> \
 
 | PR | Student | Theme | Status | Baseline context |
 |----|---------|-------|--------|-----------------|
-| #4308 | alphonse | FFN dropout: p=0.05 (Arm A), p=0.10 (Arm B) in MLP blocks on slice=48 stack | WIP — NEW | #4235 closed; mlp-ratio throughput-bound; MLP over-driven per #4154 → regularize instead of expand |
-| #4327 | frieren | Huber loss: δ=1.0 (Arm A), δ=0.5 (Arm B) replacing MSE on 13-mech stack | WIP — NEW | #4287 closed; batch axis closed; loss formulation untouched axis — Huber caps gradient on large errors |
+| #4358 | alphonse | SwiGLU activation: gated MLP (SiLU gate) vs GELU on slice=48 stack | WIP — NEW | #4308 closed (ffn-dropout regresses); activation-form untested; Arm A param-matched (hidden×2/3), Arm B full hidden |
+| #4327 | frieren | Huber loss: δ=1.0 (Arm A), δ=0.5 (Arm B) replacing MSE on 13-mech stack | WIP | #4287 closed; batch axis closed; loss formulation untouched axis — Huber caps gradient on large errors |
 | #4295 | fern | Per-group LR: lr_attn_mult vs lr_other_mult to rebalance MLP/attn updates | WIP | #4237 closed; depth throughput-bound; MLP/attn 5× grad-norm imbalance (PR #4154) still unaddressed |
 | #4253 | edward | SGDR warm restarts: T_0=17 (Arm A), T_0=12 (Arm B) on 13-mech stack | WIP | #4181 closed (LR axis locked at 1.7e-4); val descending at timeout in every arm |
-| #4306 | askeladd | slice_num coarser: 40 (Arm A), 32 (Arm B) — below new baseline slice=48 | WIP — NEW | #4243 MERGED (slice=48 strong win); continue coarser direction; trend clear |
-| #4278 | nezuko | Attention dropout: p=0.05 (Arm A), p=0.10 (Arm B) in PhysicsAttention | WIP | New beat target: val < 38.675 after slice=48 merge |
-| #4273 | tanjiro | n_head sweep: 2 (Arm A), 8 (Arm B) vs current 4 on 13-mech stack | WIP | New beat target: val < 38.675 after slice=48 merge |
-| #4312 | thorfinn | SWA: stochastic weight averaging vs EMA on slice=48 stack | WIP — NEW | #4230 closed; weight-decay at optimum (wd=3e-4); SWA tests alternative model averaging |
+| #4306 | askeladd | slice_num coarser: 40 (Arm A), 32 (Arm B) — below new baseline slice=48 | WIP | #4243 MERGED (slice=48 strong win); continue coarser direction; trend clear |
+| #4278 | nezuko | Attention dropout: p=0.05 (Arm A), p=0.10 (Arm B) in PhysicsAttention | WIP | Testing OOD regularization on geom_camber_rc (hardest split, val=51.62) |
+| #4362 | thorfinn | Lookahead-Lion: slow/fast weight anchoring (k=5 Arm A, k=10 Arm B) on slice=48 | WIP — NEW | #4312 closed (SWA fails — SWALR stops learning); Lookahead preserves cosine schedule, adds trust-region anchoring |
+| #4365 | tanjiro | RMSNorm vs LayerNorm: modern normalization on slice=48 stack | WIP — NEW | #4273 closed (n_head mechanisms don't compound with slice=48); norm form untested |
 
-## Key open questions (round 15 — new baseline 38.675, slice_num=48 — PLATEAU PROTOCOL PARTIALLY LIFTED)
+## Key open questions (round 15 — new baseline 38.675, slice_num=48 — ACTIVE ESCALATION)
 
-**Plateau signal:** 5+ recent no_improvement experiments in a row (#4188, #4154, #4159, #4167, #4078, plus partial #4030). Per CLAUDE.md plateau protocol, escalating from pure hyperparameter sweeps to architectural changes.
+**Escalation status:** 6 consecutive no_improvement results since slice=48 merged (#4308 ffn-dropout, #4312 SWA, #4273 n_head v2, + earlier #4235 mlp-ratio, #4230 weight-decay, #4287 batch-size). Per plateau protocol, escalating to architectural changes: SwiGLU, RMSNorm, and optimizer meta-algorithms (Lookahead).
 
-1. **Does a mid-training LR reset (SGDR) escape the timeout-bound attractor?** (#4253 edward) — val descends in every arm at ep34; T_0=17 gives a second high-LR phase; T_0=12 gives nearly a full second cycle. Now on new slice=48 baseline.
-2. **Does SWA find flatter minima than EMA on the timeout-limited trajectory?** (#4312 thorfinn) — every arm shows val descending at cutoff; SWA averages later-epoch snapshots to find wider loss basin vs EMA's exponential tracking.
-3. **Do even coarser slices (32, 40) continue the slice_num winning trend?** (#4306 askeladd) — slice=48 strong win vs slice=64/96; val still descending at ep35; monotone coarser trend may continue.
-4. **Does FFN/MLP dropout regularize the over-driven MLP parameter group?** (#4308 alphonse) — MLP/other grad-norm ~5× attn (PR #4154); mlp-ratio expansion failed → MLP is over-absorbing, not under-parameterised; FFN dropout should correct this.
-5. **Does Huber loss outperform MSE on the asinh-compressed pressure + raw uxuy channels?** (#4327 frieren) — small-data regime (~36 train geometries) may have outlier samples pulling the loss; Huber caps gradient on large errors while preserving quadratic behaviour on the bulk.
-6. **Does per-group LR rebalancing address the MLP/attn update magnitude imbalance?** (#4295 fern) — Arm A reins in MLP (lr_other×0.5), Arm B boosts attn (lr_attn×2.0); Lion sign-update may mask the imbalance — critical test.
-7. **Does attention dropout (p=0.05, 0.10) reduce OOD over-fitting on geom_camber_rc?** (#4278 nezuko) — dominant val error is rc-camber split (51.62 on new baseline); now competing against tighter bar of 38.675.
-8. **Does n_head=2 or 8 outperform current n_head=4?** (#4273 tanjiro) — head_dim controls attention subspace rank; now on new slice=48 baseline where fewer tokens give different attention geometry.
+1. **Does SwiGLU gating improve over GELU in this timeout-limited PDE regime?** (#4358 alphonse) — modern transformer best practice, first clean test of activation function; Arm A param-matched (hidden×2/3), Arm B full-hidden gating.
+2. **Does Lookahead-wrapped Lion find better minima than plain Lion + EMA?** (#4362 thorfinn) — trust-region anchoring at step level (k=5 or k=10); preserves cosine schedule unlike SWA; hypothesis: Lion sign-noise + Lookahead slow weights compound.
+3. **Does RMSNorm outperform LayerNorm in this bf16, small-data regime?** (#4365 tanjiro) — simpler norm without mean centering; bf16-safer; used in LLaMA, Mistral, T5v1.1; normalization form completely untested axis.
+4. **Does a mid-training LR reset (SGDR) escape the timeout-bound attractor?** (#4253 edward) — val descends in every arm at ep34; T_0=17 gives a second high-LR phase; T_0=12 gives nearly a full second cycle.
+5. **Do even coarser slices (32, 40) continue the slice_num winning trend?** (#4306 askeladd) — slice=48 strong win vs slice=64/96; monotone coarser trend may continue.
+6. **Does Huber loss outperform MSE on the asinh-compressed pressure + raw uxuy channels?** (#4327 frieren) — small-data regime may have outlier geometries pulling the loss; Huber caps gradient on large errors.
+7. **Does per-group LR rebalancing address the MLP/attn update magnitude imbalance?** (#4295 fern) — Arm A reins in MLP (lr_other×0.5), Arm B boosts attn (lr_attn×2.0); Lion sign-update may mask the imbalance.
+8. **Does attention dropout (p=0.05, 0.10) reduce OOD over-fitting on geom_camber_rc?** (#4278 nezuko) — dominant val error is rc-camber split (51.62); regularization on the attention mechanism.
 
 ## 12-mechanism stack: full pipeline
 
@@ -130,24 +130,32 @@ cd target && python train.py --agent <student> \
 
 ## Potential next research directions
 
-- **T_max fine-sweep** — CLOSED as #4159 (frieren); T_max=35 regressed (+7.2%), T_max=50 null (+0.92%); T_max=40 optimal
-- **torch.compile mode sweep** — CLOSED as #4188 (alphonse); both modes regress; default optimal
-- **LR fine-sweep at T_max=40** — CLOSED as #4181 (edward); lr=1.5e-4 null (+1.4%), lr=2.0e-4 failure (+5.1%); lr=1.7e-4 locked
-- **EMA decay re-sweep** — CLOSED as #4029 (askeladd); 0.993 within noise + test regression; decay=0.995 locked
-- **MLP-ratio sweep** — CLOSED as #4235 (alphonse); both arms throughput-bound; monotone regression at all ratios; mlp_ratio=2 optimal → #4308 ffn-dropout
-- **FFN dropout** — IN PROGRESS as #4308 (alphonse); p=0.05/0.10 in Mlp blocks; regularizing over-driven MLP on slice=48 baseline
-- **Depth sweep** — CLOSED as #4237 (fern); throughput-bound AND no iso-epoch advantage; depth axis closed
-- **Per-group LR scaling** — IN PROGRESS as #4295 (fern); lr_attn×2.0 or lr_other×0.5; tests MLP/attn update-magnitude rebalancing
-- **Warmup-cosine** — CLOSED as #4236 (frieren); Arm A (warmup=2) val=41.28 (+3.6%), stop triggered; direction closed (2nd failure)
-- **Batch size sweep** — CLOSED as #4287 (frieren); failure: A (batch=8) val=45.26, B (batch=12) val=63.51; sub-linear time scaling + fewer gradient updates dominate; batch=4 locked → #4327 huber-loss
-- **Huber loss** — IN PROGRESS as #4327 (frieren); δ=1.0 (Arm A), δ=0.5 (Arm B) replacing MSE in train loss; tests outlier-robust gradient formulation on small-data regime
-- **SGDR warm restarts** — IN PROGRESS as #4253 (edward); T_0=17 and T_0=12 — mid-training LR reset
-- **Slice_num sweep** — MERGED as #4243 (askeladd); slice=48 STRONG WIN (val=38.675, test=33.495); new baseline established
-- **Slice_num coarser** — IN PROGRESS as #4306 (askeladd); slice_num=40 (Arm A), 32 (Arm B) — continuing winning coarser direction
-- **Velocity surface down-weighting** — CLOSED as #4030 (nezuko); null at lr=1.7e-4; axis closed
-- **Channel-decoupled heads** — CLOSED as #4061 (tanjiro); null; axis closed
-- **Attention dropout** — IN PROGRESS as #4278 (nezuko); p=0.05, 0.10 in PhysicsAttention; now targeting val < 38.675
-- **n_head sweep** — IN PROGRESS as #4273 (tanjiro); n_head=2 (head_dim=64) and n_head=8 (head_dim=16); now targeting val < 38.675
-- **Weight decay sweep** — CLOSED as #4230 (thorfinn); both arms stop condition; wd=3e-4 at optimum → #4312 SWA
-- **SWA (stochastic weight averaging)** — IN PROGRESS as #4312 (thorfinn); SWA from epoch 10/20 replacing EMA; tests flatter-minima averaging on timeout-limited trajectory
-- **SwiGLU gating** — CLOSED as #3734 (thorfinn); blocked on implementation, 3 attempts failed
+- **T_max fine-sweep** — CLOSED as #4159; T_max=40 optimal
+- **torch.compile mode sweep** — CLOSED as #4188; default mode optimal
+- **LR fine-sweep** — CLOSED as #4181; lr=1.7e-4 locked
+- **EMA decay** — CLOSED as #4029; decay=0.995 locked
+- **MLP-ratio sweep** — CLOSED as #4235; mlp_ratio=2 optimal
+- **FFN dropout** — CLOSED as #4308; MLP not over-fitting; noise hurts; axis closed → #4358 SwiGLU
+- **Depth sweep** — CLOSED as #4237; throughput-bound; axis closed
+- **Warmup-cosine** — CLOSED as #4236 (2nd failure); direction closed
+- **Batch size** — CLOSED as #4287; batch=4 locked with LR fixed
+- **Weight decay** — CLOSED as #4230; wd=3e-4 optimal
+- **SWA** — CLOSED as #4312; SWALR freezes learning; EMA superior in timeout-limited regime → #4362 Lookahead
+- **n_head sweep** — CLOSED as #4273 v2; n_head=4, head_dim=32, slice=48 is local optimum (strong n_head×slice interaction found); axis closed → #4365 RMSNorm
+- **Slice_num sweep** — MERGED as #4243 (slice=48 STRONG WIN)
+- **SwiGLU gating** — IN PROGRESS as #4358 (alphonse); Arm A param-matched, Arm B full hidden; first clean implementation
+- **Lookahead-Lion** — IN PROGRESS as #4362 (thorfinn); k=5 or k=10; trust-region anchoring
+- **RMSNorm** — IN PROGRESS as #4365 (tanjiro); Arm A all norms, Arm B pre-block only
+- **Huber loss** — IN PROGRESS as #4327 (frieren)
+- **SGDR warm restarts** — IN PROGRESS as #4253 (edward)
+- **Slice_num coarser** — IN PROGRESS as #4306 (askeladd); slice=40/32
+- **Attention dropout** — IN PROGRESS as #4278 (nezuko)
+- **Per-group LR** — IN PROGRESS as #4295 (fern)
+
+**Not yet tried (candidates for next round):**
+- Geometric data augmentation (rotation by AoA angle) — specifically targets geom_camber_rc bottleneck (val=51.62)
+- SAM (Sharpness-Aware Minimization) — if Lookahead fails, SAM is next optimizer meta-algorithm
+- GeGLU (GELU gate variant of SwiGLU) — if SwiGLU fails
+- Pre-norm vs post-norm positioning (current model norm ordering unchecked)
+- Conditional normalization / FiLM on Re_inf, AoA — physical conditioning axis untouched
+- Pressure-only surface loss enhancement — separate surf_uxuy_weight from surf_p_weight

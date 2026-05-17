@@ -1087,3 +1087,72 @@ Stop condition triggered (val > 41.0 threshold); Arm B (warmup=3) correctly not 
   3. **In-distribution split suffered most** (Arm B val_single_in_dist=92.1 vs baseline 43.7 = 2.1×) — pure undertraining signature, not generalization. With fewer updates the model never reaches the in-distribution basin.
   - Bonus: corrected a misconception in the PR body — `train_samples=1499` per config.yaml (not ~36 geometries per epoch); the ratio interpretation still holds.
 - **Decision:** CLOSED — failure on both arms. Batch axis closed at batch=4 with LR locked. Assigned frieren to huber-loss (#4327) — fresh loss-formulation axis, untested.
+
+---
+
+## 2026-05-17 04:45 — PR #4312: swa (thorfinn) — no_improvement → closed
+
+- **Student:** charliepai2i48h2-thorfinn
+- **Hypothesis:** Replace EMA(0.995) with SWA (Stochastic Weight Averaging, Izmailov et al. 2018) for inference-time model averaging. SWA averages epoch-scale weight snapshots via `torch.optim.swa_utils.AveragedModel` and `SWALR`. Arms: swa_start=20 (Arm A) vs swa_start=10 (Arm B).
+- **Results:**
+
+| Metric | Arm A (swa_start=20) | Arm B (swa_start=10) | Baseline (#4243, EMA) |
+|--------|---------------------|---------------------|------------------------|
+| **val_avg/mae_surf_p** | 44.0863 | 56.8770 | **38.6750** |
+| **test_avg/mae_surf_p** | 37.4775 | 49.4180 | **33.4948** |
+| val_single_in_dist | 49.9613 | 65.0115 | 42.1400 |
+| val_geom_camber_rc | 57.5383 | 72.0573 | 51.6180 |
+| val_geom_camber_cruise | 25.1708 | 35.4037 | 22.4830 |
+| val_re_rand | 43.6749 | 55.0357 | 38.4600 |
+| n_averaged at end | 15 | 25 | — |
+| Best epoch | 35 | 35 | 35 |
+| Sec/epoch | 51.5 | 51.5 | 51.7 |
+| Peak VRAM | 22.60 GB | 22.60 GB | 22.60 GB |
+| Metric artifacts | `models/model-charliepai2i48h2-thorfinn-swa-A-20260517-030608/metrics.jsonl` | `models/model-charliepai2i48h2-thorfinn-swa-B-20260517-034012/metrics.jsonl` | |
+
+- **Analysis:** Both arms catastrophically underperform. Root cause is visible in val trajectory: once SWA kicks in, SWALR drops to swa_lr=1e-6 (constant), effectively freezing learning. The averaged model is then averaging nearly-stagnant snapshots. The model is timeout-limited (val still descending at ep35), so any phase that stops descent wastes the budget. EMA's zero-overhead shadow tracking the ongoing descent is strictly superior here.
+- **Decision:** CLOSED — no_improvement. SWA direction closed. If revisited, correct approach: keep cosine schedule running, sample snapshots for ensemble at inference only (don't switch optimizer). Assigned thorfinn to Lookahead (#4362).
+
+---
+
+## 2026-05-17 04:45 — PR #4308: ffn-dropout (alphonse) — no_improvement → closed
+
+- **Student:** charliepai2i48h2-alphonse
+- **Hypothesis:** FFN/MLP dropout (p=0.05 Arm A, p=0.10 Arm B) after GELU activation in MLP blocks. Motivated by MLP/attn grad-norm imbalance (~5×). Hypothesis: MLP may be over-fitting.
+- **Results:**
+
+| Metric | Arm A (p=0.05) | Arm B (p=0.10) | Baseline (#4243) |
+|--------|----------------|----------------|------------------|
+| **val_avg/mae_surf_p** | 42.2636 | **42.0952** | **38.6750** |
+| **test_avg/mae_surf_p** | 36.0281 | 35.9161 | **33.4948** |
+| val_geom_camber_rc | 55.6878 | 58.0487 | 51.6180 |
+| val_re_rand | 42.3499 | 39.6849 | 38.4600 |
+| Best epoch | 34 | 34 | 35 |
+| Sec/epoch | 51.4 | 51.4 | 51.7 |
+| Peak VRAM | 23.84 GB | 23.84 GB | 22.60 GB |
+| Metric artifacts | `models/model-charliepai2i48h2-alphonse-ffn-dropout-A-20260517-025529/metrics.jsonl` | `models/model-charliepai2i48h2-alphonse-ffn-dropout-B-20260517-034055/metrics.jsonl` | |
+
+- **Analysis:** Dropout narrowed train/val gap slightly (0.021→0.016) but did so by hurting train loss more than it helped val. MLP is NOT over-fitting — adding noise uniformly degrades learning. Combined with PR #4235 (mlp-ratio closed), the MLP capacity is well-tuned. The 5× grad-norm imbalance reflects *signal dominance*, not over-fitting.
+- **Decision:** CLOSED — no_improvement. Regularization via FFN dropout closed. Assigned alphonse to SwiGLU (#4358) — testing gated activation as a cleaner MLP upgrade.
+
+---
+
+## 2026-05-17 04:45 — PR #4273: n-head-sweep v2 (tanjiro) — no_improvement → closed
+
+- **Student:** charliepai2i48h2-tanjiro
+- **Hypothesis (v2):** n_head=2 (from v1) + slice_num=48 (new baseline) compound. v1 showed n_head=2 (head_dim=64) nearly tied the old baseline (val=38.77 vs 39.83) and beat the new test baseline (test=33.23 vs 33.49). v2 tested whether slice=48 + n_head=2 stack.
+- **Results:**
+
+| Metric | v1 Arm A (slice=64, n_head=2) | v2 Arm A (slice=48, n_head=2) | Baseline (slice=48, n_head=4) |
+|--------|-------------------------------|-------------------------------|-------------------------------|
+| **val_avg/mae_surf_p** | 38.7712 | 40.7324 | **38.6750** |
+| **test_avg/mae_surf_p** | 33.2295 | 35.2262 | **33.4948** |
+| val_single_in_dist | 40.3896 | 45.3103 | 42.1400 |
+| val_geom_camber_rc | 53.5892 | 53.8120 | 51.6180 |
+| Best epoch | 37 | 38 | 35 |
+| Sec/epoch | 49.0 | 47.4 | 51.7 |
+| Peak VRAM | 21.30 GB | 20.68 GB | 22.60 GB |
+| Metric artifacts | `models/model-charliepai2i48h2-tanjiro-n-head-sweep-A-20260517-013708/metrics.jsonl` | `models/model-charliepai2i48h2-tanjiro-n-head-sweep-v2-A-20260517-033402/metrics.jsonl` | |
+
+- **Analysis:** Clear interaction effect: n_head=2 (head_dim=64) needs the spatial resolution of slice=64 to compensate for fewer attention heads. At slice=48 (coarser), two heads with head_dim=64 cannot resolve the attention patterns. The baseline n_head=4, head_dim=32, slice_num=48 is a local optimum on the head_count×slice_num interaction grid. single_in_dist degraded most (40→45), confirming the attention shape mismatch hurts basic learning capacity.
+- **Decision:** CLOSED — no_improvement. n_head direction fully closed. Assigned tanjiro to RMSNorm (#4365) — orthogonal normalization-layer axis.
