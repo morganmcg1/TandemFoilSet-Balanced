@@ -447,6 +447,42 @@ class EMA:
         self.backup = None
 
 
+def y_mirror_batch(x: torch.Tensor, y: torch.Tensor, p_mirror: float):
+    """Y-mirror augmentation. Flips per-sample with Bernoulli(p_mirror).
+
+    Exact symmetry of incompressible Navier-Stokes: (y -> -y, u_y -> -u_y,
+    AoA -> -AoA, stagger -> -stagger) maps any solution to another valid
+    solution of the same equations.
+
+    Flips per-sample: pos-y (idx 1), saf-y (idx 3, directional — confirmed
+    by 0.99 correlation with pos_y), AoA0 (idx 14), AoA1 (idx 18),
+    stagger (idx 23), and target u_y (idx 1).
+
+    Left unflipped: pos-x (idx 0), saf-x (idx 2), dsdf (idx 4:12,
+    non-negative distance magnitudes), is_surface, log_Re, NACA codes
+    (camber sign not encoded — see PR for rationale), gap.
+    """
+    B = x.shape[0]
+    do_mirror = (torch.rand(B, device=x.device) < p_mirror)
+    if not do_mirror.any():
+        return x, y
+    sign = torch.where(
+        do_mirror,
+        torch.full((B,), -1.0, device=x.device, dtype=x.dtype),
+        torch.ones(B, device=x.device, dtype=x.dtype),
+    )
+    sign2 = sign.view(B, 1)
+    x_out = x.clone()
+    y_out = y.clone()
+    x_out[..., 1] = x[..., 1] * sign2     # pos y
+    x_out[..., 3] = x[..., 3] * sign2     # saf y-component (directional)
+    x_out[..., 14] = x[..., 14] * sign2   # AoA0
+    x_out[..., 18] = x[..., 18] * sign2   # AoA1
+    x_out[..., 23] = x[..., 23] * sign2   # stagger
+    y_out[..., 1] = y[..., 1] * sign2     # u_y target
+    return x_out, y_out
+
+
 @dataclass
 class Config:
     lr: float = 1.7e-4
@@ -459,6 +495,7 @@ class Config:
     ema_decay: float = 0.999
     compile_mode: str = ""  # empty = no compile (baseline behavior)
     slice_num: int = 64
+    y_mirror_prob: float = 0.0   # per-sample Y-mirror augmentation probability
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -512,6 +549,7 @@ if cfg.compile_mode:
     model = torch.compile(model, mode=_mode, dynamic=True)
     print(f"Model compiled with mode={cfg.compile_mode!r}")
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+print(f"Y-mirror augmentation: p={cfg.y_mirror_prob:.2f} | saf_y_flipped=True | dsdf_flipped=False")
 
 optimizer = Lion(model.parameters(), lr=cfg.lr, betas=(0.9, 0.99), weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.cosine_t_max_epochs)
@@ -554,6 +592,9 @@ for epoch in range(MAX_EPOCHS):
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        if cfg.y_mirror_prob > 0.0:
+            x, y = y_mirror_batch(x, y, p_mirror=cfg.y_mirror_prob)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
