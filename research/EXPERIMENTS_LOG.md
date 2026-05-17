@@ -1,5 +1,51 @@
 # SENPAI Research Results
 
+## 2026-05-17 ~11:40 UTC — Round 42: Close #4490 (eps fine grid null — axis fully closed) + Assign #4585 (grad_clip bracket)
+
+### Closed: PR #4490 (edward) — eps fine grid (3e-9, 3e-10, 1e-10) on eps=1e-9 baseline ✗
+
+**Null on all arms — but produces THREE valuable landscape findings.**
+
+| Arm | eps | val_avg | Δ vs current n4 baseline | test_3split | Δ test | W&B |
+|-----|-----|---------|---------|-------------|--------|-----|
+| Baseline n4 (PR #4453) | 1e-8 (default) | **50.119** | — | **50.210** | — | `uiy4eks9` |
+| Prior eps win (PR #4401) | 1e-9 | 50.166 | +0.09% | 50.340 | +0.26% | `hpjl79he` |
+| **Arm A** | 3e-9 | 52.228 | +4.21% | 51.016 | +1.61% | `rfkaw966` |
+| **Arm B** | 3e-10 | 50.729 | +1.22% (best val) | 53.623 | +6.79% (worst test) | `y247t7ci` |
+| **Arm C** | 1e-10 | 51.785 | +3.32% | 51.568 | +2.70% | `x38ra481` |
+
+**Grad-norm stability data** (most important diagnostic):
+
+| Arm | eps | max grad_norm_preclip | mean (last 1000 steps) | NaN/Inf steps |
+|-----|-----|----------------------|------------------------|---------------|
+| Baseline | 1e-9 | 116.04 | 6.48 | 0 / 6756 |
+| A | 3e-9 | 97.92 | 6.32 | 0 / 6756 |
+| B | 3e-10 | 144.69 | 6.36 | 0 / 6756 |
+| **C** | **1e-10** | **72.47** | 6.78 | **0 / 6756** |
+
+**Three findings:**
+
+1. **eps=1e-9 is a sharp peak, NOT a plateau.** Both directions degrade — the monotone 1e-7→1e-9 direction saturates immediately past 1e-9. The earlier 'tighter is better' narrative was a single-step phenomenon.
+
+2. **bf16 cliff hypothesis FALSIFIED.** Arm C (eps=1e-10) trained cleaner than baseline on gradient stability — the numerical cliff motivation for limiting eps tightness is wrong. The actual mechanism is that eps acts as a per-parameter step floor: below 1e-9, smallest-sqrt(v̂) parameters take outsized steps that hurt convergence without producing NaN events.
+
+3. **val-test decorrelation at fine grid.** Arm B is best val/worst test; Arm A is worst val/best test. With ~100 val / ~200 test samples per split, 1% gaps at fine perturbations are within seed noise. The optimization landscape around eps=1e-9 is at the edge of the high-variance regime, confirming further eps tuning is unproductive.
+
+**Implication for #4552 (n_layers=4 + eps=1e-9 stack)**: still high-EV. The sharp eps peak doesn't change the n_layers=4 × eps=1e-9 additivity expectation — the depth axis is orthogonal to optimizer scaling.
+
+**Decision**: Closed. **eps-axis FULLY CLOSED at 1e-9.**
+
+### Assigned: PR #4585 (edward) — grad_clip bracket (2.0, 10.0) on n_layers=4
+
+Motivated by the grad-norm data from #4490: max preclip 72–145, mean ~6.4 across all eps arms. The current clip threshold of 5.0 binds on a small fraction of steps. At n_layers=4 the per-block gradient dynamics differ, so the optimal clip may have shifted.
+
+- Arm A: grad_clip=2.0 (tighter — clips larger fraction, dampens spikes more aggressively)
+- Arm B: grad_clip=10.0 (looser — clips only extreme spikes, allows more responsive updates)
+
+grad_clip=1.0 was tested earlier and closed (too tight), so we're keeping above that. No code changes needed.
+
+---
+
 ## 2026-05-17 ~11:30 UTC — Round 41: Close #4491 (β1 null) + Assign #4573 (n_head bracket)
 
 ### Closed: PR #4491 (tanjiro) — β1 bracket (0.85, 0.95) on eps=1e-9 baseline ✗

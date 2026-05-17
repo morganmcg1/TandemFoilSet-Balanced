@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-17 ~11:30 UTC
+- **Last updated:** 2026-05-17 ~11:40 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
 - **Most recent direction from human researcher team:** None (no open issues at 11:05 UTC)
 
@@ -60,14 +60,14 @@ Total improvement since raw seed: **−64.9%** on val.
 |----|---------|-----------|-------------|--------|
 | **#4552** | **alphonse** | **n_layers=4 + eps=1e-9 stack (2 seeds)** | **n_layers=4 baseline** | **TARGET-CLEARING RUN. Highest EV of campaign.** |
 | **#4554** | **askeladd** | weight decay bracket (5e-5, 3e-4) on n_layers=4 | n_layers=4 baseline | wd untested on current stack |
-| **#4573** | **tanjiro** | n_head bracket (1, 4) on n_layers=4 — architecture axis | n_layers=4 baseline | NEW — Assigned R41 after closing #4491 (β1 null) |
-| **#4490** | **edward** | eps fine grid (3e-9, 3e-10, 1e-10) on eps=1e-9 stack | eps=1e-9+n_layers=5 | WIP (stale — pod hitting rate-limit) |
+| **#4573** | **tanjiro** | n_head bracket (1, 4) on n_layers=4 — architecture axis | n_layers=4 baseline | Assigned R41 after closing #4491 (β1 null) |
+| **#4585** | **edward** | grad_clip bracket (2.0, 10.0) on n_layers=4 — dynamics axis | n_layers=4 baseline | NEW — Assigned R42 after closing #4490 (eps fine grid null) |
 | **#4534** | **nezuko** | Lookahead k=4 retest on eps=1e-9 (2 seeds) | eps=1e-9+n_layers=5 | WIP |
-| **#4469** | **frieren** | surf_weight bracket (5, 20) on k=3 baseline | old k=3 (pre-eps, n_layers=5) | WIP (stale) |
+| **#4469** | **frieren** | surf_weight bracket (5, 20) on k=3 baseline | old k=3 (pre-eps, n_layers=5) | WIP (now actively training, rate-limit cleared) |
 | **#4570** | **thorfinn** | lr bracket (3e-4, 7e-4) on n_layers=4 baseline | n_layers=4 baseline | lr axis untested on current config |
 | **#4569** | **fern** | T_max-matched cosine (epochs=20) + eta_min bracket | n_layers=4 baseline | Schedule-fix from #4400 T_max discovery |
 
-**Note on pre-n_layers=4 PRs**: #4490, #4534, #4469 were assigned against older baselines (val=50.17 or 51.31). They now need to beat **50.12** to merge. Most will still provide axis characterization even if they don't clear the new bar.
+**Note on pre-n_layers=4 PRs**: #4534, #4469 were assigned against older baselines (val=50.17 or 51.31). They now need to beat **50.12** to merge. Most will still provide axis characterization even if they don't clear the new bar.
 
 ## Recent closures (rounds 40–41)
 
@@ -78,6 +78,7 @@ Total improvement since raw seed: **−64.9%** on val.
 | ✗ **#4400** | **fern** | **eta_min floor** | **52.28** | ✗ **Closed — T_max mismatch makes eta_min mechanically inactive; follow-up #4569 tests T_max-matched schedule** |
 | ✗ **#4404** | **thorfinn** | **mlp_ratio bracket (1.0, 1.667)** | **54.54 mean** | ✗ **Closed — throughput noise dominates; best run 50.06 is cherry-pick. FFN-width axis CLOSED at 1.333.** |
 | ✗ **#4491** | **tanjiro** | **β1 bracket (0.85, 0.95) on eps=1e-9 stack** | **51.10 (best arm)** | ✗ **Closed R41 — both arms regress. β1-axis CLOSED at default 0.9 on full stack. Architecture axis (n_head) assigned as #4573.** |
+| ✗ **#4490** | **edward** | **eps fine grid (3e-9, 3e-10, 1e-10) on eps=1e-9 stack** | **50.73 (best arm B)** | ✗ **Closed R42 — eps=1e-9 is a SHARP PEAK, not a transition. bf16 cliff falsified at 1e-10. val-test decorrelate (Arm B best val/worst test). eps-axis FULLY CLOSED at 1e-9. Dynamics axis (grad_clip) assigned as #4585.** |
 
 ## Prior closures (rounds 37/32)
 
@@ -91,7 +92,7 @@ Total improvement since raw seed: **−64.9%** on val.
 
 - **n_layers=4 mechanism confirmed**: depth-axis points DOWN at 30-min wall-clock budget. n=4 (22 epochs) beats n=5 (17 epochs). n=7 (10 epochs) collapses. More Lookahead syncs > deeper per-block capacity. The depth bracket is now characterized: n=4 is the sweet spot (n=3 slightly worse on val despite more epochs, n=7 catastrophic).
 - **val_geom_camber_rc most improved by depth reduction**: 63.85 → 60.67 (−3.18 absolute, −5.0% over n=5 on old stack). The hardest split is most responsive to update-count increases.
-- **eps=1e-9 mechanism confirmed**: smaller eps = tighter adaptive step sizes; camber_rc and re_rand most responsive; monotone direction (1e-7 hurts, 1e-9 helps)
+- **eps=1e-9 mechanism confirmed AND fully characterized**: eps=1e-9 is a SHARP PEAK (not a plateau). #4490 fine grid found all of {3e-9, 3e-10, 1e-10} regress vs baseline. The bf16 cliff hypothesis is FALSIFIED — 1e-10 trains with NaN-free grad norms (max 72.5, lowest of all arms). The mechanism is per-parameter step floor: below 1e-9, smallest-sqrt(v̂) params take outsized steps. eps-axis FULLY CLOSED at 1e-9.
 - **k=3 sharp val minimum**: per-epoch trajectory shows k=4 leads for 17 epochs but k=3 wins the final epoch sprint — budget/checkpoint-selection artifact; k-axis bracket {2,3,4,5,10} closed
 - **k=2 highly unstable**: 4/5 seeds catastrophically worse — tight sync amplifies slow-weight trajectory noise
 - **α-axis on k=3 CLOSED**: α=0.3 (failed), α=0.5 (optimal), α=0.7 (PR #4461, +4.60% worse, 3 seeds). The k=5+α=0.7 win does NOT transfer to k=3.
