@@ -1457,3 +1457,33 @@ Stop condition triggered (val > 41.0 threshold); Arm B (warmup=3) correctly not 
 - **Primary target split:** `val_re_rand` (unseen Reynolds numbers at test time).
 - **Secondary target:** `val_geom_camber_rc` via shared Re-channel generalization.
 - **Implementation:** ~6 lines post x_norm computation, before model forward, channel 13 only.
+
+---
+
+## 2026-05-17 09:40 — PR #4454: Token-space input feature noise — CLOSED (no_improvement)
+
+- **Branch:** charliepai2i48h2-edward/feature-noise
+- **Hypothesis:** Gaussian noise on normalized input features x_norm (Tikhonov regularization proxy): σ=0.02 (A), σ=0.05 (B). All channels except is_surface (ch12) perturbed.
+- **Metric artifacts:** `models/model-charliepai2i48h2-edward-feature-noise-A-20260517-074041/metrics.jsonl`, `models/model-charliepai2i48h2-edward-feature-noise-B-20260517-083914/metrics.jsonl`
+
+| Metric | Baseline (#4243 old / #4358 new) | Arm A (σ=0.02) | Arm B (σ=0.05) |
+|--------|----------------------------------|----------------|----------------|
+| **val_avg/mae_surf_p** | **38.675 / 36.5616** | 40.5952 (+4.97% vs old) | 44.0018 (+13.7% vs old) |
+| **test_avg/mae_surf_p** | **33.4948** | 34.8080 (+4.8%) | 37.2817 (+11.3%) |
+| val_geom_camber_rc | 51.62 | 54.18 (+4.97%) | 55.46 (+7.4%) |
+| val_re_rand | 38.46 | 40.98 (+6.5%) | 43.02 (+11.9%) |
+| Per-epoch time | 51.7 s | 51.6 s | 51.6 s |
+
+- **Train/val signature:** Arm B raised train loss (confirmed noise reaches loss) but ALSO raised val. Expected Tikhonov signature (train up, val down) NOT observed.
+- **Root cause (student's excellent diagnosis):** Gaussian noise on x_norm is still point-wise (added independently per point). The routing operator `softmax(W·x / τ)` can learn to be invariant to isotropic input noise. "Token-space diversity" requires perturbing the ROUTING LOGITS, not the routing input.
+- **Decision:** CLOSED — no_improvement. Monotone degradation: σ=0 < σ=0.02 < σ=0.05. Feature-noise direction definitively closed. → edward reassigned to #4528 slice-routing-noise (perturb routing logits directly).
+
+---
+
+## 2026-05-17 09:45 — New assignment: edward #4528 slice-routing-noise
+
+- **Branch:** charliepai2i48h2-edward/slice-routing-noise
+- **Hypothesis:** Gaussian noise on PhysicsAttention slice routing LOGITS (after temperature division, before softmax). Directly implements the student's own suggested follow-up from #4454 — diversifies slice assignments at training time, forcing routing-robust representations.
+- **Two arms:** Arm A σ=0.10 (mild logit perturbation); Arm B σ=0.30 (stronger routing diversity).
+- **Primary target split:** `val_geom_camber_rc` (OOD bottleneck; novel geometries should benefit from routing robustness).
+- **Implementation:** ~10 lines: Config field, modify PhysicsAttention.forward logits computation, set `module.slice_noise_std` attribute post model creation.

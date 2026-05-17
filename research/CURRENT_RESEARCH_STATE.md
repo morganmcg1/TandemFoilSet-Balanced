@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-17 09:25Z — round 15 of `icml-appendix-charlie-pai2i-48h-r2`
+- 2026-05-17 09:50Z — round 15 of `icml-appendix-charlie-pai2i-48h-r2`
 - No active research directives from the human research team
 - **NEW BASELINE: val=36.5616** (PR #4358 alphonse SwiGLU Arm A merged, −5.47% from 38.675) — 14-experiment plateau broken
 
@@ -54,7 +54,7 @@ cd target && python train.py --agent <student> \
 | #4499 | tanjiro | Y-mirror v2: post-norm bias correction `x_norm[k]=-x_norm[k]-2·mean/std`; Arm A full flip, Arm B geom-only | WIP — NEW | #4433 closed (normalization bug — disjoint distributions in normalized space); hypothesis physically valid; v2 fixes the bug |
 | #4477 | alphonse | GeGLU / BilinearGLU: ablate SwiGLU gate mechanism (GELU gate A, bilinear B) | WIP | #4358 MERGED (SwiGLU wins); ablate whether SiLU gate or gating structure drives gain |
 | #4435 | thorfinn | LayerScale (CaiT): per-channel learnable residual gating γ_init=1e-4 (A) / 1e-2 (B) | WIP — REBASING (rebase onto SwiGLU baseline) | #4362 closed (Lookahead triple-smoothing failure); architecture axis — how much each block contributes |
-| #4454 | edward | Token-space input feature noise: Gaussian σ=0.02 (A), σ=0.05 (B) on x_norm during training | WIP | #4403 closed (Fourier convergence-budget hit); direct response to slice-routing token-space diagnostic; zero param cost |
+| #4528 | edward | Slice-routing noise: Gaussian σ=0.10 (A) / σ=0.30 (B) on PhysicsAttention logits before softmax | WIP — NEW | #4454 CLOSED (feature-noise point-wise, routing absorbs it); direct attack on routing logit space per student's own diagnosis |
 | #4514 | frieren | Re-jitter: physics-meaningful Gaussian noise on log(Re) ch13, σ=0.05 (A) / σ=0.15 (B) | WIP — NEW | #4405 CLOSED (4th regularization-family failure confirms stack NOT reg-limited); physics pivot: Re-dimension augmentation targets val_re_rand directly |
 
 ## Key open questions (round 15 — NEW baseline 36.5616 after SwiGLU win)
@@ -68,7 +68,7 @@ cd target && python train.py --agent <student> \
 1. **Does GELU gate (GeGLU) match SwiGLU, or does bilinear gating alone suffice?** (#4477 alphonse) — SwiGLU MERGED; now ablating GELU gate (Arm A) vs identity gate (Arm B, bilinear); tests if SiLU is essential or if any multiplicative gating works.
 2. **Does gradient noise injection (σ=0.01/0.03) improve OOD generalization?** (#4487 askeladd) — Neelakantan 2015: gradient noise finds flat minima, improves generalization; parameter-space noise is orthogonal to all other active experiments; targets camber_rc OOD bottleneck.
 3. **Does input channel-level dropout (p=0.10/0.20) force OOD feature robustness?** (#4501 fern) — stochastic masking of entire input channels to zero; forces model to not over-rely on any single feature (NACA, AoA) when OOD; different from edward's continuous noise: discrete absence vs perturbation. Loss-weighting axis closed → new input-regularization axis.
-4. **Does token-space input feature noise help where point-space augmentation cannot?** (#4454 edward) — Gaussian σ=0.02 (A) or σ=0.05 (B) on x_norm during training; zero param cost; direct response to slice-routing-invariance diagnostic from #4377.
+4. **Does slice-routing logit noise force routing-robust representations?** (#4528 edward) — Gaussian σ=0.10 (A) / σ=0.30 (B) injected directly onto PhysicsAttention routing logits (after τ division, before softmax); attacks routing output not routing input; #4454 showed feature-noise on x_norm is absorbed by routing operator; this is the correct level of intervention per the #4377 diagnostic.
 5. **Does forcing a fixed slice-routing temperature outperform the learnable τ?** (#4458 nezuko) — frozen τ=0.25 (A, sharper) vs τ=1.0 (B, neutral); slice-routing softmax temperature has been learnable per-head init=0.5; never tested.
 6. **Does Reynolds-number jitter improve Re-dimension OOD generalization?** (#4514 frieren) — physics-motivated Gaussian noise on log(Re) channel (ch13) only; per-sample to preserve within-sample Re consistency; σ=0.05 (mild) vs σ=0.15 (moderate); primary target: val_re_rand, secondary: val_geom_camber_rc.
 7. **Does Y-mirror v2 (post-norm bias correction) succeed where v1 was broken?** (#4499 tanjiro) — v1 failed due to normalization-asymmetry bug (disjoint normalized distributions); v2 applies `x_norm[k] = -x_norm[k] - 2·mean[k]/std[k]` to give physics-exact symmetric pairs. Arm A: full field flip; Arm B: geometry-only. Critical OOD signal from v1: camber_rc was *least* regressed (+12.4%) — confirms direction is correct.
@@ -173,7 +173,8 @@ cd target && python train.py --agent <student> \
 - **Surface-only pressure-weight multiplier** — CLOSED as #4414 (fern); monotone regression; loss-weighting axis fully closed
 - **Input channel-level dropout** — IN PROGRESS as #4501 (fern); stochastic feature masking p=0.10/0.20; discrete absence robustness, different from continuous noise
 - **LayerScale (CaiT)** — IN PROGRESS as #4435 (thorfinn); per-channel γ learnable gating; γ_init=1e-4 (A), 1e-2 (B)
-- **Token-space input feature noise** — IN PROGRESS as #4454 (edward); Gaussian on x_norm σ=0.02/0.05; zero param cost; addresses slice-routing-token-space diagnostic
+- **Token-space input feature noise** — CLOSED as #4454 (edward); Gaussian noise on x_norm is still point-wise; routing operator learns invariance; feature-noise direction closed → #4528 slice-routing-noise (attack logits directly)
+- **Slice-routing logit noise** — IN PROGRESS as #4528 (edward); Gaussian on PhysicsAttention routing logits σ=0.10/0.30; correct level of intervention per #4377+#4454 double lesson
 - **Attention temperature (slice-routing softmax)** — IN PROGRESS as #4458 (nezuko); frozen τ=0.25/1.0 vs current learnable init=0.5
 
 **Not yet tried (candidates for next round):**
