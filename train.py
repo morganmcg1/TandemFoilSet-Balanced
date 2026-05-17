@@ -313,6 +313,31 @@ class Lookahead(torch.optim.Optimizer):
     def zero_grad(self, set_to_none=True):
         self.base.zero_grad(set_to_none=set_to_none)
 
+    def slow_weights_state_dict(self, model: nn.Module) -> dict[str, torch.Tensor]:
+        """Return a deepcopied state_dict keyed by parameter name, holding slow weights.
+
+        Use to snapshot the Lookahead slow trajectory for SWA-style averaging — the
+        snapshot is independent of subsequent in-place updates to ``self.slow_state``.
+        Any model buffer (e.g. LN running stats; Transolver has none) is copied from
+        the model's own state_dict so the result is a complete drop-in for
+        ``model.load_state_dict``.
+        """
+        param_to_name = {id(p): n for n, p in model.named_parameters()}
+        seen = set()
+        out: dict[str, torch.Tensor] = {}
+        for group in self.base.param_groups:
+            for p in group["params"]:
+                name = param_to_name.get(id(p))
+                if name is None or name in seen:
+                    continue
+                seen.add(name)
+                out[name] = self.slow_state[p].detach().clone()
+        # Include any non-parameter buffers verbatim so the returned dict is
+        # a complete state_dict the model can load_state_dict from directly.
+        for name, buf in model.named_buffers():
+            out[name] = buf.detach().clone()
+        return out
+
     @torch.no_grad()
     def step(self, closure=None):
         loss = self.base.step(closure)
@@ -572,6 +597,7 @@ class Config:
     lion_b2: float = 0.99  # Lion beta2; default matches historical baseline
     lookahead_k: int = 5
     lookahead_alpha: float = 0.5
+    swa_last_n: int = 0  # 0 = disabled; N>0 = average slow_weights snapshots from last N epochs
 
 
 cfg = sp.parse(Config)
@@ -708,6 +734,18 @@ run.summary["lookahead_on"] = _lookahead_on
 # Rolling buffer for per-step train losses to compute volatility (window=100).
 _train_loss_window: deque[float] = deque(maxlen=100)
 
+# SWA: collect slow_weights snapshots at the END of every epoch, retaining only
+# the most recent ``cfg.swa_last_n`` via a bounded deque. Robust to early
+# termination — final snapshots are always "last N completed epochs" regardless
+# of timeout. Variance reduction via uniform averaging of post-convergence
+# snapshots (Izmailov et al. 2018). Disabled when swa_last_n == 0.
+_swa_snapshots: deque[dict[str, torch.Tensor]] = deque(maxlen=max(cfg.swa_last_n, 1))
+_swa_snapshot_epochs: deque[int] = deque(maxlen=max(cfg.swa_last_n, 1))
+run.summary["swa/last_n"] = cfg.swa_last_n
+if cfg.swa_last_n > 0:
+    print(f"SWA enabled: keeping rolling window of last {cfg.swa_last_n} "
+          f"slow_weights snapshots (uniform mean used for final eval)")
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -767,6 +805,20 @@ for epoch in range(MAX_EPOCHS):
     if device.type == "cuda":
         torch.cuda.synchronize()
     train_loop_dt = time.time() - train_loop_t0
+
+    # SWA snapshot: take the slow_weights at the end of this training pass,
+    # before validation. Bounded deque drops oldest snapshot beyond swa_last_n.
+    # Use slow_state when Lookahead is on; fall back to model.state_dict()
+    # (fast weights) when Lookahead is off so the flag remains meaningful for
+    # non-Lookahead optimizers.
+    if cfg.swa_last_n > 0:
+        if _lookahead_on:
+            _swa_snapshots.append(optimizer.slow_weights_state_dict(model))
+        else:
+            _swa_snapshots.append(
+                {k: v.detach().clone() for k, v in model.state_dict().items()}
+            )
+        _swa_snapshot_epochs.append(epoch + 1)
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
@@ -864,6 +916,73 @@ if best_metrics:
             test_log[f"test_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
+
+    # --- SWA: averaged-snapshot evaluation (separate from the best-checkpoint eval above) ---
+    swa_val_avg_dict = None
+    swa_test_avg_dict = None
+    if _swa_snapshots:
+        print(f"\nSWA: averaging {len(_swa_snapshots)} slow_weights snapshots "
+              f"from end of epochs {list(_swa_snapshot_epochs)}")
+        ref_state = model.state_dict()
+        swa_state: dict[str, torch.Tensor] = {}
+        snap_list = list(_swa_snapshots)
+        n_snap = float(len(snap_list))
+        for k in snap_list[0].keys():
+            acc = snap_list[0][k].float().clone()
+            for snap in snap_list[1:]:
+                acc.add_(snap[k].float())
+            acc.div_(n_snap)
+            if k in ref_state:
+                acc = acc.to(ref_state[k].dtype)
+            swa_state[k] = acc
+
+        model.load_state_dict(swa_state)
+        model.eval()
+
+        swa_val_split_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            for name, loader in val_loaders.items()
+        }
+        swa_val_avg_dict = aggregate_splits(swa_val_split_metrics)
+        print(f"\n  SWA VAL  avg_surf_p={swa_val_avg_dict['avg/mae_surf_p']:.4f}")
+        for name in VAL_SPLIT_NAMES:
+            print_split_metrics(f"swa_{name}", swa_val_split_metrics[name])
+
+        swa_test_split_metrics = None
+        if not cfg.skip_test and 'test_loaders' in dir():
+            swa_test_split_metrics = {
+                name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+                for name, loader in test_loaders.items()
+            }
+            swa_test_avg_dict = aggregate_splits(swa_test_split_metrics)
+            print(f"\n  SWA TEST avg_surf_p={swa_test_avg_dict['avg/mae_surf_p']:.4f}")
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(f"swa_{name}", swa_test_split_metrics[name])
+
+        swa_log: dict[str, float] = {}
+        for split_name, m in swa_val_split_metrics.items():
+            for k, v in m.items():
+                swa_log[f"swa_{split_name}/{k}"] = v
+        for k, v in swa_val_avg_dict.items():
+            swa_log[f"swa_val_{k}"] = v
+        if swa_test_split_metrics is not None:
+            for split_name, m in swa_test_split_metrics.items():
+                for k, v in m.items():
+                    swa_log[f"swa_test/{split_name}/{k}"] = v
+            for k, v in swa_test_avg_dict.items():
+                swa_log[f"swa_test_{k}"] = v
+        swa_log["swa/n_snapshots"] = len(_swa_snapshots)
+        wandb.log(swa_log)
+        wandb.summary.update(swa_log)
+        run.summary["swa/snapshot_epochs"] = list(_swa_snapshot_epochs)
+
+        # Quick A/B delta summary for the PR comment.
+        if swa_val_avg_dict is not None:
+            d_val = swa_val_avg_dict["avg/mae_surf_p"] - best_avg_surf_p
+            print(f"\n  SWA Δ val_avg/mae_surf_p vs best ckpt: {d_val:+.4f}")
+        if swa_test_avg_dict is not None and test_avg is not None:
+            d_test = swa_test_avg_dict["avg/mae_surf_p"] - test_avg["avg/mae_surf_p"]
+            print(f"  SWA Δ test_avg/mae_surf_p vs best ckpt: {d_test:+.4f}")
 
     save_model_artifact(
         run=run,
