@@ -2305,3 +2305,75 @@ Note: Seed 1 got val=40.65 at β₂=0.995 — close to H95 best 40.51 (bf16, β�
 - **H99**: H95 Arm A best_epoch=17 with rising LR (T_max=15 cosine bounces at ep15, rises through ep17-21). Hypothesis: T_max=21 aligned to bf16 budget gives clean monotone decay → potential further improvement.
 - **H100**: H86 (n_hidden=192) was wall-cut at ep10 (fp32 ~180 s/epoch). bf16 should give ~14 epochs (~126 s/epoch at n_hidden=192) — enough to evaluate capacity gain. This directly retests the wall-cut-bound hypothesis.
 - **H101**: Depth unexplored since H83 (which tested n_layers=4 as the winner under fp32). bf16 gives n_layers=5 ~17 epochs (~106 s/epoch). Depth and width are orthogonal; one more layer may capture higher-order geometric interactions.
+
+---
+
+## 2026-05-17 02:00 — PR #4229: H97 LR retune at β₂=0.997 (edward) — CLOSED, negative
+
+- Branch: `charliepai2i48h3-edward/h97-lr-retune-at-beta2-0997`
+- Hypothesis: lr=3e-4 was calibrated at β₂=0.99 (H75); β₂=0.997's longer EMA may shift the LR optimum.
+
+| Arm | lr | val_avg | Δ vs H88 (41.22) | Δ vs H95 (40.51) | test 3-split |
+|-----|-----|--------:|-----------------:|-----------------:|-------------:|
+| A | 2.5e-4 | 41.7041 | +0.49 | +1.19 | 39.6182 |
+| B | 3.5e-4 | 41.5667 | +0.35 | +1.06 | 40.0407 |
+| **H88 baseline** | 3.0e-4 | **41.2153** | — | +0.71 | **39.5337** |
+
+Both arms within 1.7-pt 2σ noise floor vs H88 but clearly worse than current H95 (40.51). LR vs val landscape convex with minimum at 3e-4. Per-epoch trajectory: Arm B faster early descent, Arm A steadier; both converge similarly at ep15.
+
+**Conclusion:** lr=3e-4 LOCKED at β₂=0.997. Lion optimizer hyperparameter axes now near-fully saturated.
+
+---
+
+## 2026-05-17 02:05 — PR #4197: H94 Batch size sweep (tanjiro) — CLOSED, negative
+
+- Branch: `charliepai2i48h3-tanjiro/h94-batch-size-sweep`
+- Hypothesis: BS=8 (linear-scaled LR) improves over BS=4.
+
+| Arm | BS | LR | val_avg | Δ vs H88 (41.22) | Δ vs H95 (40.51) | mem |
+|-----|----|----|----|----|----|----|
+| A | 6 | 3e-4 (no scaling) | 43.8969 | +2.68 | +3.39 | 63.88 GB |
+| B | 6 | 4.5e-4 (linear scaling) | 45.5948 | +4.38 | +5.09 | 63.88 GB |
+
+BS=8 OOM'd (>96GB) — padding-to-largest policy is heavily quadratic in batch composition. BS=6 fit at 63.88 GB. Both arms clearly regressed: at this short-budget regime (15-21 ep), more optimizer steps per epoch dominates more samples per step. Linear-scaled LR overcompensates under Lion's sign-update.
+
+**Conclusion:** BS=4 LOCKED. Fewer-steps-per-epoch effect dominates at our wall budget. Informative OOM analysis included.
+
+---
+
+## 2026-05-17 02:10 — PR #4217: H96 torch.compile (thorfinn) — SENT BACK for compound test
+
+- Branch: `charliepai2i48h3-thorfinn/h96-torch-compile`
+- Hypothesis: torch.compile reduces s/epoch ≥15% with no quality regression.
+
+| Arm | Mode | val_avg | Δ vs H78 (42.30) | Δ vs H88 (41.22) | Δ vs H95 (40.51) | s/epoch | Epochs |
+|-----|------|--------:|------------------:|------------------:|------------------:|--------:|-------:|
+| A | default | 41.9061 | −0.40 | +0.69 | +1.40 | 88.6 (-27%) | 21 |
+| B | reduce-overhead | **41.0543** | −1.25 | −0.16 (tie) | +0.55 | 93.0 (-24%) | 20 |
+
+torch.compile delivered a clean -27% s/epoch with no metric regression (Arm B ties H88 within noise). However, run at β₂=0.995 (pre-H88 baseline) and without bf16. Doesn't beat current H95 (40.51, bf16 baseline).
+
+**Student insight:** "The extra epochs that compile bought went mostly to drift past the optimum" — same T_max=15 schedule confound as H95. A T_max fix should harvest the remaining headroom.
+
+**Status: SENT BACK** — rebase onto current advisor branch, then run compile + bf16 + β₂=0.997 + T_max=21 compound test (Arms C and D). Tests whether the two efficiency wins stack and whether the T_max fix unlocks the residual gain.
+
+---
+
+## 2026-05-17 02:15 — Round 5 Cycle 35: Assign H102 (edward), H103 (tanjiro)
+
+| PR | Student | Hypothesis | Key Change |
+|----|---------|------------|------------|
+| #4291 | edward | H102: slice_num=128 attention capacity probe under bf16+β₂=0.997 | --slice_num 128/112 (no code change; CLI arg exists) |
+| #4292 | tanjiro | H103: mlp_ratio=3 FFN capacity retest under bf16 | Add --mlp_ratio CLI arg, Arm A=3, Arm B=2 (within-PR control) |
+
+**Rationale:**
+- **H102**: slice_num=128 was negative at H66 under AdamW. Lion+bf16+β₂=0.997 is a substantially different regime; the attention bottleneck optimum may have shifted upward. Direct capacity probe of the slice attention.
+- **H103**: H89 (mlp_ratio=3 under fp32) was wall-cut at ep11. bf16's -30% s/epoch unlocks ~17 epochs at mlp_ratio=3 — should give a fair shot at convergence. Within-PR control arm (mlp_ratio=2 + bf16) isolates the effect from pod/seed noise.
+
+**Concurrent capacity sweep across 4 axes:**
+- H100 (askeladd): n_hidden=192 — width per layer
+- H101 (frieren): n_layers=5 — depth
+- H102 (edward): slice_num=128 — attention bottleneck capacity
+- H103 (tanjiro): mlp_ratio=3 — FFN expansion within block
+
+Together these probe the four orthogonal capacity dimensions under bf16's expanded budget.

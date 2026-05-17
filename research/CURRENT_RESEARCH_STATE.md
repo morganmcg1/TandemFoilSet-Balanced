@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-17 (cycle 34)
+- **Date**: 2026-05-17 (cycle 35)
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
-- **Round**: 5 late-phase — **NEW BASELINE: H95 Arm A bf16 (val=40.51 / test=39.02, PR #4215 MERGED).** bf16 locked in as standard config. Active fronts: schedule fix (H99), capacity/depth under bf16 (H100, H101), LR retune (H97), β₁ sweep (H98), WSD (H93), batch_size (H94), torch.compile (H96).
+- **Round**: 5 late-phase — **CURRENT BEST: H95 Arm A bf16 (val=40.51 / test=39.02, PR #4215).** bf16 locked. Cycle 35 closed H97 (LR locked at 3e-4) and H94 (BS=4 locked); sent back H96 for compound compile+bf16+T_max=21 test. Capacity sweep across 4 axes under bf16: H100 (width), H101 (depth), H102 (slice_num), H103 (mlp_ratio).
 - **Most recent human research directive**: None received
 
 ## Current Best
@@ -49,21 +49,21 @@ Test 3-split 2σ ≈ 1.02 pts (tighter than val).
 
 | PR | Student | Hypothesis | Priority | Expected |
 |----|---------|------------|----------|---------|
-| **#4272** | alphonse | **H99: bf16 + T_max=21 schedule fix** | HIGH (T_max=15 bounce at ep15 is active confound; fixing may yield Δ-1 to -2 pts) | ~38.5-40.5 |
+| **#4272** | alphonse | **H99: bf16 + T_max=21 schedule fix** | HIGH (T_max=15 bounce confound; fix may yield Δ-1 to -2 pts) | ~38.5-40.5 |
 | **#4276** | askeladd | **H100: n_hidden=192 under bf16 (H86 retest)** | HIGH (wall-cut-bound at fp32; bf16 gives ~14 epochs) | ~38-42 |
 | **#4277** | frieren | **H101: n_layers=5 depth probe under bf16** | HIGH (depth unexplored; bf16 gives ~17 epochs at n_layers=5) | ~39-42 |
-| **#4229** | edward | **H97: LR fine-tune at β₂=0.997 (lr=2.5e-4, 3.5e-4)** | MED (LR calibrated at β₂=0.99; optimum may shift at 0.997) | ~40-42 |
+| **#4291** | edward | **H102: slice_num=128 attention capacity under bf16** | HIGH (slice negative under AdamW; new regime may unlock) | ~38-42 |
+| **#4292** | tanjiro | **H103: mlp_ratio=3 FFN capacity retest under bf16** | HIGH (H89 wall-cut at fp32; bf16 should reach ~17 ep) | ~38-42 |
 | **#4239** | fern | **H98: β₁ retune at β₂=0.997 (β₁=0.85, β₁=0.95)** | MED (H90 confirmed β₁=0.9 near-optimal at β₂=0.995; confirm at 0.997) | ~40-42 |
-| **#4196** | nezuko | **H93: WSD schedule Arms B/C (0/10/5, 0/5/10) at β₂=0.997** | MED (budget-aware WSD; Arm A confounded by warmup+budget mismatch) | ~39-44 |
-| **#4197** | tanjiro | **H94: Batch size sweep BS=8** | MED (orthogonal to optimizer; larger BS may enable better LR) | ~40-44 |
-| **#4217** | thorfinn | **H96: torch.compile acceleration** | MED (orthogonal to bf16; 15-30% speed gain typical) | ~39-43 |
+| **#4196** | nezuko | **H93: WSD schedule Arms B/C (0/10/5, 0/5/10) at β₂=0.997** | MED (needs rebase; budget-aware WSD; Arm A confounded by warmup+budget mismatch) | ~39-44 |
+| **#4217** | thorfinn | **H96 (sent back): compile + bf16 + T_max=21 compound** | HIGH (efficiency stack test; compile -27%, bf16 -30%, may compound) | ~38-41 |
 
 ## Lever Status
 
 | Lever | Status | Best result | Notes |
 |-------|--------|-------------|-------|
 | Optimizer | 🏆 Lion locked | 42.98 (H73) | Massive super-additive win vs AdamW |
-| LR (Lion) | 🔬 H97 active (retune at β₂=0.997) | 3e-4 (H73) | H75 U-shape at β₂=0.99; re-testing ±17% at new β₂ baseline |
+| LR (Lion) | ✅ 3e-4 LOCKED at β₂=0.997 (H97 closed) | 3e-4 (H73) | H97 both arms within noise vs H88, worse vs H95. LR optimum stable across β₂ shift. |
 | Schedule T_max | 🔬 H99 active (fix T_max=21 for bf16) | 15 (H73) | T_max=15 hardcoded; confound at 21 bf16 epochs |
 | Schedule warmup | ❌ Regresses at slice=96 (H76) | none | — |
 | Schedule WSD | 🔬 H93 (budget-aware Arms B/C) | — | Arm A confounded; real test pending |
@@ -71,18 +71,18 @@ Test 3-split 2σ ≈ 1.02 pts (tighter than val).
 | β₂ (Lion) | ✅ 0.997 locked (H88) | 0.997 | Peak confirmed; cliff at 0.999 |
 | β₁ (Lion) | ✅ ~0.9 locked (H90, H98 active at β₂=0.997) | 0.9 | Landscape asymmetric; 0.85 neutral, 0.95 badly regresses |
 | wd (Lion) | ✅ 1e-3 locked (H79) | 1e-3 | — |
-| slice_num | 🏆 96 locked (H73) | 96 | 128 untested under Lion |
+| slice_num | 🔬 H102 active (128 under bf16+β₂=0.997) | 96 (H73) | H66 had slice=128 negative at AdamW; Lion+bf16+β₂=0.997 may shift |
 | n_layers | 🔬 H101 active (n_layers=5 under bf16) | 4 (locked by H60/H83) | Depth unexplored at bf16 speed |
 | n_hidden | 🔬 H100 active (192 under bf16) | 128 | H86 wall-cut-bound at fp32; retesting with bf16 |
+| mlp_ratio | 🔬 H103 active (3 under bf16) | 2 (default) | H89 wall-cut-bound at fp32; retesting with bf16 |
 | FFN act | ✅ GEGLU locked (H48) | GEGLU | — |
 | Normalization | ✅ LayerNorm locked (H72, H81) | LN | RMSNorm anti-compounds at slice=96 |
 | Mixed precision (bf16) | 🏆 MERGED WINNER (H95) | −0.71 val / −30% s/epoch | T_max fix pending (H99) |
-| torch.compile | 🔬 H96 active (thorfinn) | off | Orthogonal to bf16 |
-| mlp_ratio | ❌ Wall-cut-bound (H89) | 2 | May retest under bf16 if H100/H101 clarify capacity headroom |
+| torch.compile | 🔬 H96 sent back (compile+bf16 compound + T_max=21) | -27% s/epoch alone | First pass beat H78 -1.25; compound test pending |
 | surf_weight | ✅ 10 locked (H54 AdamW, H91 Lion) | 10 | Insensitive under Lion sign-update |
 | clip_grad_norm | ✅ 1.0 locked (H20, H56) | 1.0 | — |
 | Huber δ_p | ✅ 0.25 locked (H25/H64) | 0.25 | — |
-| Batch size | 🔬 H94 active (tanjiro) | 4 | — |
+| Batch size | ✅ 4 LOCKED (H94 closed) | 4 | BS=6/8 worse; fewer-steps-per-epoch dominates at short budget |
 | cond_dim | ✅ 11 locked (FiLM) | 11 | — |
 | EMA averaging | ❌ Wrong regime (H65) | none | Needs oscillation, not translation |
 | Mixup | ❌ Wrong inductive bias (H55) | none | — |
