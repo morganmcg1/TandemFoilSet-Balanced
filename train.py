@@ -572,6 +572,9 @@ class Config:
     lion_b2: float = 0.99  # Lion beta2; default matches historical baseline
     lookahead_k: int = 5
     lookahead_alpha: float = 0.5
+    cosine_warm_restarts: bool = False
+    cosine_T_0: int = 8
+    cosine_T_mult: int = 1
 
 
 cfg = sp.parse(Config)
@@ -644,7 +647,12 @@ if cfg.lookahead_k > 0:
     optimizer = Lookahead(base_optimizer, k=cfg.lookahead_k, alpha=cfg.lookahead_alpha)
 else:
     optimizer = base_optimizer
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(base_optimizer, T_max=17)
+if cfg.cosine_warm_restarts:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        base_optimizer, T_0=cfg.cosine_T_0, T_mult=cfg.cosine_T_mult
+    )
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(base_optimizer, T_max=17)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -704,6 +712,16 @@ run.summary["lion_b2"] = cfg.lion_b2
 run.summary["lookahead_k"] = cfg.lookahead_k
 run.summary["lookahead_alpha"] = cfg.lookahead_alpha
 run.summary["lookahead_on"] = _lookahead_on
+_sched_name = (
+    f"cosine_warm_restarts(T_0={cfg.cosine_T_0}, T_mult={cfg.cosine_T_mult})"
+    if cfg.cosine_warm_restarts
+    else "cosine(T_max=17)"
+)
+print(f"Scheduler: {_sched_name}")
+run.summary["scheduler"] = _sched_name
+run.summary["cosine_warm_restarts"] = cfg.cosine_warm_restarts
+run.summary["cosine_T_0"] = cfg.cosine_T_0
+run.summary["cosine_T_mult"] = cfg.cosine_T_mult
 
 # Rolling buffer for per-step train losses to compute volatility (window=100).
 _train_loss_window: deque[float] = deque(maxlen=100)
