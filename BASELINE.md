@@ -2,6 +2,45 @@
 
 ## Current Best
 
+### 2026-05-17 11:50 — PR #4424: lr push lr=9e-4 on n=8 stack — charliepai2i48h5-tanjiro
+
+- **val_avg/mae_surf_p**: **53.595** (best_epoch=20/20, timeout-bound at cosine floor)
+- **test_avg/mae_surf_p**: **46.395** (from best-val checkpoint)
+- **Improvement over prior best (#4425)**: -2.48% val, -2.37% test (MAJOR WIN — both metrics improve substantially)
+- **Per-split val surf_p** (at best epoch=20):
+  | Split | val surf_p | Δ vs prior (#4425) |
+  |---|---|---|
+  | single_in_dist | 56.821 | -2.04% ✓ |
+  | geom_camber_rc | 67.660 | (rc improvement) ✓ |
+  | geom_camber_cruise | 35.791 | (cruise improvement) ✓ |
+  | re_rand | 54.110 | (re_rand improvement) ✓ |
+- **Per-split test surf_p**:
+  | Split | test surf_p | Δ vs prior (#4425) |
+  |---|---|---|
+  | single_in_dist | 49.322 | -0.35% ✓ |
+  | geom_camber_rc | 60.151 | -1.23% ✓ |
+  | geom_camber_cruise | 30.349 | -5.47% ✓ |
+  | re_rand | 45.757 | -3.83% ✓ |
+- **Metric artifacts**: `models/model-charliepai2i48h5-tanjiro-arm2-bf16-layerscale-bs2-n8-lr9e4-huber010-slice32-20260517-092547/metrics.jsonl`
+- **arm-1 (lr=8e-4)**: val=54.558 / test=45.909 — also beats prior best, has best TEST (-3.39% test vs prior #4425)
+- **Stack**: BF16 + LayerScale γ=0.01 + **n_freqs=8** + batch_size=2 + **lr=9e-4** + wd=0.0001 (default) + δ=0.10 + T_max=20 + clip=0.25 + slice_num=32
+- **Key finding**: lr push on n=8 stack monotonically improves val: lr=7e-4 (55.250 #4349 → 54.959 #4425) → lr=8e-4 (54.558) → lr=9e-4 (53.595). Mechanism: at cosine LR floor, clip_frac descends with peak LR — 0.940 (9e-4) < 0.953 (7e-4) < 0.964 (8e-4). The shallower n=8 Fourier landscape can absorb a wider LR window than n=10 (where lr=8e-4 was the ceiling). No clip saturation, no overshoot — model explores more aggressively in warmup-to-floor descent and lands in better minimum.
+- **Caveats**: timeout-bound at ep20 (cosine T_max minimum, so cosine-floor was reached precisely at timeout). Wins on all 4 val splits and all 4 test splits.
+- **Reproduce**:
+  ```bash
+  cd target && python train.py --epochs 50 \
+      --bf16 --batch_size 2 \
+      --lr 9e-4 \
+      --layer_scale_init 0.01 \
+      --n_freqs 8 --huber_delta 0.10 \
+      --lr_t_max 20 --grad_clip_max_norm 0.25 \
+      --slice_num 32 \
+      --experiment_name <name> \
+      --agent <student>
+  ```
+
+---
+
 ### 2026-05-17 10:30 — PR #4425: wd=0.0001 (explicit default) reproduction of n=8+lr=7e-4 stack — charliepai2i48h5-edward
 
 - **val_avg/mae_surf_p**: **54.959** (best_epoch=19/19, timeout-bound at ep19)

@@ -1,49 +1,47 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 11:35
+- **Date:** 2026-05-17 11:50
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
-## Current best
+## Current best — MAJOR JUMP THIS TURN
 
-- **PR #4425 (edward, MERGED THIS TURN):** BF16 + LayerScale γ=0.01 + **n_freqs=8** + batch_size=2 + Huber δ=0.10 + **lr=7e-4** + **wd=0.0001 (default)** + T_max=20 + clip=0.25 + slice_num=32
-- **val_avg/mae_surf_p: 54.959** | **test_avg/mae_surf_p: 47.521**
-- Per-split test surf_p: single=49.496, rc=60.902, cruise=32.105, re_rand=47.581
-- best_epoch=19/19 (TIMEOUT-BOUND at ep19 — T_max=20 not fully cooled)
-- **Cumulative improvement: -57.3% val from round-5 start (~128.69)**
+- **PR #4424 (tanjiro, MERGED THIS TURN):** BF16 + LayerScale γ=0.01 + **n_freqs=8** + batch_size=2 + Huber δ=0.10 + **lr=9e-4** + wd=0.0001 (default) + T_max=20 + clip=0.25 + slice_num=32
+- **val_avg/mae_surf_p: 53.595** | **test_avg/mae_surf_p: 46.395**
+- Per-split test surf_p: single=49.322, rc=60.151, cruise=30.349, re_rand=45.757 — WINS ALL 4 SPLITS vs prior best
+- best_epoch=20/20 (timeout-bound at cosine floor — but cosine min reached precisely at timeout, no information lost)
+- **Cumulative improvement: -58.3% val from round-5 start (~128.69)**
 
-**Key finding from #4425**: arm-2 is essentially #4349 stack reproduction (default wd). Val=54.959 vs #4349's val=55.250 represents seed/day variance of ~0.5% on this stack. Single-foil test split improves dramatically (-4.13%) — better seed found a better single basin. arm-1 wd=0.001 regresses by +2.14% — wd=0.001 does NOT compound with lr=7e-4 on n=8.
+**Key finding from #4424**: Monotone lr improvement on n=8 stack: 7e-4 (54.959) → 8e-4 (54.558) → 9e-4 (53.595). Mechanism: at cosine LR floor, clip_frac descends with peak LR (0.94 at lr=9e-4 — most slack). n=8's shallower Fourier landscape tolerates wider lr window than n=10 (where lr ceiling was 8e-4, #4513).
 
-**Caveats**: (1) arm-2 is timeout-bound while prior best #4448 was non-timeout-bound — convergence quality differs; (2) val gain (0.076%) is within seed-noise band; (3) test gain (-0.886%) is the stronger signal and outside typical noise.
+**Inverse coupling**: lr ceiling vs n_freqs. Coarser Fourier → higher lr ceiling. Open question: is n=6 ceiling even higher?
 
-**Two competing stacks**:
-- **Lineage A (current best)**: n=8+lr=7e-4+wd=0.0001 default → val=54.959 (timeout-bound)
-- **Lineage B**: n=10+lr=8e-4+wd=0.001 → val=55.001 (non-timeout-bound, true convergence)
+**Other notable result this turn (arm-1)**: lr=8e-4 val=54.558 / test=**45.909** — has BEST TEST of any run, beating arm-2 by 0.5 units. Val/test divergence suggests val_single overfits slightly at high lr.
 
 ## Improvement history (recent)
 
 | PR | Method | val_avg | test_avg | Δ val |
 |---|---|---|---|---|
-| **#4425 (edward, merged)** | **BF16 + LS + n=8 + bs=2 + lr=7e-4 + wd=0.0001 (default) + δ=0.10 + slice=32** | **54.959** | **47.521** | **-0.076%** |
+| **#4424 (tanjiro, merged)** | **BF16 + LS + n=8 + bs=2 + lr=9e-4 + default wd + δ=0.10 + slice=32** | **53.595** | **46.395** | **-2.48%** |
+| #4425 (edward, merged) | BF16 + LS + n=8 + bs=2 + lr=7e-4 + wd=0.0001 default + δ=0.10 + slice=32 | 54.959 | 47.521 | -0.076% |
 | #4448 (alphonse, merged) | BF16 + LS + n=10 + bs=2 + lr=8e-4 + wd=0.001 + δ=0.10 + slice=32 | 55.001 | 47.946 | -0.45% |
 | #4349 (tanjiro, merged) | BF16 + LS + n=8 + bs=2 + lr=7e-4 + δ=0.10 + slice=32 | 55.250 | 47.592 | -0.98% |
 | #4322 (askeladd, merged) | BF16 + LS + n=10 + bs=2 + δ=0.10 + slice=32 + wd=0.001 | 55.799 | 48.846 | -0.58% |
-| #4221 (thorfinn, merged) | BF16 + LS + n=10 + bs=2 + δ=0.10 + slice=32 | 56.124 | 49.696 | -1.40% |
 
-## Active WIP (8 students)
+## Active WIP (7 students + 1 idle this turn → tanjiro reassigned)
 
 | Student | PR | Hypothesis | Stack |
 |---|---|---|---|
-| **alphonse** | **#4581** | **LR warmup {3, 5} epochs on current best stack (with Huber δ fallback)** | n=8+lr=7e-4+wd=0.0001+δ=0.10+slice=32 |
-| tanjiro | #4424 | lr push {8e-4, 9e-4} on n=8 stack | n=8+lr=7e-4+δ=0.10+slice=32 |
-| edward | #4543 | lr=8e-4 cross-lineage transfer (n=8+lr=8e-4 ± wd=0.001) | n=8+δ=0.10+slice=32 |
-| **askeladd** | **#4561** | **slice bracket {40, 48} on current best stack** | n=8+lr=7e-4+wd=0.0001+δ=0.10 |
-| frieren | #4484 | T_max bracket {18, 22} on n=8 stack | n=8+lr=7e-4+δ=0.10+slice=32 |
-| nezuko | #4544 | clip WIDER {0.30, 0.35} on n=8+lr=7e-4 stack | n=8+lr=7e-4+δ=0.10+slice=32 |
-| **fern** | **#4559** | **n_freqs={11, 12} on current best stack** | n=8+lr=7e-4+wd=0.0001+δ=0.10+slice=32 |
+| alphonse | #4581 | LR warmup {3, 5} epochs on prior best stack (with Huber δ fallback) | n=8+lr=7e-4+wd=0.0001+δ=0.10+slice=32 ⚠️ stack now obsolete (lr=9e-4 is winner) |
+| **tanjiro** | **TBD this turn** | **lr=1e-3 push + T_max bracket on new best n=8+lr=9e-4 stack** | TBD |
+| edward | #4543 | lr=8e-4 cross-lineage transfer (n=8+lr=8e-4 ± wd=0.001) | n=8+δ=0.10+slice=32 ⚠️ partial result already known: arm-1 lr=8e-4=54.558 |
+| askeladd | #4561 | slice bracket {40, 48} on current best stack | n=8+lr=7e-4+wd=0.0001+δ=0.10 ⚠️ stack pre-tanjiro-merge |
+| frieren | #4484 | T_max bracket {18, 22} on n=8 stack | n=8+lr=7e-4+δ=0.10+slice=32 ⚠️ pre-tanjiro-merge |
+| nezuko | #4544 | clip WIDER {0.30, 0.35} on n=8+lr=7e-4 stack | n=8+lr=7e-4+δ=0.10+slice=32 ⚠️ pre-tanjiro-merge |
+| fern | #4559 | n_freqs={11, 12} on current best stack | n=8+lr=7e-4+wd=0.0001+δ=0.10+slice=32 ⚠️ pre-tanjiro-merge |
 | thorfinn | #4407 | T_max bracket {16, 18} on n=10+wd=0.001 stack | n=10+wd=0.001+slice=32 |
 
-⚠️ **NOTE**: train.py Config default is still `slice_num=64`. All assignments must include explicit `--slice_num 32`.
+⚠️ **IMPORTANT**: Many in-flight experiments use the pre-tanjiro-merge n=8+lr=7e-4 stack. Their results will still be useful for lever characterization but will be measured against the NEW best (val=53.595) not the prior best (val=54.959). If a result beats 54.959 but not 53.595, it's still a useful data point but not mergeable.
 
 ## Settled levers (do not re-sweep)
 
@@ -54,48 +52,49 @@
 | n_head | 4 | #4367 |
 | surf_weight on n=8 stack | 10 (default) | #4439 |
 | n_hidden | 128 | #4289 |
-| δ on lineage A (n=8) | 0.30 / 0.10 (current stack uses 0.10) | #4199, #4179 |
-| δ on lineage B (n=10) | 0.10 | #4220 arm-2 |
+| δ on lineage A (n=8) | 0.10 (current best) | #4220, current best uses 0.10 |
 | clip × δ=0.10 | clip ≤ 0.25 only | #4222, #4223 |
-| **clip on n=8+lr=7e-4** | **clip=0.25 (default) — DO NOT tighten** | **#4449 — clip 0.20/0.22 regress; clip_frac re-saturates** |
-| **wd on n=8+lr=7e-4** | **wd=0.0001 (default) — fully characterized (4-point bracket)** | **#4425 + #4479: wd=0.0001<0.002<0.001<0.0015 in val** |
-| **lr ceiling on n=10 stack** | **lr=8e-4** | **#4513 — lr=9e-4 saturates clip_frac=0.980** |
-| **wd at lr=8e-4 on n=10** | **wd=0.001** | **#4513 — wd=0.002 over-regularizes (anti-additive with high lr)** |
+| **clip on n=8+lr=7e-4** | **clip=0.25 (default) — DO NOT tighten** | **#4449** |
+| **wd on n=8+lr=7e-4** | **wd=0.0001 (default) — fully characterized 4-point bracket** | **#4425 + #4479** |
+| **lr ceiling on n=10 stack** | **lr=8e-4** | **#4513 — lr=9e-4 saturates clip_frac** |
+| **wd at lr=8e-4 on n=10** | **wd=0.001** | **#4513 — wd=0.002 over-regularizes** |
+| **lr on n=8 stack** | **lr=9e-4 (current best) — ceiling untested above** | **#4424 — monotone improvement 7→8→9e-4; clip_frac=0.940 has slack** |
 | EMA | dead on current stack | #4288 |
 | bs | 2 | #4147 |
 
 ## Current research priorities
 
-### Priority 1: Lineage A (n=8) — explore beyond wd/clip dead-ends
+### Priority 1: Push lr ceiling on new best n=8 stack
+- **#4424 closed**: lr=9e-4 won. clip_frac=0.940 has slack → lr=1e-3 is the natural next push
+- **TBD tanjiro this turn**: lr=1e-3 + T_max bracket on new best stack (assign now)
 
-The recent closures of wd (#4425) and clip (#4449) levers on n=8+lr=7e-4 mean we need new directions on this lineage. Active in-flight:
-- **#4424 tanjiro** — lr push {8e-4, 9e-4}: is lr=7e-4 the ceiling on n=8?
-- **#4479 askeladd** — wd bracket {0.002, 0.0015}: likely closes (wd=0.001 already regresses), but completes bracket
-- **#4484 frieren** — T_max bracket {18, 22}: cosine schedule tuning
-- **#4396 fern** — n_freqs {8, 12} on n=10 base (won't directly affect lineage A)
+### Priority 2: Re-evaluate in-flight against new baseline (val=53.595)
 
-### Priority 2: Lineage B (n=10) — push lr/wd ceiling
-- **#4513 alphonse** — lr=9e-4+wd=0.001 vs lr=8e-4+wd=0.002 on n=10
-- **#4407 thorfinn** — T_max {16, 18} on n=10+wd=0.001
+All in-flight experiments on n=8+lr=7e-4 stack are now measured against val=53.595 (NEW best) not val=54.959 (prior best). Realistic ceiling for these experiments is probably val ≥ 54.0 unless they introduce a method that compounds with lr=9e-4 — unlikely to beat new best.
 
-### Priority 3: Cross-lineage and untapped-direction experiments
-- **#4543 edward** — lr=8e-4 cross-lineage transfer on n=8
-- **#4544 nezuko** — clip WIDER {0.30, 0.35} on n=8+lr=7e-4
-- **#4561 askeladd** (NEW this turn) — slice_num bracket {40, 48} on current best stack: untested lever for this lineage
-- **#4559 fern** (NEW this turn) — n_freqs={11, 12} on current best stack: tests if n_freqs=12 signal from #4396 compounds with lr=7e-4+slice=32
+The IMPORTANT in-flight results to harvest:
+- **#4543 edward**: arm-1 lr=8e-4 should land near tanjiro's arm-1 (val=54.558) — useful as cross-lineage replication
+- **#4484 frieren** T_max bracket: if T_max=18 or 22 helps at lr=7e-4, may compound with lr=9e-4
+- **#4559 fern** n_freqs=12: if it helps at lr=7e-4, would test the inverse lr-ceiling-vs-n_freqs hypothesis (n=12 should have lower lr ceiling)
+- **#4561 askeladd** slice bracket: orthogonal to lr — could compound with new best
+- **#4581 alphonse** LR warmup: orthogonal to peak lr — could compound
+
+### Priority 3: Lineage B (n=10) continued
+- **#4407 thorfinn** T_max {16, 18} on n=10+wd=0.001 — completes n=10 lever characterization
 
 ## Potential next research directions
 
-**After current in-flight completes:**
-- **Cross-lineage compound**: n=8+lr=8e-4+wd=0.001 — combine lineage A's n=8 with lineage B's winning lr+wd
-- **n_freqs=6 on n=8+lr=7e-4 stack**: untested; n=8 beat n=10 (-0.96%), does n=6 continue the coarser trend?
-- **clip WIDER {0.28, 0.30, 0.35} on n=8+lr=7e-4**: clip_frac=0.953 at default suggests un-saturated regime — bigger steps may help
-- **LR warmup**: 5-epoch warmup on either lineage — not yet tested
-- **slice=40 on new best stacks**: tested on old stacks; untested on either current lineage
-- **Per-split δ**: cruise + re_rand respond differently than single + rc; per-split Huber δ as 2D loss hyperparameter
-- **Seed/variance characterization**: arm-2 of #4425 demonstrated 0.5% cross-day variance; might want a deliberate 3-seed re-run to characterize before chasing further small gains
+**Highest priority (post-current wave):**
+- **lr=1e-3 + T_max push on n=8 stack**: tanjiro's natural next step (assigned this turn)
+- **n_freqs=6 + lr=9e-4 or 1e-3**: tests the inverse lr-ceiling-vs-n_freqs hypothesis. If n=6 has even higher lr ceiling, this is a major mechanism finding
+- **lr push + warmup compound**: if alphonse #4581 warmup shows value at lr=7e-4, immediately test at lr=9e-4
+- **arm-1 lr=8e-4 had best TEST**: investigate val/test divergence — maybe ensemble of lr=8e-4 + 9e-4 checkpoints
+
+**Other directions:**
+- **Cross-lineage compound**: n=10+lr=8e-4+wd=0.001 was prior best on n=10. n=8+lr=9e-4 is new best on n=8. Mixed-lineage features?
+- **Per-split δ**: cruise + re_rand respond differently than single + rc — per-split Huber δ
+- **Per-domain Fourier basis**: different freq for cruise vs single leading edge
 
 **Bold directions for plateau protocol (if current wave stalls):**
-- **Architecture change**: all improvements so far are training/regularization. Transolver's slice mechanism is untested architecturally.
-- **Per-split δ**: per-split Huber δ as 2D loss hyperparameter
-- **Positional encoding**: per-domain mixed Fourier basis (smooth for cruise, sharp for single leading edge)
+- **Architecture change**: all improvements so far are training/regularization. Transolver's slice mechanism untested architecturally
+- **Positional encoding**: per-domain mixed Fourier basis

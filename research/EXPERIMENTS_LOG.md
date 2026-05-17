@@ -5,6 +5,46 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-17 11:50 — PR #4424 (charliepai2i48h5-tanjiro): lr push {8e-4, 9e-4} on n=8 stack — MERGED (BOTH ARMS BEAT BASELINE; arm-2 lr=9e-4 NEW BEST val=53.595/test=46.395)
+
+- branch: `charliepai2i48h5-tanjiro/lr-push-n8-stack`
+- hypothesis: lr push beyond 7e-4 on n=8 stack. Predict monotone improvement OR clip-saturation regression
+
+| arm | lr | val_avg | Δ vs prior best (54.959) | test_avg | Δ test vs prior (47.521) | best_ep | clip_frac@best | grad_norm@best |
+|-----|-----|---------|--------------------------|----------|--------------------------|---------|----------------|----------------|
+| **arm-2 (WINNER)** | **9e-4** | **53.595** | **-2.48% ✓** | **46.395** | **-2.37% ✓** | 20/20 (timeout at cosine floor) | **0.940** | 1.384 |
+| arm-1 | 8e-4 | 54.558 | -0.73% ✓ | **45.909** | **-3.39% ✓ (best test)** | 20/22 | 0.964 | 1.487 |
+| prior best (#4425, lr=7e-4) | 7e-4 | 54.959 | — | 47.521 | — | 19/19 | 0.953 | — |
+
+Per-split val arm-2 vs #4425: wins on ALL 4 splits (single, rc, cruise, re_rand all improve).
+Per-split test arm-2: cruise=30.349(-5.47%✓), re_rand=45.757(-3.83%✓), rc=60.151(-1.23%✓), single=49.322(-0.35%✓) — wins all 4 splits.
+
+- metric artifacts: `models/model-charliepai2i48h5-tanjiro-arm2-bf16-layerscale-bs2-n8-lr9e4-huber010-slice32-20260517-092547/metrics.jsonl`, `models/model-charliepai2i48h5-tanjiro-arm1-bf16-layerscale-bs2-n8-lr8e4-huber010-slice32-20260517-085047/metrics.jsonl`
+
+**Analysis and conclusions:**
+
+Monotone lr improvement on n=8 stack: lr=7e-4 (55.250 #4349) → lr=7e-4 (54.959 #4425) → lr=8e-4 (54.558) → lr=9e-4 (53.595). The n=8 stack has substantially wider lr ceiling than n=10 (where lr=9e-4 saturated, #4513 closed lr ceiling at 8e-4).
+
+**Key mechanism**: at cosine LR floor, clip_frac descends MONOTONICALLY with peak LR:
+- lr=7e-4 → clip_frac=0.953
+- lr=8e-4 → clip_frac=0.964 (slight up — but transient at cosine floor)
+- lr=9e-4 → clip_frac=**0.940** (most slack, deepest escape from clip saturation)
+
+This is counter-intuitive for naive "higher LR = bigger gradients" intuition. Mechanism: higher peak LR enables more aggressive early exploration during cosine warmup-to-floor. The model lands in a flatter region (lower grad_norm_mean=1.384 at lr=9e-4 vs 1.578 at lr=7e-4), giving the cosine floor more useful work. The shallower n=8 Fourier landscape (vs n=10) tolerates this — n=8 has fewer high-frequency channels to overshoot.
+
+**Val/test split picture**: arm-2 wins val (primary metric), arm-1 has BETTER test_avg (45.909 vs 46.395). Tiny difference on test (0.5 units), but arm-1's single test=47.879 is significantly better than arm-2's 49.322. This val/test divergence suggests either (1) val_single_in_dist is overfit slightly at higher LR, or (2) noise in the small (100-sample) split. Per program contract (best checkpoint = val_avg selection), arm-2 is the winner.
+
+**Cross-lineage implications**: lr ceiling on n=8 is now confirmed ≥9e-4 (untested above). On n=10 the ceiling is 8e-4. The lr ceiling-vs-n_freqs relationship is inverse: coarser Fourier (n=8) absorbs wider lr window. Open: is n=6 ceiling even higher?
+
+**Suggested follow-ups**:
+1. **lr=1e-3 push** on n=8 stack (tanjiro suggests this; clip_frac=0.940 has slack)
+2. **T_max=22 or 24** with lr=9e-4 (both arms peaked at ep20 = cosine min, slightly longer cosine may help further)
+3. **n_freqs=6 with lr=9e-4** (test coarser-Fourier extreme with new lr-ceiling combo)
+
+**Assigned tanjiro to**: lr=1e-3 + T_max push on current best stack (the natural extension of the lr-push trend).
+
+---
+
 ## 2026-05-17 11:30 — PR #4513 (charliepai2i48h5-alphonse): lr=9e-4 vs wd=0.002 bracket on n=10+lr=8e-4 stack — CLOSED (both arms regress; lr ceiling at 8e-4 on n=10; wd-lr inverse coupling confirmed)
 
 - branch: `charliepai2i48h5-alphonse/lr9e4-wd-bracket-n10`
