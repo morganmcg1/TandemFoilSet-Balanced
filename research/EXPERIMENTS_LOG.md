@@ -1,5 +1,73 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-17 05:30 — PR #4270 MERGED (QK-norm + Lion, new baseline) + PR #4178 CLOSED (EMA no signal)
+
+### #4270 edward QK-norm + Lion at nh=176+bf16+ep14 — **MERGED ← NEW BASELINE**
+
+- **Student:** willowpai2i48h4-edward (branch: `willowpai2i48h4-edward/qk-norm`)
+- **Hypothesis:** LayerNorm on Q and K projections (per-head over head_dim) BEFORE attention dot product stabilizes attention logits and improves generalization.
+
+#### Results
+
+| Metric | QK-norm + Lion | Lion baseline #4252 | Δ |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | **46.9886** | 49.2616 | **−4.61%** |
+| **test_avg/mae_surf_p** | **40.4803** | 41.6188 | **−2.74%** |
+| test/single_in_dist | 43.1757 | 43.9070 | −1.66% |
+| test/geom_camber_rc | **52.7948** | 54.7549 | **−3.58%** |
+| test/geom_camber_cruise | 25.8348 | 26.1287 | −1.13% |
+| test/re_rand | 40.1159 | 41.6846 | **−3.76%** |
+
+- **W&B run:** `oospddft`
+- **Config:** nh=176+n_head=4 (d_head=44)+bf16+ep14+Lion+QK-norm. Wall: 30.6 min, VRAM: 44.6 GB (identical to baseline), +880 params.
+
+#### Key mechanism confirmed
+
+Pre-norm Q/K magnitudes grow 7× during training (0.13→0.9 mean L2 per head). Without QK-norm, attention logits Q·Kᵀ/√d scale ~50× larger by ep14 → softmax saturation. QK-norm pins post-norm magnitudes to ≈√44=6.6 throughout training. **The mechanism is real, not coincidental.**
+
+#### Decision: MERGE ✓
+
+- val 46.99 < 49.26 AND test 40.48 < 41.62 (clear win on both metrics)
+- All 4 test splits improve, including geom_camber_rc (−3.58%) — second consecutive improvement on structural hard split
+- Wall and VRAM cost negligible
+- Convergence speed also improves (QK-norm at ep13 already beats Lion at ep14)
+
+**New baseline:** val=46.9886, test=40.4803. Reproduce: `python train.py --n_hidden 176 --epochs 14 --use_bf16 --use_lion --lion_lr 1e-4 --lion_wd 1e-3 --use_qk_norm`
+
+**Next for edward: V-norm extension** — extend QK-norm to also normalize V projections (add `nn.LayerNorm(dim_head)` to V), completing QKV-norm. Trivial implementation (~10 lines), directly extends edward's work.
+
+---
+
+### #4178 thorfinn EMA weights (decay=0.999) — **CLOSED (no signal)**
+
+- **Student:** willowpai2i48h4-thorfinn (branch: `willowpai2i48h4-thorfinn/ema-weights`)
+- **Hypothesis:** EMA of optimizer weights (decay=0.999) provides free-lunch improvement on val/test eval.
+
+#### Results (3 runs: cap-bound ep14/18 + one fully-annealed ep14)
+
+| Run | epochs | best_ep | EMA val | LIVE val | EMA−LIVE | EMA test | LIVE test |
+|---|---|---|---|---|---|---|---|
+| `nh0qoem5` | 18 (cap-bound) | 14 | 59.705 | 59.531 | **+0.17** | 51.594 | 51.633 |
+| `x5ep4xjd` | 14 (T_max=14) | 14 | 61.287 | 57.313 | **+3.98** | 52.464 | 49.099 |
+| `kq86sv34` | 18 (cap-bound) | 14 | 60.962 | 63.612 | **−2.65** | 52.476 | 55.043 |
+| **mean** | — | 14 | 60.65 | 60.15 | **+0.50** | 52.18 | 51.92 |
+
+EMA vs LIVE at same epoch: +0.50 val mean ±3 inter-seed noise. **EMA is neutral — no consistent direction across 3 seeds.**
+
+#### Decision: CLOSE
+
+- Apples-to-apples EMA−LIVE gap: +0.5 val ±3 noise = no signal
+- Even fully-annealed run (best case for EMA) shows LIVE winning by ~4 val
+- Mechanism analysis: monotonic cosine-to-zero descent provides no late-training oscillation for EMA to average. Lion + warmup-then-cosine = smooth convergence trajectory.
+- All runs pre-Lion (AdamW stack). Even if retested under Lion, the mechanism argument (no oscillation to average) applies equally.
+- Best EMA val=59.7 vs current baseline 46.99 = irrelevant comparison due to AdamW + cap-bound.
+
+**EMA axis closed.** The EMA infrastructure code on thorfinn's branch is in git history for future use if needed.
+
+**Next for thorfinn: surf_weight sweep** on the QK-norm + Lion baseline — surf_weight=10 was tuned pre-Lion; optimal balance may have shifted with Lion's uniform step magnitude.
+
+---
+
 ## 2026-05-17 05:00 — PR #4232 CLOSED (nh=208 width frontier, AdamW pre-Lion) + #4366 fern Lookahead wrapper assigned
 
 ### #4232 fern n_hidden=208 width frontier (AdamW, pre-Lion stack) — **CLOSED**
