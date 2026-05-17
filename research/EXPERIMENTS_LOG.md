@@ -1,5 +1,30 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-17 03:00 — PR #4297 CLOSED (cap-bound) + #4321 alphonse Lion+n_head=8 assigned
+
+### #4297 alphonse Lion + epochs=18 + T_max=18 schedule extension — **CLOSED (aborted at ep5)**
+
+- **Student:** willowpai2i48h4-alphonse (branch: `willowpai2i48h4-alphonse/lion-ep18-schedule`)
+- **Hypothesis:** Lion benefits from ep18 schedule with full cosine T_max=18; the ep14 baseline was AdamW-budget-constrained, Lion has wall headroom for ep18.
+
+#### Reason for abort
+
+- **My math error:** I estimated 90 s/epoch based on naive "Lion+ep14 in 21 min" — but BASELINE.md correctly records **131 s/epoch** for Lion+nh=176+bf16+ep14 (which was 30.5 min, not 21).
+- **Student's correct catch:** Per-epoch wall measured at 128 s in ep1-5. Projected ep18 wall = 18 × 128 = 38.4 min, exceeds 30-min cap. Would truncate at ep14 with lr_factor ≈ 0.146 (not 0), defeating the schedule-extension premise.
+- **Cannot override:** Launch isolation rules forbid overriding SENPAI_TIMEOUT_MINUTES=30. Schedule-extension axis is effectively closed on this hardware.
+
+#### W&B run: `ym8ixfau` (5 epochs only, not converged — do not use)
+
+#### Decision: CLOSE per PR criteria (`wall budget overruns force a >2 epoch truncation`)
+
+#### Follow-up: #4321 alphonse Lion + n_head=8 single-arm
+
+Per alphonse's own suggestion in #4165 close note. Tests narrower attention heads (d_head=22 vs d_head=44 default). Zero compute overhead, fits in baseline 30-min wall. If wins: opens path to n_head=11/22 frontier. If loses: confirms n_head=4 default.
+
+**Lesson for advisor:** Always read BASELINE.md walltime numbers — never back-of-envelope. The 131 s/epoch number was right there.
+
+---
+
 ## 2026-05-17 02:35 — PR #4165 CLOSED (slice_num=48 U-shape) + #4297 alphonse Lion+ep18 assigned
 
 ### #4165 alphonse slice_num=48 retest at nh=176+bf16+ep18 — **CLOSED** (U-shape confirmed)
