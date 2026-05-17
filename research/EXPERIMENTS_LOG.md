@@ -1253,3 +1253,38 @@ The arm 4 comparison to new canonical (which also has grad_clip) isolates β=0.0
 - Hypothesis: lr=1e-3 was set before SOAP/Lookahead/clip/β=0.01 — never re-tuned on 12-winner stack. Each improvement changes effective step size. Optimal LR may have shifted.
 - 3 arms: lr=5e-4, lr=1e-3 (baseline), lr=2e-3. Optional arm 4: lr=3e-3.
 - Prior context: PR #3493 tested lr=2e-3 on simpler SOAP+Cauchy stack and lost — fresh test on very different environment.
+
+## 2026-05-17 00:25 — PR #3975 (askeladd): bfloat16 autocast — **MERGED (13th winner)**
+
+- Branch: `willowpai2i48h3-askeladd/bf16-autocast`
+- W&B runs: `ukhyqq85` (fp32 baseline), `cwlrnp3b` (bf16 variant)
+
+**Hypothesis:** bf16 autocast (forward + loss in bf16, backward + optimizer in fp32) reduces epoch time by ≥1.2× on this SOAP+Transolver stack, yielding more effective epochs in the 30-min wall-clock cap without degrading model quality.
+
+**Result (variant bf16 vs fp32 baseline on full 12-winner canonical):**
+
+| Metric | Arm 1 fp32 (`ukhyqq85`) | Arm 2 bf16 (`cwlrnp3b`) | Δ |
+|---|---|---|---|
+| epoch_time_s (mean) | 137.82 s | 107.25 s | **−22.2% (1.285× speedup)** |
+| Epochs in 30-min cap | 14 | **17** | +3 |
+| Peak VRAM | 42.1 GB | **33.0 GB** | −21.6% |
+| `val_avg/mae_surf_p` (best) | 45.9199 (ep 14) | **41.4446 (ep 17)** | **−9.74%** |
+| `test_single_in_dist/mae_surf_p` | 50.8904 | 45.9176 | −9.77% |
+| `test_geom_camber_rc/mae_surf_p` | 48.6080 | 49.1937 | +1.20% |
+| `test_re_rand/mae_surf_p` | 35.8298 | 34.5406 | −3.60% |
+| `test_avg/mae_surf_p_excl_cruise` (3-split) | 45.1094 | **43.2173** | **−4.19%** |
+
+**Sanity check:** Arm 1 fp32 exactly reproduces canonical (val=45.9199, test=45.1094) to 4 decimal places — same hardware, same seed.
+
+**Matched-epoch quality-neutrality:** Mean Δ over 14 matched epochs = +0.74 val — within the ±1-2 hardware drift window. bf16 does NOT improve quality; the entire gain is from epoch 15-17 (extra training time).
+
+**Mechanism:** Transolver is compute-bound (PhysicsAttention + MLPs dominate wall-clock). bf16 halves tensor-core arithmetic precision → 1.285× throughput. SOAP eigendecomposition, Lookahead slow-weight buffers, and grad_clip all stay in fp32 (numerically exact). No GradScaler needed (bf16 8-bit exponent covers fp32 dynamic range). No NaNs.
+
+**Compounding stack intact:** All 12 prior winners (SOAP, Lookahead, grad_clip, Huber β=0.01, EMA) coexist with bf16 without interaction artifacts.
+
+**New canonical:** val=41.4446, test=43.2173. **−9.74% val / −4.19% test vs 12-winner canonical.**
+
+**Post-merge unlocks:**
+1. **Batch size sweep** (33 GB used vs 96 GB available — try bs=6, bs=8)
+2. **Wider Transolver** (n_hidden=192 previously OOM; now ~60 GB budget)
+3. **All future experiments inherit best_epoch=17** — adjust expectations
