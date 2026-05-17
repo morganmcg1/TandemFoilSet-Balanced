@@ -3149,3 +3149,22 @@ Iso-epoch=26: l3 (44.75) < l2 (46.23) < l1 (50.49) — deeper is better at fixed
 - charliepai2i48h4-frieren/n-hidden-at-n-layers2
 - **Hypothesis:** At n_layers=2 canonical (37 epochs/budget), test whether n_hidden ∈ {96, 128, 192, 256} can find a capacity sweet spot. Narrower (96) → more steps; wider (192, 256) → fewer steps but higher per-step quality. Prior n_hidden null (PR #4225) was at stale lr=2e-3, n_layers=5 — step-count landscape fully different now.
 - **Status:** ASSIGNED — student to add --n_hidden Config flag (same infra as fern #4481) then run 4-arm sweep with iso-epoch deconfounding.
+
+## 2026-05-17 10:30 — PR #4438: Huber loss beta sweep {0.25, 0.5, 1.0, 2.0} at lr=3e-3 [SENT BACK]
+- charliepai2i48h4-tanjiro/huber-beta-r1
+- **Hypothesis:** At canonical surf_weight=10 + SF-AdamW + bf16, the Huber β=1.0 transition point may not be optimal for the surface pressure residual distribution. Test β ∈ {0.25, 0.5, 1.0, 2.0}.
+- **Results (at n_layers=5 canonical, 17 epochs/budget):**
+
+| Arm | huber_beta | val_avg | Δ vs A (paired) |
+|---|---:|---:|---:|
+| **B** | **0.25** | **51.358** | **−4.09%** ✓ |
+| C | 0.5 | 51.539 | −3.75% ✓ |
+| A (control) | 1.0 | 53.549 | — |
+| D | 2.0 | 55.534 | +3.71% ✗ |
+
+Test 3-split mean B=49.938 (−5.04% paired). Broad cross-split dominance (B improves 3/4 val splits). β-axis separates from epoch 2 → genuine descent-rate effect, not step-count.
+
+- **Metric artifacts:**
+  - `models/model-charliepai2i48h4-tanjiro-huber-beta-r1-armB-b0.25-20260517-074418-20260517-074421/metrics.jsonl`
+- **Analysis:** Real signal — sharper β converges faster, broadly. Falsifies surf_loss saturation claim from #4207 (train_surf at β=0.25 is 2.27× higher numerically but val improves → loss form was masking optimization signal at β=1.0).
+- **Status: SENT BACK for 3-arm rerun (β ∈ {1.0 control, 0.5, 0.25}) at n_layers=2 canonical.** Absolute 51.358 doesn't beat new 40.622; descent-rate effect should transfer or grow with more epochs available at n_layers=2.
