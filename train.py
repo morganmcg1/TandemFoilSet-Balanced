@@ -310,6 +310,41 @@ def _pointwise_loss(pred, y_norm, loss_type: str):
     raise ValueError(f"Unknown loss_type: {loss_type!r}")
 
 
+def agc_clip_grad(parameters, clip_factor: float = 0.01, eps: float = 1e-3):
+    """Adaptive Gradient Clipping (Brock et al., NFNets ICML 2021, arXiv:2102.06171).
+
+    Per-tensor variant: clip each parameter's gradient L2 norm to
+    ``clip_factor * max(|param|, eps)``. Branchless rescale keeps GPU/CPU
+    syncs to one at the end so per-step overhead stays small.
+
+    Returns ``(global_pre_clip_grad_norm, frac_clipped)`` as Python floats for
+    W&B logging. ``frac_clipped`` is the fraction of parameter tensors whose
+    gradient norm exceeded the per-tensor threshold (and thus got scaled).
+    """
+    sq_sum = None
+    n_clipped_t = None
+    n_params = 0
+    for p in parameters:
+        if p.grad is None:
+            continue
+        p_norm = p.detach().norm(p=2).clamp_min(eps)
+        g_norm = p.grad.detach().norm(p=2)
+        max_norm = clip_factor * p_norm
+        clipped = g_norm > max_norm
+        scale = torch.where(clipped, max_norm / (g_norm + 1e-6), torch.ones_like(g_norm))
+        p.grad.mul_(scale)
+        if sq_sum is None:
+            sq_sum = g_norm * g_norm
+            n_clipped_t = clipped.to(torch.int32)
+        else:
+            sq_sum = sq_sum + g_norm * g_norm
+            n_clipped_t = n_clipped_t + clipped.to(torch.int32)
+        n_params += 1
+    if sq_sum is None:
+        return 0.0, 0.0
+    return sq_sum.sqrt().item(), n_clipped_t.item() / max(n_params, 1)
+
+
 def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_type: str = "l1", use_bf16: bool = False) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
@@ -566,6 +601,9 @@ class Config:
     lion_lr: float = 1e-4  # Lion lr; canonical: AdamW_lr / 3..10
     lion_wd: float = 1e-3  # Lion wd; canonical: AdamW_wd * 3..10
     use_qk_norm: bool = False  # ViT-22B-style LayerNorm(head_dim) on Q and K before SDPA
+    use_agc: bool = False  # Adaptive Gradient Clipping (NFNets, Brock 2021); replaces global grad_clip
+    agc_clip_factor: float = 0.01  # AGC per-tensor max_norm = clip_factor * ||param||; NFNets default
+    grad_clip: float = 1.0  # global grad-norm clip when use_agc=False; passed to clip_grad_norm_
 
 
 cfg = sp.parse(Config)
@@ -635,7 +673,7 @@ def lr_lambda(epoch):
     return 0.5 * (1 + math.cos(math.pi * progress))  # cosine to 0 after warmup
 scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
-GRAD_CLIP_MAX_NORM = 1.0
+GRAD_CLIP_MAX_NORM = cfg.grad_clip
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -653,6 +691,7 @@ run = wandb.init(
         "val_samples": {k: len(v) for k, v in val_splits.items()},
         "warmup_epochs": warmup_epochs,
         "grad_clip_max_norm": GRAD_CLIP_MAX_NORM,
+        "grad_clip_mode": "agc" if cfg.use_agc else "global_norm",
         "scheduler": "linear_warmup_then_cosine",
         "optimizer": "lion" if cfg.use_lion else "adamw",
         "lion_betas": (0.9, 0.99) if cfg.use_lion else None,
@@ -726,14 +765,27 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=GRAD_CLIP_MAX_NORM)
+        if cfg.use_agc:
+            pre_clip_norm, agc_frac = agc_clip_grad(
+                model.parameters(),
+                clip_factor=cfg.agc_clip_factor,
+            )
+        else:
+            grad_norm_tensor = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), max_norm=GRAD_CLIP_MAX_NORM,
+            )
+            pre_clip_norm = grad_norm_tensor.item()
+            agc_frac = 0.0
         optimizer.step()
         global_step += 1
-        wandb.log({
+        step_log = {
             "train/loss": loss.item(),
-            "train/grad_norm": grad_norm.item(),
+            "train/grad_norm": pre_clip_norm,
             "global_step": global_step,
-        })
+        }
+        if cfg.use_agc:
+            step_log["train/agc_frac_clipped"] = agc_frac
+        wandb.log(step_log)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
