@@ -566,6 +566,8 @@ class Config:
     lion_lr: float = 1e-4  # Lion lr; canonical: AdamW_lr / 3..10
     lion_wd: float = 1e-3  # Lion wd; canonical: AdamW_wd * 3..10
     use_qk_norm: bool = False  # ViT-22B-style LayerNorm(head_dim) on Q and K before SDPA
+    focal_alpha: float = 0.0  # tail-emphasis exponent on L1 (training-only); 0=L1, 0.5=focal-L1, 1.0=L2
+    focal_eps: float = 1e-8   # numerical floor inside (|err|+eps)^alpha (only relevant if focal_alpha>0)
 
 
 cfg = sp.parse(Config)
@@ -686,7 +688,9 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_vol_unw = epoch_surf_unw = 0.0  # unweighted (raw L1) running sums for diagnostic
     n_batches = 0
+    err_quantile_diag: dict[str, float] = {}  # p99/p50/p1 of unweighted |err| (first batch)
 
     for batch_idx, (x, y, is_surface, mask) in enumerate(
         tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False)
@@ -716,13 +720,28 @@ for epoch in range(MAX_EPOCHS):
             pred = model({"x": x_enc})["preds"]
         # Cast model output back to fp32 so loss/metric arithmetic stays in fp32
         pred = pred.float()
-        err = _pointwise_loss(pred, y_norm, cfg.loss_type)
+        err_raw = _pointwise_loss(pred, y_norm, cfg.loss_type)
+        # Tail-emphasizing focal-L1: scale per-element |err| by (|err|.detach() + eps)^alpha.
+        # Weight detached so gradient flows only through the unweighted error term.
+        if cfg.focal_alpha > 0.0 and cfg.loss_type == "l1":
+            with torch.no_grad():
+                focal_weight = (err_raw + cfg.focal_eps).pow(cfg.focal_alpha)
+            err = err_raw * focal_weight
+        else:
+            err = err_raw
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
+
+        # Unweighted (= raw L1 in normalized space) loss for diagnostic comparability
+        # to the baseline; tracks the actual normalized-space MAE objective.
+        with torch.no_grad():
+            vol_loss_unw = (err_raw * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss_unw = (err_raw * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss_unw = vol_loss_unw + cfg.surf_weight * surf_loss_unw
 
         optimizer.zero_grad()
         loss.backward()
@@ -731,17 +750,40 @@ for epoch in range(MAX_EPOCHS):
         global_step += 1
         wandb.log({
             "train/loss": loss.item(),
+            "train/loss_unweighted": loss_unw.item(),
             "train/grad_norm": grad_norm.item(),
             "global_step": global_step,
         })
 
+        # Capture |err| distribution diagnostics on the first batch of each epoch.
+        # Focal should pull p99 down faster than baseline if the mechanism works.
+        if log_diag_this_batch:
+            with torch.no_grad():
+                # Flatten unweighted errors over real (non-padded) positions, all 3 channels.
+                valid = err_raw[mask]  # [n_valid_nodes, 3]
+                if valid.numel() > 0:
+                    flat = valid.reshape(-1).float()
+                    qs = torch.tensor([0.01, 0.50, 0.99], device=flat.device)
+                    p1, p50, p99 = torch.quantile(flat, qs).tolist()
+                    err_quantile_diag = {
+                        "train/err_p1": p1,
+                        "train/err_p50": p50,
+                        "train/err_p99": p99,
+                        "train/err_mean": flat.mean().item(),
+                        "train/err_max": flat.max().item(),
+                    }
+
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_vol_unw += vol_loss_unw.item()
+        epoch_surf_unw += surf_loss_unw.item()
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_vol_unw /= max(n_batches, 1)
+    epoch_surf_unw /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -757,11 +799,14 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/vol_loss_unweighted": epoch_vol_unw,
+        "train/surf_loss_unweighted": epoch_surf_unw,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
         "global_step": global_step,
     }
+    log_metrics.update(err_quantile_diag)
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
