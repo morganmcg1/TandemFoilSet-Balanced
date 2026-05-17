@@ -1361,3 +1361,31 @@ k=5 reproduces canonical exactly. k=3 nearly tied (+0.94% val) — sub-resonance
 - Branch: `willowpai2i48h3-tanjiro/cosine-t-max-sweep`
 - Hypothesis: T_max=50 (current) means at epoch 17 the LR is still at 0.61× peak — bf16's 17-epoch budget mismatches the cosine schedule, effectively training at near-constant peak LR.
 - 3 arms: T_max ∈ {50 (baseline), 17 (matched to bf16 budget), 25 (intermediate)}.
+
+## 2026-05-17 01:15 — PR #4247 (thorfinn): Deeper Transolver n_layers=6 on bf16 canonical — **CLOSED**
+
+- Branch: `willowpai2i48h3-thorfinn/deeper-transolver-n-layers-6`
+- W&B runs: reported by student (Arm 1 canonical, Arm 2 n_layers=6)
+
+**Result:**
+
+| Arm | Config | val | test_excl_cruise | best_epoch | epoch_time |
+|---|---|---|---|---|---|
+| 1 (baseline) | n_layers=5 (canonical) | **41.4446** | **43.2173** | 17 | 107.86s |
+| 2 (variant) | n_layers=6 | 45.4954 | 46.2625 | 14 | 128.61s |
+
+**Δ vs canonical:** +9.78% val / +7.05% test — clear regression.
+
+**Analysis:** Two compounding effects:
+1. **Wall-clock truncation:** n_layers=6 runs 128.61 s/epoch (+19.2% vs canonical), hitting 30-min cap at epoch 14 (vs canonical 17). However, this is not the whole story:
+2. **Matched-epoch lag:** Even at epoch 14, Arm 2 val=45.50 vs Arm 1 still had val falling. The deeper model is behind even before wall-clock truncation — schedule/LR is the bottleneck. With warmup_epochs=3 of 14 total = 21% warmup (vs canonical 17%), the deeper model receives proportionally less cosine-decay training time. SOAP preconditioner also takes more steps to adapt to the larger parameter space.
+
+**Student's key diagnostic:** "best epoch was the last completed epoch (14) with val_avg/mae_surf_p still falling." The model was still converging at truncation — not a capacity problem but a schedule/wall-clock mismatch.
+
+**Conclusion:** Capacity-via-depth closed under 30-min cap. If revisited, would require LR re-tune (shorter warmup_epochs=1-2, or lr=1.5e-3) and likely a longer wall-clock budget. Capacity-via-width (alphonse #4244 n_hidden=192) is the more promising path — lower per-epoch overhead and better parameter efficiency at this model scale. **CLOSED.**
+
+## 2026-05-17 01:15 — Assignment: #4296 thorfinn slice-num-sweep
+
+- Branch: `willowpai2i48h3-thorfinn/slice-num-sweep`
+- Hypothesis: `slice_num=64` (Transolver PhysicsAttention) has never been tuned alone. TandemFoilSet's complex tandem wake interactions may benefit from more granular physics decomposition (slice_num=96) or coarser grouping (slice_num=32).
+- 2 arms: slice_num ∈ {32, 96} vs canonical 64 reference.

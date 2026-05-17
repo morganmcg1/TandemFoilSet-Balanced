@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 (updated 00:50 — #4200 tanjiro CLOSED (k=5 confirmed optimal); #4263 tanjiro assigned (cosine T_max sweep))
+- **Date:** 2026-05-17 (updated 01:15 — #4247 thorfinn CLOSED (n_layers=6 regresses +9.78%, schedule/LR bottleneck confirmed); #4296 thorfinn assigned (slice_num sweep {32, 96}))
 - **Branch:** `icml-appendix-willow-pai2i-48h-r3`
 - **Most recent human researcher directive:** None this launch.
 - **Canonical baseline (merged):** `val_avg/mae_surf_p = 41.4446`, `test_avg/mae_surf_p (excl cruise) = 43.2173`
@@ -46,7 +46,8 @@ Old launch baseline: 135.30. Total gain: **−69.4%** over 13 compounding improv
 |---|---|---|---|
 | #3140 | alphonse | Width scaling (128→192) | +18.7% — wall-clock penalty (bf16 revisit: #4244) |
 | #3161 | frieren | Per-sample loss normalization | +13.0% |
-| #3165 | nezuko | Depth scaling (5→8 layers) | +25.4% — wall-clock penalty (bf16 revisit: #4247 at n_layers=6) |
+| #3165 | nezuko | Depth scaling (5→8 layers) | +25.4% — wall-clock penalty |
+| #4247 | thorfinn | Deeper Transolver n_layers=6 on bf16 canonical | +9.78% val — schedule/LR bottleneck; even at matched epoch 14 deeper model lags. Capacity-via-depth closed. |
 | #3169 | tanjiro | MLP ratio 2→4 | crashed |
 | #3172 | thorfinn | Fourier (x,z) + slice_num=96 | +14.3% — dead end |
 | #3319 | askeladd | LR warmup duration sweep | flat region |
@@ -75,8 +76,8 @@ Old launch baseline: 135.30. Total gain: **−69.4%** over 13 compounding improv
 | **#4234** | **askeladd** | **Batch size sweep {4, 6, 8} on bf16 canonical** | **Throughput** | **WIP — training.** |
 | **#4244** | **alphonse** | **Wider Transolver n_hidden=192 on bf16 canonical** | **Architecture** | **WIP — training.** |
 | **#4245** | **nezuko** | **Weight decay sweep {1e-4, 1e-3, 1e-2} on bf16 canonical** | **Regularization** | **WIP — training.** |
-| **#4247** | **thorfinn** | **Deeper Transolver n_layers=6 on bf16 canonical** | **Architecture** | **WIP — training.** |
-| **#4263** | **tanjiro** | **Cosine T_max sweep {50, 17, 25} matched to bf16 17-epoch budget** | **Optimization** | **WIP — just assigned.** |
+| **#4263** | **tanjiro** | **Cosine T_max sweep {50, 17, 25} matched to bf16 17-epoch budget** | **Optimization** | **WIP — training.** |
+| **#4296** | **thorfinn** | **Transolver slice_num sweep {32, 96} on bf16 canonical** | **Architecture** | **WIP — just assigned.** |
 
 Zero idle students.
 
