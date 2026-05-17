@@ -34,7 +34,7 @@
 | **edward** | **#4425** | **wd={0.001, 0.0001} compound on new best stack** | n=8+lr=7e-4+δ=0.10+slice=32 |
 | **askeladd** | **#4479** | **wd bracket {0.002, 0.0015} on new best stack** | n=8+lr=7e-4+δ=0.10+slice=32 |
 | alphonse | #4448 | lr=8e-4 + wd=0.001 compound on n=10 stack | n=10+δ=0.10+slice=32 |
-| frieren | #4439 | sw bracket {11, 13} on new best stack (n=8+lr=7e-4) | n=8+lr=7e-4+δ=0.10+slice=32 |
+| frieren | #4484 | T_max bracket {18, 22} on new best stack | n=8+lr=7e-4+δ=0.10+slice=32 |
 | **nezuko** | **#4449** | **clip={0.20, 0.22} transfer test on new best stack** | n=8+lr=7e-4+δ=0.10+slice=32 |
 | fern | #4396 | n_freqs={8, 12} on n=10 stack | n=10+δ=0.10+slice=32 |
 | askeladd | #4406 | wd bracket {0.002, 0.003} on n=10+wd=0.001 stack | n=10+wd=0.001+slice=32 |
@@ -49,6 +49,7 @@
 | fourier_base | 2.0 | #4331 (2nd confirmation across stacks) |
 | slice_num | 32 (val) / 48 (test) | #4298 — slice=40 worst; sweet spot 32-48 |
 | n_head | 4 | #4367 — n_head=2 +1.05%, n_head=8 +6.45% |
+| surf_weight on n=8 stack | **10 (default)** | #4439 — sw=11 +0.85%, sw=13 +6.1%; destabilization via clip-saturation |
 | n_hidden | 128 | #4289 — wall-clock-bound not capacity-bound |
 | δ on lineage A (n=8) | 0.30 | #4199, #4179 |
 | δ on lineage B (n=10) | 0.10 | #4220 arm-2 — δ=0.05 regresses |
@@ -69,7 +70,7 @@
 - **#4407 thorfinn** — T_max bracket {16, 18} on n=10+wd=0.001 (relevant if T_max window also applies to new best n=8 stack)
 - **#4449 nezuko** — clip={0.20, 0.22} on n=8+lr=7e-4 stack: clip=0.20 won on n=10; does it transfer? Key diagnostic: clip_frac was already 0.953 on new best — tightening may re-saturate or compound.
 - **#4396 fern** — n_freqs={8, 12}: n=8 just won; fern testing same on n=10 base. n=12 probably regresses; n=8 arm confirms this finding on different LR/wd context.
-- **#4439 frieren** — sw bracket {11, 13} on new best stack — tests if sw=12 win (n=10 stack) compounds with n=8+lr=7e-4
+- **#4484 frieren** — T_max bracket {18, 22} on new best stack — {18=faster cooldown+4 fine-tuning epochs, 22=no floor LR}; pairs with thorfinn #4407 T_max {16,18} on n=10
 
 ## Potential next research directions
 

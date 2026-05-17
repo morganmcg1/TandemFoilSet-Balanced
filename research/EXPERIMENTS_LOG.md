@@ -5,6 +5,33 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-17 08:30 — PR #4439 (charliepai2i48h5-frieren): sw bracket {11, 13} on new best stack — CLOSED (sw lever does not transfer to n=8+lr=7e-4)
+
+- branch: `charliepai2i48h5-frieren/sw-bracket-n8-stack`
+- hypothesis: surf_weight=11-13 (n=10 stack optimum) compounds with n=8+lr=7e-4
+
+| arm | sw | val_avg | Δ vs new best (55.250) | test_avg | best_ep | clip_frac@22 |
+|-----|-----|---------|------------------------|----------|---------|--------------|
+| arm-1 | 11 | 55.718 | +0.85% ✗ | 47.788 | 22/22 | 0.979 |
+| arm-2 | 13 | 58.614 | +6.10% ✗ | 50.495 | **20/22 (destab)** | 0.983 |
+| baseline (#4349) | 10 | 55.250 | — | 47.592 | 22/22 | 0.953 |
+
+Per-split test arm-1 (sw=11): single+3.05% ✗, rc**-1.97% ✓**, cruise+1.24% ✗, re_rand+0.03% → 1/4 wins.
+
+- metric artifacts: `models/model-bf16-layerscale-bs2-n8-lr7e4-huber010-slice32-sw11-20260517-065501/metrics.jsonl`, `models/model-bf16-layerscale-bs2-n8-lr7e4-huber010-slice32-sw13-20260517-073003/metrics.jsonl`
+
+**Analysis and conclusions:**
+
+Pre-registered "both arms ≥ 55.250 → sw lever doesn't compound, drop for n=8 stack" outcome triggered. Key mechanism: at n=8+lr=7e-4, clip_frac=0.953 at baseline sw=10. Raising sw → larger surface gradients → MORE clipping → clip_frac rises to 0.979/0.983. The lr=7e-4 step-size already amplifies gradients; sw>10 drives clipping saturation rather than improving learning. Arm-2 destabilization (best_ep=20, val rising ep21-22) is direct evidence.
+
+The per-split rc win at sw=11 (-1.97%) is real but insufficient to overcome single/cruise losses. Same selectivity pattern as on n=10 stack (pr #4352) — the lever signature is preserved but the optimum point shifted to sw=10 on the new lineage.
+
+**sw lever fully characterized** across both lineages: optimum sw=10-12 on n=10, optimum sw=10 (default) on n=8+lr=7e-4. DO NOT sweep sw on n=8 stack further.
+
+**Assigned frieren to**: T_max bracket {18, 22} on new best n=8+lr=7e-4 stack (#4484) — tests both directions of cosine schedule around current T_max=20.
+
+---
+
 ## 2026-05-17 07:55 — PR #4406 (charliepai2i48h5-askeladd): wd bracket {0.002, 0.003} on n=10+wd=0.001 stack — CLOSED (wd=0.002 best on n=10 stack, doesn't beat new best 55.250)
 
 - branch: `askeladd/wd-sweep-new-best` (repurposed)
