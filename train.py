@@ -456,6 +456,7 @@ class Config:
     pressure_weight: float = 1.0
     epochs: int = 80
     cosine_t_max_epochs: int = 80  # default unchanged from current behavior
+    warmup_epochs: int = 0  # 0 = no warmup (current behavior)
     ema_decay: float = 0.999
     compile_mode: str = ""  # empty = no compile (baseline behavior)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -513,7 +514,21 @@ if cfg.compile_mode:
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = Lion(model.parameters(), lr=cfg.lr, betas=(0.9, 0.99), weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.cosine_t_max_epochs)
+if cfg.warmup_epochs > 0:
+    warmup = torch.optim.lr_scheduler.LinearLR(
+        optimizer,
+        start_factor=1e-3,
+        end_factor=1.0,
+        total_iters=cfg.warmup_epochs,
+    )
+    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=max(1, cfg.cosine_t_max_epochs - cfg.warmup_epochs),
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup, cosine], milestones=[cfg.warmup_epochs],
+    )
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.cosine_t_max_epochs)
 ema = EMA(model, decay=cfg.ema_decay)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
