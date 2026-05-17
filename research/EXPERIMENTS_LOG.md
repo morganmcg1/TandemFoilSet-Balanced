@@ -1785,3 +1785,104 @@ Note: both #4186 and #4155 were trained on the **old pre-SF baseline** since the
 - **Metrics paths:** `models/model-sf-warmup-50-20260517-012331/metrics.jsonl`, `models/model-sf-warmup-500-20260517-022540/metrics.jsonl`
 - **Key finding:** warmup=50 hurts (too aggressive, leaves optimizer poorly initialized). warmup=500 helps — the conservative ramp lets SF's running averages accumulate cleaner gradient signal early. Late-epoch trajectory smoother. Best epoch 43 vs baseline's 42 (+1). 
 - **Decision:** SENT BACK for warmup=500 retest on mlp_ratio=2 stack. val=36.91 beats old baseline (37.31) but not new (36.13). Expect compound win on new stack.
+
+## 2026-05-17 05:30 — R25 BATCH: 4 closures, 4 new assignments
+
+---
+
+## 2026-05-17 05:30 — PR #4338 — n_layers=4 + mlp_ratio=3 combo (CLOSED)
+
+- **Branch:** `charliepai2i48h1-fern/n-layers-4-mlp-ratio-3-combo`
+- **Hypothesis:** Reduce n_layers 5→4 to restore epoch budget lost to mlp_ratio=3's wider FFN. Combined n_layers=4 + mlp_ratio=3 should give same compute as n_layers=5 + mlp_ratio=2 (~43s/epoch, 41 epochs).
+- **Results:**
+
+| Metric | Value | Baseline (36.13) | Δ |
+|--------|-------|-----------------|---|
+| val_avg/mae_surf_p (primary) | 36.6138 | 36.13 | **+1.34% (worse)** |
+| test_avg/mae_surf_p | 31.7560 | 31.97 | **−0.66% (better)** |
+| val_single_in_dist | 37.32 | 36.67 | +1.77% |
+| val_geom_camber_rc | 49.30 | 48.15 | +2.39% |
+| val_geom_camber_cruise | 20.08 | 21.37 | **−6.04%** |
+| val_re_rand | 39.76 | 38.34 | +3.71% |
+| n_params | 996,147 | 983,871 | +1.2% |
+| sec/epoch | 43.3 | 47.76 | −9.3% |
+| epochs reached | 41 | 37 | +11% |
+| best epoch | 41 (last) | 37 | — |
+
+- **Metrics path:** `models/model-n-layers-4-plus-mlp-ratio-3-20260517-034519/metrics.jsonl`
+- **Key finding:** Timing math held exactly (43.3s/epoch, 41 epochs). Camber-cruise win persisted and strengthened (−6.0% vs −4.9% in standalone mlp_ratio=3). In-dist/re_rand regressions did NOT close — depth contributes structurally to these splits in a way FFN width cannot substitute. Model still improving at epoch 41 (last trained epoch). Test_avg marginally better, val_avg clear regression (+1.34%).
+- **Interpretation:** n_layers=4 is not a free lunch at mlp_ratio=3. The extra FFN capacity doesn't substitute for block mixing depth on OOD-Re splits. 30-min cap is a hard bound — can't extend to see if trajectory would cross baseline.
+- **Axis status:** n_layers STAYS FULLY CLOSED at 5. mlp_ratio STAYS CLOSED at 2. Combo doesn't reopen either.
+- **Decision:** CLOSED. Primary val metric regressed +1.34% outside noise. Student insight: asymmetric mlp_ratio per block (wider only on last block) could capture camber-cruise gain without losing mixing depth — noted as future hypothesis.
+
+---
+
+## 2026-05-17 05:30 — PR #4301 — weight_decay sweep {0, 5e-4} (CLOSED)
+
+- **Branch:** `charliepai2i48h1-thorfinn/weight-decay-sweep`
+- **Hypothesis:** mlp_ratio=2 fix increased params +33.6% (983k). Revisit wd=1e-4 — may need stronger or weaker L2 for larger model.
+- **Results:**
+
+| Metric | wd=0 (Arm A) | wd=1e-4 (baseline) | wd=5e-4 (Arm B) |
+|--------|-------------|-------------------|----------------|
+| val_avg/mae_surf_p | 36.214 (+0.22%) | **36.13** | 36.650 (+1.4%) |
+| test_avg/mae_surf_p | **31.583 (−1.2%)** | 31.97 | 31.987 |
+| val_geom_camber_cruise | 20.467 | 21.37 | 20.483 |
+| val_re_rand | 40.046 (+4.5%) | 38.34 | 38.730 |
+
+- **Metrics paths:** `models/model-charliepai2i48h1-thorfinn-weight-decay-0-20260517-024521/metrics.jsonl`, `models/model-weight-decay-5e-4-20260517-032745/metrics.jsonl`
+- **Key finding:** Axis sandwiched at 1e-4. wd=0 helps in-dist/cruise/test_re_rand but hurts val_re_rand (+4.5%), dragging val_avg over baseline. wd=5e-4 squeezes capacity (9 splits regress). **Critical insight from student:** "The wd=5e-4 regression argues the current model is capacity-limited, not regularisation-limited — supports further width/depth experiments (n_hidden, n_layers, mlp_ratio>2)." wd axis FULLY CLOSED at 1e-4.
+- **Notable secondary signal:** Arm A's test-set win (−1.2%) despite val tie suggests val_re_rand may be a noisy selector for test_re_rand performance. Checkpoint selection via last-N-epoch EMA averaging could give a free win (future hypothesis).
+- **Decision:** CLOSED. Optimum at 1e-4 from both directions. Capacity-limited conclusion informs n_hidden=160 assignment (thorfinn R25).
+
+---
+
+## 2026-05-17 05:30 — PR #4341 — slice_num=6 probe (CLOSED)
+
+- **Branch:** `charliepai2i48h1-tanjiro/slice-num-6-on-mlp-ratio-2`
+- **Hypothesis:** mlp_ratio=2 (wider GEGLU, inner_dim=256) gives more capacity per slice; may tolerate fewer slices (6 vs 8) while freeing compute.
+- **Results:**
+
+| Metric | slice_num=6 | Baseline (36.13) | Δ |
+|--------|------------|-----------------|---|
+| val_avg/mae_surf_p | 37.2467 | 36.13 | **+3.1% (worse)** |
+| test_avg/mae_surf_p | 32.5871 | 31.97 | +1.9% |
+| val_geom_camber_cruise | 20.9791 | 21.37 | −0.39% |
+| sec/epoch | 52.72 | 47.76 | **+10.4% (SLOWER)** |
+| VRAM | 22.45 GB | 22.61 GB | −0.7% |
+
+- **Metrics path:** `models/model-slice-num-6-on-mlp-ratio-2-20260517-034521/metrics.jsonl`
+- **Key finding:** Wider FFN did NOT compensate for fewer slice groups. Speed prediction inverted — 52.7s/epoch vs expected ~45s (compile/kernel favors slice_num=8, likely a power-of-two alignment). VRAM unchanged (memory doesn't live in slice count). Best epoch 33 (not the last — slight oscillation at end). All OOD splits regressed except minor cruise gain (−0.39).
+- **Axis conclusion:** slice_num=8 confirmed optimal vs 6. Student suggestion: probe **upward** (slice_num=12) since mlp_ratio=2 gives each slice more capacity to process — the optimum may have shifted upward not downward.
+- **Decision:** CLOSED. Clear regression on all meaningful splits. Upward probe (slice_num=12) assigned to tanjiro R25.
+
+---
+
+## 2026-05-17 05:30 — PR #4260 retest — SF warmup_steps=500 on mlp_ratio=2 stack (CLOSED)
+
+- **Branch:** `charliepai2i48h1-frieren/sf-warmup-steps-sweep`
+- **Hypothesis (retest):** warmup=500 won on old stack (36.91 vs 37.31). Expecting compound win on mlp_ratio=2 stack.
+- **Results:**
+
+| Metric | warmup=500 (this) | warmup=200 baseline (36.13) | Δ |
+|--------|------------------|---------------------------|---|
+| val_avg/mae_surf_p | 37.2646 | 36.13 | **+3.1% (worse)** |
+| test_avg/mae_surf_p | 32.7283 | 31.97 | +2.4% |
+| val_geom_camber_cruise | 20.763 | 21.37 | **−0.61%** |
+| val_single_in_dist | 38.971 | 36.67 | +6.3% |
+
+- **Metrics path:** `models/model-sf-warmup-500-on-mlp-ratio-2-20260517-034647/metrics.jsonl`
+- **Key finding:** Old-stack win did NOT transfer. Student's analysis: "warmup length scales inversely with model capacity/conditioning for adaptive optimizers." mlp_ratio=1 stack had noisy early gradients → longer warmup helped. mlp_ratio=2 stack produces higher-quality early gradients → 500-step warmup wastes high-quality signal at sub-maximal LR. Camber_cruise + single_in_dist-test improved (cleanest OOD splits); camber_rc + re_rand regressed (hardest geometry shifts). Model still descending at epoch 37 (last) — not a capacity or convergence failure, just a worse trajectory shape from over-long warmup.
+- **Warmup axis status:** Current (200) confirmed optimal on new stack from above. Below-200 probe (warmup=100) now the next test — assigned to frieren R25.
+- **Decision:** CLOSED. warmup=500 fails on mlp_ratio=2 stack. Capacity-warmup interaction documented. Inverse probe (warmup=100) assigned.
+
+---
+
+### R25 New Assignments
+
+| PR | Student | Hypothesis | Theme |
+|----|---------|------------|-------|
+| #4360 | frieren | warmup_steps=100 on mlp_ratio=2 — inverse-direction to failed 500 | optim |
+| #4361 | thorfinn | n_hidden=160 on mlp_ratio=2 — deferred capacity axis, per wd evidence | architecture |
+| #4363 | tanjiro | slice_num=12 on mlp_ratio=2 — upward probe per student follow-up | attention |
+| #4364 | fern | surf_weight sweep {15, 20} — bias loss toward primary metric | loss |

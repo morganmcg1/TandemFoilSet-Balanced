@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-17 04:05 UTC (R24 — 4 axes closed; 4 new assignments; frieren warmup=500 sent back)
+- **Updated:** 2026-05-17 05:30 UTC (R25 — 4 closures; 4 new assignments; 0 merges this round)
 - **Track:** Charlie local-metrics arm (`charlie-pai2i-48h-r1`)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-48h-r1`
 - **Target base:** `icml-appendix-charlie`
@@ -63,45 +63,56 @@ Per-split test: single=36.53, rc=44.62, cruise=17.23, re_rand=29.50.
 
 | PR | Student | Hypothesis | Theme | Status |
 |----|---------|------------|-------|--------|
-| #4338 | fern | n_layers=4 + mlp_ratio=3: restore epoch budget at wider FFN | combo | WIP — R24 fresh |
-| #4340 | nezuko | dropout sweep {0.05, 0.15} on mlp_ratio=2 stack | regularization | WIP — R24 fresh |
-| #4341 | tanjiro | slice_num=6 on mlp_ratio=2 stack | attention | WIP — R24 fresh |
-| #4342 | askeladd | 3-seed multi-seed baseline confirmation | validation | WIP — R24 fresh |
-| #4260 | frieren | SF warmup_steps=500 retest on mlp_ratio=2 stack | optim | WIP — R24 send-back |
-| #4301 | thorfinn | weight_decay sweep {0, 5e-4} on mlp_ratio=2 stack | regularization | WIP — pre-R24 |
-| #4314 | edward | lr sweep {3e-4, 7.5e-4} on mlp_ratio=2 stack | optim | WIP — pre-R24 |
-| #4281 | alphonse | beta=0.1 confirm + beta=0.05 2-arm on mlp_ratio=2 stack | loss | WIP — pre-R24 |
+| #4360 | frieren | warmup_steps=100 on mlp_ratio=2 — inverse probe; warmup=500 failed, does shorter help? | optim | WIP — R25 fresh |
+| #4361 | thorfinn | n_hidden=160 on mlp_ratio=2 — deferred capacity axis; wd evidence says capacity-limited | architecture | WIP — R25 fresh |
+| #4363 | tanjiro | slice_num=12 on mlp_ratio=2 — probe upward; slice_num=6 slower, hypothesis: wider FFN wants more slices | attention | WIP — R25 fresh |
+| #4364 | fern | surf_weight sweep {15, 20} — bias loss toward primary surface metric; not re-swept since early rounds | loss | WIP — R25 fresh |
+| #4342 | askeladd | 3-seed multi-seed baseline confirmation | validation | WIP — pre-R25 |
+| #4340 | nezuko | dropout sweep {0.05, 0.15} on mlp_ratio=2 stack | regularization | WIP — pre-R25 |
+| #4314 | edward | lr sweep {3e-4, 7.5e-4} on mlp_ratio=2 stack | optim | WIP — pre-R25 |
+| #4281 | alphonse | beta=0.1 confirm + beta=0.05 2-arm on mlp_ratio=2 stack | loss | WIP — pre-R25 |
 
 ## Fully closed axes
 
 | Axis | Verdict |
 |------|---------|
-| **n_layers** | FULLY CLOSED — 3 (floor), 4 (tie-within-noise), 5 (optimal), 6 (undertrained) |
-| **mlp_ratio (FFN capacity)** | FULLY CLOSED — 2 optimal; 3 slight regression; 4 OOD overfitting |
+| **n_layers** | FULLY CLOSED — 3 (floor), 4 (tie-within-noise), 5 (optimal), 6 (undertrained); n_layers=4+mlp_ratio=3 combo also tried and regressed |
+| **mlp_ratio (FFN capacity)** | FULLY CLOSED — 2 optimal; 3 slight regression; 4 OOD overfitting; combo at n_layers=4+mlp_ratio=3 also fails |
 | **n_head** | FULLY CLOSED — n_head=4 × dim_head=32 optimal; 8 dim_head too thin; 2 Q/K/V-params waste |
+| **weight_decay** | FULLY CLOSED at 1e-4 — wd=0 helps test but hurts val_re_rand; wd=5e-4 squeezes capacity; model is capacity-limited not reg-limited |
+| **SF warmup_steps** | PARTIALLY CLOSED — 50 hurts, 500 hurts on new stack; 200 confirmed optimal from above. Probing 100 (below) |
+| **slice_num (current)** | PARTIALLY CLOSED — 6 regresses (+3.1%), 8 optimal; 12 in-flight (upward probe) |
 | EMA decay | CLOSED at 0.997 |
-| slice_num (prior) | CLOSED at 8 on old stack; re-probing at 6 on new stack (tanjiro) |
 | dropout (prior) | CLOSED at 0.1 on old stack; re-sweeping on new stack (nezuko) |
 | GEGLU on attention projections | FULLY CLOSED — all regressed |
 | Gate-activation axis | CLOSED — GEGLU > ReGLU > SwiGLU |
 | FiLM family | FULLY CLOSED |
 | batch_size=8 | CLOSED |
-| surface-weight ramp (10×) | CLOSED |
+| surface-weight ramp (10×) | CLOSED (ramp; static value axis now open — fern #4364) |
 | RMSNorm | CLOSED |
 | FiLM-full (11 scalars) | CLOSED |
-| n_hidden=160 | DEFERRED (tested on broken stack; no retesting yet) |
+| n_hidden=160 | IN FLIGHT (thorfinn #4361) |
+
+## Key R25 insights (inform future hypotheses)
+
+1. **Capacity-warmup interaction** (frieren): warmup length scales inversely with model capacity for SF AdamW. mlp_ratio=1 stack needed longer warmup (500 won); mlp_ratio=2 stack's cleaner gradients favor shorter (warmup=200 current, testing 100). Principle applies to future architectural changes.
+2. **Model is capacity-limited** (thorfinn wd sweep): wd=0 freed capacity and helped test (−1.2%) but hurt val_re_rand. wd=5e-4 squeezed capacity and regressed everywhere. Direct implication: pursue width/depth increases.
+3. **Slice_num kernel alignment** (tanjiro): compile path distinctly favors slice_num=8 (possibly power-of-two). slice_num=6 was actually 10% slower than baseline despite fewer slices. This is a systems finding to keep in mind.
+4. **Camber-cruise gain orthogonality**: Multiple experiments (mlp_ratio=3 standalone, n_layers=4+mlp_ratio=3 combo) show camber-cruise (val_geom_camber_cruise) consistently improves with wider FFN, while in-dist/re_rand don't. This suggests the camber-cruise split is FFN-capacity-limited while OOD-Re splits are more depth/routing-limited.
+5. **Asymmetric FFN potential** (fern's suggestion): wider FFN on only the last Transolver block could capture the camber-cruise gain without losing the mixing depth that OOD-Re splits need. Promising future hypothesis if current directions exhaust.
 
 ## Potential next research directions
 
-1. **n_layers=4 + mlp_ratio=3** — IN FLIGHT (fern #4338). Fix the undertraining issue from standalone mlp_ratio=3.
-2. **dropout sweep {0.05, 0.15}** — IN FLIGHT (nezuko #4340). Larger model may need different regularization.
-3. **slice_num=6** — IN FLIGHT (tanjiro #4341). Revisit on new mlp_ratio=2 stack.
-4. **3-seed baseline confirmation** — IN FLIGHT (askeladd #4342). ~90min, 3 seeds.
-5. **warmup_steps=500 on mlp_ratio=2** — IN FLIGHT (frieren #4260). Won on old stack; expecting compound.
-6. **weight_decay sweep {0, 5e-4}** — IN FLIGHT (thorfinn #4301).
-7. **lr sweep {3e-4, 7.5e-4}** — IN FLIGHT (edward #4314).
-8. **SmoothL1 beta {0.1, 0.05}** — IN FLIGHT (alphonse #4281).
-9. **n_layers=4 + mlp_ratio=2 + warmup_steps=500** — if warmup=500 wins, combine with depth
-10. **n_hidden=160 on mlp_ratio=2 stack** — after main hyperparameter axes settle
-11. **Stochastic depth (drop_path)** — regularization alternative to dropout
-12. **Multi-seed confirmation of future winners** — once strong improvements identified
+1. **warmup_steps=100** — IN FLIGHT (frieren #4360). Inverse probe to failed 500.
+2. **n_hidden=160** — IN FLIGHT (thorfinn #4361). Deferred capacity axis, now timely.
+3. **slice_num=12** — IN FLIGHT (tanjiro #4363). Upward probe at wider FFN.
+4. **surf_weight sweep {15, 20}** — IN FLIGHT (fern #4364). Direct loss bias toward primary metric.
+5. **dropout {0.05, 0.15} on new stack** — IN FLIGHT (nezuko #4340).
+6. **lr sweep {3e-4, 7.5e-4}** — IN FLIGHT (edward #4314).
+7. **SmoothL1 beta {0.1, 0.05}** — IN FLIGHT (alphonse #4281).
+8. **3-seed baseline confirmation** — IN FLIGHT (askeladd #4342).
+9. **Asymmetric FFN per block** — after current results; wider last-block only.
+10. **EMA checkpoint averaging (last-N-epoch)** — alternative checkpoint selection; thorfinn's wd=0 arm showed test wins despite val tie.
+11. **Stochastic depth (drop_path)** — only if evidence shifts toward over-parameterized (currently under).
+12. **n_hidden=160 + warmup_steps tuning** — compound if n_hidden=160 wins.
+13. **surf_weight combination with capacity changes** — after fern's surf_weight result.
