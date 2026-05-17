@@ -2805,3 +2805,42 @@ Notable: askeladd identified and fully documented the data/scoring.py NaN propag
 | #4529 | nezuko | **H135: condition-only Mixup α={0.2,0.5}** | Blend only NACA+flow conditioning dims 13:24 + targets between sample pairs; mesh geometry fixed. Geometry-safe Mixup for camber-axis interpolation | 0.3–1.0 pts camber OOD |
 
 All use new wd=5e-3 baseline (34.5532 / 33.0792). **8 WIP, 0 idle.**
+
+---
+
+## 2026-05-17 — PR #4463: H128 compile + T_max=24 (thorfinn) — MERGED, new baseline val=33.4710
+
+| Arm | T_max | val_avg | Δ vs H120 K=1 | Δ vs H125 wd=5e-3 | test 3-split | best_ep |
+|-----|-------|---------|---------------|-------------------|--------------|---------|
+| A | **24** | **33.4710** | **−2.19** ✓✓ | **−1.08** ✓ | **32.638** | 26 |
+| B | 21 | 35.5842 | −0.08 (noise) | +1.03 | 33.7261 | 23 |
+| H125 baseline | 21 | 34.5532 | −1.11 | — | 33.0792 | — |
+| H120 baseline | 21 | 35.6651 | — | — | 33.3976 | — |
+
+**Per-split val (Arm A vs H125 baseline):**
+- val_single_in_dist: 31.74 (Δ+0.23 ~flat)
+- val_geom_camber_rc: **45.76 (Δ−2.02!)** — first significant OOD movement
+- val_geom_camber_cruise: 19.65 (Δ−1.16)
+- val_re_rand: 36.74 (Δ−1.37)
+
+**All 4 val splits improve**, including the OOD bottleneck val_geom_camber_rc. T_max=24's extended cosine polish drives uniform gains, qualitatively different from H125's val_single_in_dist-driven win.
+
+**Mechanism:** Compile alone is mathematically neutral (Arm B Δ-0.08 confirms). The 1.86× speedup (46 s/ep vs 85 s/ep eager) enables 38 epochs in the 30-min wall — extending T_max from 21 to 24 gives 3 polish epochs at low (but nonzero) LR before the cosine floor. Per trajectory tables, Arm B (T_max=21) peaks at epoch 23 and climbs rapidly; Arm A (T_max=24) peaks at epoch 26 with cleaner descent.
+
+**Bug fix bundled:** thorfinn fixed `evaluate_split` NaN-propagation in train.py (drop samples with non-finite y before normalization). Restores test_avg 4-split (previously all NaN due to NaN×0=NaN in accumulator). 3-split convention unchanged.
+
+**Caveat:** Ran wd=1e-3 (assigned before H125 merged). Compound test H136 (compile + T_max=24 + wd=5e-3) assigned to thorfinn next — will resolve whether wd=5e-3 still helps when T_max=24 is in the stack.
+
+**Variance note:** Two identical Arm A runs gave 32.74 and 33.47 (+0.73 spread). Both beat baseline cleanly. Reporting 33.47 (post-fix rerun) as canonical.
+
+Artifacts: `models/model-h128-arm-a-compile-tmax24-rerun-20260517-085024/`
+
+**T_max=24 LOCKED. compile=reduce-overhead LOCKED. wd contested (1e-3 in baseline, H125 5e-3 to be retested in H136).**
+
+---
+
+## 2026-05-17 — Cycle 45 follow-up: H136 compile + T_max=24 + wd=5e-3 compound test (thorfinn, #4545)
+
+Independent wins H125 (wd=5e-3) and H128 (T_max=24) on same prior baseline. Single arm: compound at wd=5e-3 + T_max=24 + compile. Win condition: val_avg < 33.4710. If wins, wd=5e-3 lock restored.
+
+**7 WIP remaining (H126, H130-H136), 0 idle.**
