@@ -2902,3 +2902,57 @@ Two arms:
 Win condition: val_avg < 33.4710. Expected: ρ=0.05 reduces val_geom_camber_rc by 1-3 pts via flatness-seeking.
 
 **8 WIP remaining (H130-H137), 0 idle.**
+
+---
+
+## 2026-05-17 — PR #4529: H135 condition-only Mixup α={0.2,0.5} (nezuko) — CLOSED, H112-repeat failure
+
+- Branch: `charliepai2i48h3-nezuko/h135-condition-mixup`
+- Hypothesis: Blend conditioning features (dims 13:24) between sample pairs, keeping mesh geometry fixed. Targets val_geom_camber_rc by synthesizing camber-axis interpolations.
+
+### Results
+
+| Arm | val_avg | Δ vs baseline (33.4710) | test 3-split |
+|-----|--------:|------------------------:|-------------:|
+| Arm A (α=0.2, p=0.3) | 49.1187 | **+14.57** | 46.0461 |
+| Arm B (α=0.5, p=0.5) | 56.3854 | **+21.83** | 55.4980 |
+
+Per-split val vs H128 baseline:
+
+| Split | H128 | Arm A | Arm B |
+|-------|-----:|------:|------:|
+| val_single_in_dist | 31.74 | 49.33 | 59.58 |
+| val_geom_camber_rc | 45.76 | 61.12 | 69.35 |
+| val_re_rand | 36.74 | 53.77 | 57.01 |
+
+Artifacts: `models/model-h135-arm-a-condmix02-20260517-095437/`, `models/model-h135-arm-b-condmix05-20260517-102708/`
+
+### Analysis
+
+Pre-registered failure mode triggered exactly: uniform regression across ALL 4 splits, monotone dose-response (more mixing → worse), test mirrors val one-to-one. Verification confirms geometry dims 0:12 untouched, is_surface preserved — the mechanic worked, the idea didn't.
+
+Mechanism (nezuko's analysis): FiLM scales/shifts every hidden activation. Blended target λ·y_i + (1−λ)·y_j is physically incorrect for sample i's geometry. Model is supervised on wrong outputs. val_single_in_dist regresses MORE than val_geom_camber_rc in Arm B (+28.07 vs +21.57) — in-dist contamination signature.
+
+**Combined with H112 (within-sample jitter):** Both approaches confirm the FiLM cond pathway is brittle to any perturbation. Axis CLOSED.
+
+### Decision
+
+Closed. Massive regression, lever is fundamentally wrong direction.
+
+**Lever: Condition-channel augmentation (jitter H112 + mixup H135) ❌ CLOSED. FiLM pathway brittle.**
+
+**8 WIP → 7 WIP (H130-H134, H136-H137), nezuko reassigned to H138.**
+
+---
+
+## 2026-05-17 — Cycle 51: H138 camber boundary curriculum (nezuko, #4571)
+
+Motivated by H112+H135 confirming FiLM brittleness. WeightedRandomSampler up-weights M=5 and M=9 training cohorts (closest to OOD M=6-8 held-out). No conditioning perturbation — clean (geometry, cond, y) triples, more boundary exposure per epoch.
+
+Two arms:
+- Arm A: 2× upweight (mild boundary emphasis)
+- Arm B: 4× upweight (strong boundary emphasis)
+
+Win condition: val_avg < 33.4710. Primary diagnostic: val_geom_camber_rc. A trade-off (val_geom_camber_rc down, val_single_in_dist slightly up) is informative — report before close.
+
+**8 WIP remaining (H130-H134, H136-H138), 0 idle.**

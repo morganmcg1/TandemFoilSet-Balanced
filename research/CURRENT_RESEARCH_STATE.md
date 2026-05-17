@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-17 (cycle 49 — H128 MERGED, OOD bottleneck cracked)
+- **Date**: 2026-05-17 (cycle 51 — H135 cond-Mixup CLOSED; H138 camber curriculum assigned)
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
-- **Round**: 5 late-phase — **CURRENT BEST: H128 Arm A (compile + T_max=24, val=33.4710 / test=32.638, PR #4463).** Cycle 49: H128 merged — first lever to significantly move OOD camber split (val_geom_camber_rc −2.02). 8 WIP incl. new H136 compound test (wd=5e-3 × compile × T_max=24).
+- **Round**: 5 late-phase — **CURRENT BEST: H128 Arm A (compile + T_max=24, val=33.4710 / test=32.638, PR #4463).** Cycle 51: H135 cond-Mixup closed (H112-repeat failure mode; FiLM pathway brittle to all perturbations). H138 camber boundary curriculum assigned to nezuko (WeightedRandomSampler on M=5,9 cohorts). 8 WIP.
 - **Most recent human research directive**: None received
 
 ## Current Best
@@ -53,6 +53,7 @@ H128's −1.08 pts val_avg gain and −0.44 pts test gain are inside the noise b
 - Capacity reduction (n_hidden=96,112): BOTH directions worse; n_hidden=128 confirmed optimum (H127)
 - Fourier K-sweep: K=0 and scale=0.5 both fail; K=1 scale=1.0 is true optimum (H123)
 - Literal Mixup (sample pairs): mesh identity violation + H55 repeat (H129)
+- Condition-only Mixup: FiLM pathway brittle — uniform regression +14.6 pts val (H135); H112-repeat signature
 - slice_num=80 + Fourier: anti-compound (H115 Arm C)
 - Per-sample p norm: catastrophic (H104)
 - FiLM cond jitter: washes out conditioning (H112)
@@ -81,6 +82,7 @@ H128's −1.08 pts val_avg gain and −0.44 pts test gain are inside the noise b
 | **#4480** | fern | **H131: LE+TE dual coord features (4/8 extra dims)** | HIGH (input repr, OOD-targeted) | ~32-34 |
 | **#4527** | edward | **H133: spectral norm on in_project_slice** | HIGH (Lipschitz regularization) | ~32.5-34 |
 | **#4529** | nezuko | **H135: condition-only Mixup α={0.2,0.5}** | HIGH (camber-axis augmentation) | ~32-34 |
+| **#4571** | nezuko | **H138: camber boundary curriculum WeightedRandomSampler M=5,9 upweight** | HIGH (OOD sampler, no perturbation) | ~32-34 |
 | **#4563** | frieren | **H137: SAM (Sharpness-Aware Minimization) ρ={0.05, 0.1}** | HIGH (flat-minimum OOD generalization) | ~32-34 |
 | **#4466** | tanjiro | **H130: AdamW vs Lion revalidation at K=1** | LOW (sanity check, baseline shifted) | likely confirms Lion |
 
@@ -90,6 +92,8 @@ H128's −1.08 pts val_avg gain and −0.44 pts test gain are inside the noise b
 
 **Note on H137 (frieren):** Reassigned from H126 FFN dropout (closed). H126 diagnostic: train-val gap unchanged → model not overfitting via co-adaptation. SAM attacks flat-minimum hypothesis — seeks flatter loss basins for distributional OOD generalization.
 
+**Note on H138 (nezuko):** Reassigned from H135 condition-Mixup (closed). H112+H135 both confirm FiLM pathway brittle to any condition perturbation. H138 attacks OOD without touching conditioning — just reweights the sampler to expose model to more M=5,M=9 boundary examples per epoch. Nezuko proposed this and runs it.
+
 ## Lever Status
 
 | Lever | Status | Best result | Notes |
@@ -97,7 +101,9 @@ H128's −1.08 pts val_avg gain and −0.44 pts test gain are inside the noise b
 | Optimizer | 🔬 H130 revalidating AdamW vs Lion | 35.67 (Lion at K=1) | First retest since H73 |
 | Weight decay | 🔬 H136 retesting wd=5e-3 on new stack | 34.55 (wd=5e-3 at H125 stack) | H128 used wd=1e-3 — compound test needed |
 | SAM optimizer wrapper | 🔬 H137 active ρ={0.05, 0.1} | none | Flat-minimum generalization via Lion+SAM |
+| Camber boundary curriculum | 🔬 H138 active (2×/4× upweight M=5,9) | none | WeightedRandomSampler on boundary cohorts; no perturbation |
 | FFN dropout | ❌ CLOSED — negative, all p values wrong direction (H126) | none | Train-val gap unchanged; OOD gap is geometric extrapolation not co-adaptation |
+| Condition-only Mixup | ❌ CLOSED — H112-repeat, FiLM pathway brittle (H135) | none | +14.6 pts val_avg, uniform regression; cond-augmentation axis closed |
 | Spectral norm (in_project_slice) | 🔬 H133 active | none | Lipschitz-1 constraint on slice assignment |
 | Condition-only Mixup | 🔬 H135 active | none | Geometry-safe Mixup on NACA+flow params; H129 literal-Mixup closed |
 | LE+TE dual coords | 🔬 H131 active | none | OOD-targeted input repr; Texas A&M arXiv 2412.09399 |
