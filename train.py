@@ -474,6 +474,7 @@ class Config:
     grad_clip: float = 0.0  # PR #3497: max_norm for clip_grad_norm_; 0 disables (norm still logged)
     use_bf16: bool = False   # bfloat16 autocast for forward+loss; default off for reproducibility
     slice_num: int = 64      # PR #4296: Transolver PhysicsAttention slice_num (canonical 64)
+    n_head: int = 4          # PR #4348: Transolver PhysicsAttention heads (n_hidden must be divisible)
 
 
 cfg = sp.parse(Config)
@@ -517,7 +518,7 @@ model_config = dict(
     out_dim=3,
     n_hidden=128,
     n_layers=5,
-    n_head=4,
+    n_head=cfg.n_head,
     slice_num=cfg.slice_num,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
