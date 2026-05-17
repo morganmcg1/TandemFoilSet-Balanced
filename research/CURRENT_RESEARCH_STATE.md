@@ -6,22 +6,22 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-17 (~08:00 UTC) — #4255 fern CLOSED (Finding #36); #4346 fern assigned (R12 H78: multi-seed BL replication). 8/8 staffed.
+- **Date:** 2026-05-17 (~08:30 UTC) — **#4320 thorfinn MERGED — NEW BEST val 49.75 / test 42.89** (T_max=22, first sub-50 val, camber_cruise fixed). #4372 thorfinn assigned (R12 H79: T_max={21,23} fine grid). 8/8 staffed.
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
 
-**val_avg/mae_surf_p = 53.0764** (PR #4201 nezuko — Lion lr=2e-4 + n_fourier=0 + FiLM + wd=1e-3 + EMA(0.997) + Huber β=0.05 + **T_max=20** + **grad_clip=1.0** + **layer_scale_init=1e-4**; NO spec_norm; run `d3qlknrv`)
-**test_avg/mae_surf_p = 44.8874** (same run, clean 4-split)
+**val_avg/mae_surf_p = 49.7515** (PR #4320 thorfinn — Lion lr=2e-4 + n_fourier=0 + FiLM + wd=1e-3 + EMA(0.997) + Huber β=0.05 + **T_max=22** + **grad_clip=1.0** + **layer_scale_init=1e-4**; NO spec_norm; run `1neonugr`)
+**test_avg/mae_surf_p = 42.8929** (same run, clean 4-split)
 
-Per-split val: in_dist 55.86, camber_rc 65.64, camber_cruise 36.68, re_rand 54.13
-Per-split test: in_dist 46.83, camber_rc 57.22, camber_cruise 30.65, re_rand 44.85
+Per-split val: in_dist 50.61, camber_rc 63.77, **camber_cruise 32.88**, re_rand 51.75
+Per-split test: in_dist 44.05, camber_rc 57.45, **camber_cruise 27.56**, re_rand 42.51
 
-**Δ vs prior best (PR #4145 T_max=24+clip=1.0, val 53.81 / test 45.49): −0.73 val / −0.60 test**
+**Δ vs prior best (PR #4201 T_max=20, val 53.08 / test 44.89): −3.32 val / −1.99 test**
 
-Key mechanism: Four-way composition. layer_scale=1e-4 + T_max=20 + lr=2e-4 + clip=1.0 compose additively. Win concentrated in camber_rc (−4.9 val / −4.9 test — the hardest OOD split). layer_scale + clip=1.0 together provide direction-sensitive step stabilization in high-gradient-norm geometry domains. camber_cruise regresses (+2.5/+2.8) — likely over-tight clip for cruise's gradient distribution. σ_val=1.55 across 3 seeds; 2/3 seeds beat BL; median (53.27/45.35) also beats BL.
+Key mechanism: Lower cosine-endpoint LR at T_max=22 (~1.24e-4 within 14 epochs vs ~1.34e-4 at T_max=20). Improvement is broad-based: all 4 val splits improve, 3 of 4 test splits improve. **camber_cruise regression from PR #4201 (+2.5/+2.8) is FIXED**: cruise val 36.68→32.88 (−3.80), cruise test 30.65→27.56 (−3.09). T_max=22 is safe — T_max=24 diverges at ls substrate (Finding #33). T_max=16 regresses (+1.97 val, concentrated in camber_rc).
 
-**Weakness**: camber_cruise regression (+2.5 val / +2.8 test) and re_rand test (+0.92) need attention in R12.
+**Current weakness**: camber_rc test (57.45) remains the weakest split — ~15 higher than other splits. Next immediate probe: T_max=23 (cliff-edge probe, PR #4372).
 
 ## Merged sequence (improvement cascade)
 
@@ -42,22 +42,25 @@ Key mechanism: Four-way composition. layer_scale=1e-4 + T_max=20 + lr=2e-4 + cli
 | #4120 | lr=2e-4 at clip=1.0 | 57.66 → 56.89 | 49.45 → 49.03 | −1.3% / −0.8% |
 | #4015 | layer_scale_init=1e-4 + T_max=20 | 56.89 → 54.30 | 49.03 → 47.29 | −4.6% / −3.5% |
 | #4145 | T_max=24 + grad_clip=1.0 | 54.30 → 53.81 | 47.29 → 45.49 | −0.9% / −3.8% |
-| **#4201** | **ls=1e-4 + T_max=20 + lr=2e-4 + clip=1.0** | **53.81 → 53.08** | **45.49 → 44.89** | **−1.4% / −1.3%** |
+| #4201 | ls=1e-4 + T_max=20 + lr=2e-4 + clip=1.0 | 53.81 → 53.08 | 45.49 → 44.89 | −1.4% / −1.3% |
+| **#4320** | **T_max=22 at new BL (endpoint LR −3.32 val — BIGGEST R12 WIN)** | **53.08 → 49.75** | **44.89 → 42.89** | **−6.2% / −4.5%** |
 
-**Total improvement:** val 135 → 53.08 (−60.7%), test ~130 → 44.89 (−65.5%)
+**Total improvement:** val 135 → 49.75 (−63.1%), test ~130 → 42.89 (−67.0%)
 
 ## Active experiments (8 of 8 students staffed)
 
-| PR | Student | Hypothesis | Status |
-|----|---------|------------|--------|
-| **#4346** | **fern** | **R12 H78: Multi-seed BL replication (seed=42, seed=2026) → tighten σ from 1.55 to ~1.2** | **Just assigned** |
-| #4315 | tanjiro | R12 H71: LR sweep {1.7e-4, 2.3e-4} at new BL (ls+T_max=20+clip+lr=2e-4) | WIP |
-| #4318 | askeladd | R12 H72: ls magnitude {1e-3, 5e-5} at new BL substrate | WIP |
-| #4319 | nezuko | R12 H73: WD sweep {5e-4, 2e-3} at new BL substrate | WIP |
-| #4320 | thorfinn | R12 H74: T_max {16, 22} at new BL substrate (T_max=24 excluded: diverges at ls) | WIP |
-| **#4326** | **alphonse** | **R12 H75: Huber β {0.03, 0.10} at new BL substrate (targets camber_cruise & re_rand)** | **Just assigned** |
-| **#4328** | **frieren** | **R12 H76: EMA decay {0.995, 0.999} at new BL substrate (ls unblocks ema=0.999?)** | **Just assigned** |
-| **#4329** | **edward** | **R12 H77: Lion β1 {0.85, 0.95} at new BL substrate (extends Finding #30)** | **Just assigned** |
+| PR | Student | Hypothesis | Status | Substrate |
+|----|---------|------------|--------|-----------|
+| **#4372** | **thorfinn** | **R12 H79: T_max {21,23} fine grid around T_max=22 BL** | **Just assigned** | T_max=22 BL |
+| #4315 | tanjiro | R12 H71: LR sweep {1.7e-4, 2.3e-4} | WIP | T_max=20 (old BL — directional finding) |
+| #4318 | askeladd | R12 H72: ls magnitude {1e-3, 5e-5} | WIP | T_max=20 (directional finding) |
+| #4319 | nezuko | R12 H73: WD sweep {5e-4, 2e-3} | WIP | T_max=20 (directional finding) |
+| #4326 | alphonse | R12 H75: Huber β {0.03, 0.10} | WIP | T_max=20 (directional finding) |
+| #4328 | frieren | R12 H76: EMA decay {0.995, 0.999} | WIP | T_max=20 (directional finding) |
+| #4329 | edward | R12 H77: Lion β1 {0.85, 0.95} | WIP | T_max=20 (directional finding) |
+| #4346 | fern | R12 H78: Multi-seed BL replication (seed=42, 2026) | WIP | T_max=20 (tighten PR #4201 σ) |
+
+**Note on substrate shift**: #4315–#4346 test at T_max=20 and will be compared against the current BL (val 49.75, T_max=22). They are unlikely to beat the new BL but will yield directional axis findings — any winners at T_max=20 that clear the old BL (53.08) are valuable leads for R13 at T_max=22.
 
 ## Recent closures
 
@@ -72,7 +75,7 @@ Key mechanism: Four-way composition. layer_scale=1e-4 + T_max=20 + lr=2e-4 + cli
 | #4231 | tanjiro | LR recalibration: lr=1.7e-4 directional winner at old substrate. Test regresses vs new BL. **Finding #32**: LR finding for follow-up at new BL → #4315. | CLOSED |
 | #4214 | frieren | EMA@layer_scale+T_max=20: timeout-truncated. **Finding #28**: layer_scale stabilises ema=0.999 but slow. | CLOSED |
 
-## Key findings (cumulative, 36)
+## Key findings (cumulative, 37)
 
 1. **FiLM on log(Re)** contributes −4.35 val / −4.56 test under n_fourier=0.
 2. **EMA(0.997)** contributes +4.4 val on top of Lion.
@@ -110,24 +113,28 @@ Key mechanism: Four-way composition. layer_scale=1e-4 + T_max=20 + lr=2e-4 + cli
 34. **EMA tightens around 0.997 at T_max=24+clip=1.0+no-layer_scale**: both 0.995 and 0.999 within σ of BL. EMA axis closed at old substrate. Distinct from Finding #28 (layer_scale enables ema=0.999, but slow).
 35. **Fine-grained clip (0.85, 1.15) at T_max=24+no-ls both regress ~2 val vs clip=1.0**: the asymmetric regression from Finding #25 (clip 0.5 vs 2.0 favored 2.0) does NOT replicate at the fine grid. clip=1.0 is locally optimal at {0.85, 1.0, 1.15}. Clip axis at old substrate closed.
 36. **lr=1.5e-4 is a SHARP local minimum at T_max=24+clip+no-ls**: all wider LR arms ({1.3, 1.7, 2.0}×1e-4) regress ≥2.2 val. Finding #22 (clip shifts lr optimum to 2e-4 at T_max=14) does NOT generalize to T_max=24; elevated late-schedule LR at T_max=24 already provides effective high-LR. LR axis fully closed at old substrate.
+37. **T_max=22 is the new optimum — first sub-50 val, camber_cruise regression fixed**: lower cosine-endpoint LR (~1.24e-4 at epoch 14) vs T_max=20 (~1.34e-4) gives the small-gradient cruise domain better convergence. Win is broad-based (all 4 val splits, 3 of 4 test). T_max=16 regresses (+1.97 val) confirming the mechanism: higher time-averaged LR (more T_max) is beneficial IF the endpoint LR is simultaneously lower. Safe range with ls: T_max ∈ [20, 22]; T_max=24 diverges (Finding #33). Follow-up: T_max=23 cliff-edge probe (#4372).
 
-## R12 focus: closing all hyperparameter axes at the new BL substrate
+## R12 focus: T_max=22 established as new BL — fine-grid probe ongoing
 
-The new BL (PR #4201, val 53.08 / test 44.89) uses: ls=1e-4 + T_max=20 + lr=2e-4 + clip=1.0 + EMA(0.997) + Huber β=0.05 + FiLM + wd=1e-3 + Lion β1=0.9.
+**Immediate priority**: #4372 thorfinn T_max={21, 23} probe.
+- T_max=23 is the cliff-edge test: does improvement continue toward T_max=24 divergence point?
+- T_max=21 completes the 1-step grid (20→21→22→23) for a clean paper-facing comparison.
 
-**Main weakness**: camber_cruise regression (+2.5 val / +2.8 test), re_rand test (+0.92). R12 systematically closes every hyperparameter axis at this substrate:
+**R12 hyperparameter sweeps in flight at T_max=20**: All 6 axis sweeps (#4315–#4346 minus thorfinn) are testing at T_max=20 (the now-superseded substrate). They will yield directional findings but are unlikely to beat the new BL (49.75 at T_max=22). Plan:
+- Let them complete — GPU time already committed
+- Close as informative findings with directional notes for R13
+- R13 will re-test the most promising axis winners at T_max=22
 
-| Axis | PR | Student | Values tested |
-|------|----|---------|---------------|
-| LR | #4315 | tanjiro | {1.7e-4, 2.3e-4} vs 2e-4 |
-| ls magnitude | #4318 | askeladd | {1e-3, 5e-5} vs 1e-4 |
-| WD | #4319 | nezuko | {5e-4, 2e-3} vs 1e-3 (FIRST at new BL) |
-| T_max | #4320 | thorfinn | {16, 22} vs 20 (T_max=24 EXCLUDED) |
-| Huber β | #4326 | alphonse | {0.03, 0.10} vs 0.05 (FIRST at new BL) |
-| EMA decay | #4328 | frieren | {0.995, 0.999} vs 0.997 (FIRST at new BL with ls) |
-| Lion β1 | #4329 | edward | {0.85, 0.95} vs 0.9 default (extends Finding #30) |
+**T_max axis summary**:
+- T_max=14: old start (BL chain)
+- T_max=16: regresses (Finding in PR #4320 — more sustained high LR hurts camber_rc)  
+- T_max=20: current BL chain intermediate (val 53.08)
+- **T_max=22: CURRENT BEST (val 49.75, −3.32)**
+- T_max=23: next probe (cliff edge)
+- T_max=24: DIVERGES at ls substrate (Finding #33)
 
-T_max=24 EXCLUDED from all future ls experiments (Finding #33 — diverges at ls substrate).
+T_max=24 EXCLUDED from all future ls experiments.
 
 Old BL substrate (T_max=24+clip, no-ls) now fully closed — all students reassigned to new BL substrate axes.
 

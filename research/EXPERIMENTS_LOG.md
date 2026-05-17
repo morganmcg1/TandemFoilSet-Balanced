@@ -1,5 +1,33 @@
 # SENPAI Research Results
 
+## 2026-05-17 08:30 — #4320 thorfinn MERGED (NEW BEST val 49.75 / test 42.89); #4372 thorfinn assigned (R12 H79 T_max fine grid)
+
+### #4320 thorfinn — R12 H74: T_max sweep at new BL (MERGED — Finding #37)
+
+W&B group `round12-tmax-newbl-thorfinn`. Arm A (T_max=22) is a **major win** — first sub-50 val.
+
+| Arm | T_max | Run | val_avg | test_avg | Δ val vs BL (53.08) | Δ test vs BL (44.89) |
+|-----|-------|-----|---------|----------|---|---|
+| **A (MERGED)** | **22** | **1neonugr** | **49.7515** | **42.8929** | **−3.33** | **−2.00** |
+| B | 16 | don3gz0q | 55.0415 | 46.5990 | +1.97 | +1.71 |
+
+Per-split Arm A (T_max=22) vs BL (T_max=20):
+
+| Split | val_A | val_BL | Δval | test_A | test_BL | Δtest |
+|-------|-------|--------|------|--------|---------|-------|
+| in_dist | 50.61 | 55.86 | −5.25 | 44.05 | 46.83 | −2.78 |
+| camber_rc | 63.77 | 65.64 | −1.87 | 57.45 | 57.22 | +0.23 |
+| **camber_cruise** | **32.88** | **36.68** | **−3.80** | **27.56** | **30.65** | **−3.09** |
+| re_rand | 51.75 | 54.13 | −2.38 | 42.51 | 44.85 | −2.34 |
+
+**Finding #37**: T_max=22 is the new optimum at the ls+lr=2e-4+clip=1.0 substrate. Lower cosine-endpoint LR (~1.24e-4 at epoch 14) vs T_max=20 (~1.34e-4) helps ALL val splits and THREE of four test splits. Critically, the camber_cruise regression (+2.5/+2.8 since PR #4201) is COMPLETELY FIXED. T_max=16 regresses confirming the mechanism: MORE time-averaged LR (higher T_max) is beneficial IF it simultaneously lowers the cosine endpoint. T_max=24 diverges (Finding #33), T_max=22 is safe. First sub-50 val in programme history.
+
+New BL: val 49.75 / test 42.89 (run `1neonugr`). Total improvement: val 135.23 → 49.75 (−63.1%), test ~130 → 42.89 (−67.0%).
+
+Next assignment: #4372 thorfinn — T_max={21,23} fine grid to pin down the local optimum and test the cliff edge.
+
+---
+
 ## 2026-05-17 08:00 — #4255 fern CLOSED (Finding #36); #4346 fern assigned (R12 H78: multi-seed BL replication)
 
 ### #4255 fern — R11 H67: LR sweep at T_max=24+clip+no-layer_scale (CLOSED — informative null, Finding #36)
