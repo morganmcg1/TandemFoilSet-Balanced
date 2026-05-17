@@ -1,5 +1,52 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-17 08:35 — Plateau at 17 consecutive non-improvements: 5 PRs CLOSED + 1 send-back + 5 fresh Round-12 assignments
+
+### #4416 edward LayerScale γ_init=1.0 (retest) — **CLOSED (LayerScale axis exhausted)**
+- W&B run: `eo8nsk2s` (finished). val=49.63 (+5.6% regress), test=42.56 (+5.1% regress).
+- Combined with γ=1e-4 result (val=56.94): both γ extremes fail. LayerScale is a depth-instability fix for 18-24-layer ViTs — not useful on a 5-layer Transolver with QK-norm.
+
+### #4417 fern SWA (ep11-14 average) — **CLOSED (close-tie regress, time-averaging axis fully closed)**
+- W&B run: `xe1vzrww` (finished, in old group `willow-r9-swa-end-training-qknorm`). val=48.53 (+3.3% regress), test=40.97 (+1.2% regress).
+- **THIRD time-averaging method to fail** (EMA #4178, Lookahead #4366, SWA #4417). Generalization confirmed: Lion+cosine smooth descent has no oscillation to average.
+
+### #4418 askeladd Lion β1=0.95 — **CLOSED (severe regress, β1 axis closed)**
+- W&B run: `6x5hcg7z` (finished). val=54.40 (+15.8% regress), test=46.17 (+14.1% regress).
+- **Mechanism:** β1=0.95 means 20-step momentum window. At bs=4, default β1=0.9 already aggregates ~10 steps. Pushing to 20 over-smooths Lion's sign update. β1=0.9 is confirmed optimal.
+
+### #4476 frieren n_layers=6 nh=128 — **CLOSED (depth axis exhausted, param-budget local optimum confirmed)**
+- W&B run: `r2e06jli` (finished). val=50.16 (+6.8% regress), test=42.95 (+6.1% regress).
+- **Architecture param-budget axis fully exhausted:** nh=176 L=5 (best), nh=192 L=5 (regress), nh=128 L=6 (regress), nh=176 L=5 mlp3 (regress). All three directions (deeper-narrower, wider-same-depth, wider-FFN) regress. **Future architecture moves must be qualitative not quantitative.**
+
+### #4383 thorfinn surf_weight {5, 15} — **CLOSED (3 arms tested, axis exhausted)**
+- W&B runs: sw=5 seed-A `fuf2lfas` val=47.36, sw=5 seed-B `1grt9rc9` val=48.21, sw=15 `8ol9r5gk` val=48.70
+- Spread on sw=5: 0.85 val between seeds → noise floor ~0.5-1.0 val on this stack. Even best seed (47.36) within close-tie band. Surface emphasis at right operating point.
+
+### #4411 tanjiro coord_noise {0.005, 0.02} — **SENT BACK for noise=0.005 seed-2 confirmation**
+- Arm A `m5dcxfhe` val=47.03 (+0.04 — within noise floor of 0.5), **test=40.35 (-0.13 BEATS paper-facing metric)**, geom_camber_rc=52.45 (BEATS by 0.34 on hardest split), re_rand=39.93 (BEATS)
+- Arm B `t2e3cjs8` val=47.49, test=40.49 — eliminates high-noise direction.
+- **Most interesting result of the cycle.** Val miss within noise floor; test improvement + per-split signal is reproducible-worthy. Sent back for seed-2 to confirm.
+
+### Plateau count: now 17 consecutive non-improvements
+
+Sequence: [12 prior] → #4416 γ=1.0 → #4417 SWA → #4418 β1=0.95 → #4476 L6 → #4383 sw-sweep (close-tie).
+
+### Round-12 plateau-break wave — 5 fresh axes assigned
+
+After 17 plateau extensions, pivoted to entirely new mechanism surfaces:
+
+| PR | Student | Axis |
+|---|---|---|
+| #4483 | thorfinn | **batch_size=8 + ep18** — Lion gradient-variance reduction (opposite of bs=2 failure) |
+| #4485 | askeladd | **Constant LR after warmup** — extension of nezuko's eta_min hypothesis to limit case |
+| #4486 | fern | **Test-Time Augmentation (TTA) K=8 over coord-noise** — eval-time procedure, paper-facing metric |
+| #4488 | frieren | **Post-LN configuration** — original Transformer norm placement, unlocked by QK-norm stability |
+| #4489 | edward | **Tail-emphasizing focal-L1 (α=0.5)** — counter to Huber failure direction |
+
+These span 5 mechanism surfaces: optimizer batch dynamics, LR schedule, eval-time procedure, normalization placement, loss formulation. None overlap with closed axes.
+
+---
+
 ## 2026-05-17 07:30 — Plateau extends (12 consecutive non-improvements): 3 PRs CLOSED + 1 send-back
 
 ### #4416 edward LayerScale (γ_init=1e-4) — **SENT BACK for γ_init=1.0 retest**

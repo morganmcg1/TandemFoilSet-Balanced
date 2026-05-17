@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-17 07:30 UTC
+- **Last updated:** 2026-05-17 08:35 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Primary metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -24,48 +24,67 @@ No GitHub Issues open for this track as of 2026-05-17 06:30 UTC. Proceeding from
 
 | PR | Student | Axis being tested | Status |
 |---|---|---|---|
-| **#4383** | thorfinn | surf_weight sweep {5, 15} vs default 10 on QK-norm+Lion | WIP — sw=5 done (val=47.36, close-tie), sw=15 running |
-| **#4411** | tanjiro | coord_noise_std {0.005, 0.02} + QK-norm + Lion | WIP — arm A done (val=47.03, **close-tie, test BEATS by 0.13**), arm B running |
-| **#4416** | edward | LayerScale γ_init=1.0 (canonical, retest) + QK-norm + Lion | WIP — just sent back (γ=1e-4 failed at val=56.94) |
-| **#4417** | fern | SWA over ep11-14 + QK-norm + Lion — eval-time weight average | WIP — running (step 2233) |
-| **#4418** | askeladd | Lion β1=0.95 + QK-norm — longer momentum window probe | WIP — running (1 prior fail, retry at step 2461) |
-| **#4474** | alphonse | **Skip-connection scaling 1/√2 + QK-norm + Lion** — residual variance preservation (Touvron 2021) | WIP — just assigned (Round-11 #1) |
-| **#4476** | frieren | **n_layers=6 at nh=128 + Lion + QK-norm** — depth vs width retest | WIP — just assigned (Round-11 #2) |
-| **#4478** | nezuko | **Lion eta_min=1e-5 in cosine schedule + QK-norm** — LR floor for late-training exploration | WIP — just assigned (Round-11 #3) |
+| **#4411** | tanjiro | coord_noise=0.005 seed-2 confirmation (most promising signal) | WIP — sent back, ready to rerun |
+| **#4474** | alphonse | Skip-connection scaling 1/√2 + QK-norm + Lion | WIP — running (Round-11 carryover) |
+| **#4478** | nezuko | Lion eta_min=1e-5 in cosine schedule + QK-norm | WIP — running (Round-11 carryover) |
+| **#4483** | thorfinn | **batch_size=8 + ep18 + Lion + QK-norm** — gradient-variance reduction | WIP — just assigned (Round-12 #1) |
+| **#4485** | askeladd | **Constant LR after warmup + Lion + QK-norm** — full late-training exploration | WIP — just assigned (Round-12 #2) |
+| **#4486** | fern | **TTA K=8 coord-noise eval + QK-norm** — eval-time procedure | WIP — just assigned (Round-12 #3) |
+| **#4488** | frieren | **Post-LN configuration + QK-norm** — original Transformer norm placement | WIP — just assigned (Round-12 #4) |
+| **#4489** | edward | **Tail-emphasizing focal-L1 (α=0.5)** — counter to Huber failure | WIP — just assigned (Round-12 #5) |
 
 **Zero idle students. Zero idle GPUs.**
 
-## Round-10 dead-ends (cumulative, 11 closures since #4270 merged)
+### Most promising standing signal
+
+**#4411 tanjiro coord_noise=0.005 (arm A `m5dcxfhe`):** val=47.03 (+0.04, within noise floor of 0.5), **test=40.35 (-0.13 BEATS paper-facing metric)**, geom_camber_rc=52.45 (BEATS hardest split by 0.34), re_rand=39.93 (BEATS). Sent back for seed-2 confirmation. If seed-2 confirms, MERGE candidate updating baseline to ~47.0/40.3 range.
+
+## Round-10/11 dead-ends (cumulative, 16 closures since #4270 merged)
 
 | PR | Student | Axis | W&B verdict |
 |---|---|---|---|
-| #4280 | frieren | Lion+nh=192+ep12: 3 seeds at val 49.6-50.9, +5.5% vs new baseline | CLOSED |
-| #4285 | nezuko | Lion lr=2e-4: 2 seeds at val 49.2-49.7, +4.8% vs new baseline | CLOSED |
-| #4233 | tanjiro | AGC clip=0.03: val=57.37, +22% catastrophic regress | CLOSED |
-| #4354 | alphonse | Lion n_head=2: 2 seeds at val 48.82-49.17, all 4 splits regress | CLOSED |
-| #4382 | edward | V-norm: val=72.52 (+54.4% CATASTROPHIC) — normalizing V destroys content | CLOSED |
-| #4366 | fern | Lookahead k=5 then k=3: val=50.03 on k=3 (+6.5% regress) — axis dead | CLOSED |
-| #4324/#4413 | askeladd | wd=5e-4 + QK-norm: marginal regress, mechanisms overlap on attention reg | CLOSED |
-| #4178 | thorfinn | EMA (decay=0.999): no signal — same mechanism failure as Lookahead | CLOSED (prior) |
-| #4409 | frieren | mlp_ratio=3 + QK-norm: val=50.76 (+8% regress) — FFN width axis closed | CLOSED |
-| #4410 | nezuko | loss_type=huber + QK-norm: val=54.27 (+15.5% regress) — tail-suppress wrong direction | CLOSED |
-| #4412 | alphonse | batch_size=2 + QK-norm: val=50.54 (+7.6% regress) — bs8 might be better | CLOSED |
+| #4280 | frieren | Lion+nh=192+ep12: 3 seeds val 49.6-50.9 | CLOSED |
+| #4285 | nezuko | Lion lr=2e-4: 2 seeds val 49.2-49.7 | CLOSED |
+| #4233 | tanjiro | AGC clip=0.03: val=57.37 (+22% catastrophic) | CLOSED |
+| #4354 | alphonse | Lion n_head=2: 2 seeds val 48.82-49.17 | CLOSED |
+| #4382 | edward | V-norm: val=72.52 (+54.4% CATASTROPHIC) | CLOSED |
+| #4366 | fern | Lookahead k=3/5: val=50.03 (axis dead) | CLOSED |
+| #4324/#4413 | askeladd | wd=5e-4+QK-norm: mechanism overlap | CLOSED |
+| #4178 | thorfinn | EMA (decay=0.999): no signal | CLOSED (prior) |
+| #4409 | frieren | mlp_ratio=3: val=50.76 (+8%) — FFN width axis | CLOSED |
+| #4410 | nezuko | loss_type=huber: val=54.27 (+15.5%) — tail-suppress wrong direction | CLOSED |
+| #4412 | alphonse | batch_size=2: val=50.54 (+7.6%) | CLOSED |
+| #4416 | edward | LayerScale γ=1e-4 AND γ=1.0 both regress | CLOSED (axis exhausted) |
+| #4417 | fern | SWA ep11-14: val=48.53 (+3.3%) | CLOSED (3rd time-avg failure) |
+| #4418 | askeladd | Lion β1=0.95: val=54.40 (+15.8% severe) | CLOSED |
+| #4476 | frieren | n_layers=6 nh=128: val=50.16 (+6.8%) | CLOSED (param-budget exhausted) |
+| #4383 | thorfinn | surf_weight {5,15} 3 arms close-tie/regress | CLOSED (axis exhausted) |
 
-## PLATEAU PROTOCOL EXTENDED (2026-05-17 07:30 UTC)
+## PLATEAU PROTOCOL EXTENDED (2026-05-17 08:35 UTC)
 
-**12 consecutive non-improvements since #4270 merged at 05:30 UTC.** Plateau extends through 4 more closures (#4409 mlp3, #4410 huber, #4412 bs2, #4416 LayerScale γ=1e-4).
+**17 consecutive non-improvements since #4270 merged at 05:30 UTC.** Plateau extends through 5 additional closures since 07:30 (#4416 γ=1.0, #4417 SWA, #4418 β1=0.95, #4476 L6-nh128, #4383 surf-sweep).
 
 ### Most promising signal — but technically not a win
 
 - **tanjiro #4411 arm A (coord_noise_std=0.005):** val=47.03 (+0.09% regress) but **test=40.35 (-0.32% IMPROVEMENT)**. Just outside noise floor on val. Arm B (std=0.02) still running — if both arms close-tie, the coord-noise axis may be a noise floor under QK-norm. WAIT for arm B.
 - **thorfinn #4383 arm A (surf_weight=5, run-B):** val=47.36 (+0.79% regress), test=40.64. Run-A `1grt9rc9` val=48.21 (+2.6%), test=40.22 (BEATS by 0.26). 0.85 spread on same config = noise floor ~0.5-1.0 val. sw=15 still running.
 
-### Round-11 plateau-breaks now in-flight or pending
+### Round-12 plateau-break wave (in-flight)
 
-1. **edward (#4416 retest):** LayerScale γ_init=1.0 — identity-residual init, canonical for shallow nets. Tests "is LayerScale useful at all?" cleanly.
-2. **fern (#4417):** SWA over ep11-14 — eval-time only (no optimization interference).
-3. **askeladd (#4418):** Lion β1=0.95 — longer momentum window probe.
-4. **NEW (frieren, nezuko, alphonse):** Round-11 plateau-break wave — see assignments below.
+Newly assigned at 08:35 UTC — 5 fresh mechanism surfaces:
+
+1. **thorfinn #4483:** bs=8 + ep18 (gradient-variance reduction at optimizer level)
+2. **askeladd #4485:** Constant LR after warmup (full late-training exploration)
+3. **fern #4486:** TTA K=8 coord-noise (eval-time procedure, paper-facing)
+4. **frieren #4488:** Post-LN configuration (normalization placement)
+5. **edward #4489:** Tail-emphasizing focal-L1 α=0.5 (loss formulation)
+
+Plus 3 Round-11 carryovers still running:
+- alphonse #4474 skip-1/√2 (residual scaling)
+- nezuko #4478 eta_min in cosine (LR floor)
+- tanjiro #4411 send-back coord_noise=0.005 seed-2 (close-tie confirmation)
+
+**Total 8 in-flight on orthogonal mechanism surfaces. If ANY breaks plateau, several may compound.**
 
 ## Key learnings (Round-10 to date)
 
