@@ -310,17 +310,71 @@ def _pointwise_loss(pred, y_norm, loss_type: str):
     raise ValueError(f"Unknown loss_type: {loss_type!r}")
 
 
-def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_type: str = "l1", use_bf16: bool = False) -> dict[str, float]:
+def _tta_predict(model, x_norm, mask, num_freq, amp_ctx, tta_k: int, tta_noise_std: float,
+                 generator: torch.Generator | None):
+    """Forward pass with optional K-sample TTA over Gaussian coord-noise perturbations.
+
+    Noise is applied to the raw (x, z) coords (dims 0-1) BEFORE Fourier encoding,
+    so each pass sees an independently perturbed geometry. Per-pass noise is IID
+    Gaussian with std ``tta_noise_std``, zeroed at padding via ``mask``.
+
+    Returns ``(pred_mean, pred_std)`` in fp32 normalized output space. ``pred_std``
+    is zero when ``tta_k <= 1`` (single deterministic pass).
+    """
+    if tta_k <= 1:
+        x_enc = encode_inputs(x_norm, num_freq)
+        with amp_ctx:
+            pred = model({"x": x_enc})["preds"]
+        pred = pred.float()
+        return pred, torch.zeros_like(pred)
+
+    pad_mask = mask.unsqueeze(-1).to(x_norm.dtype)  # (B, N, 1); zero at padding
+    sum_pred = None
+    sum_sq = None
+    for _ in range(tta_k):
+        noise = torch.randn(
+            x_norm.shape[:-1] + (2,),
+            dtype=x_norm.dtype, device=x_norm.device, generator=generator,
+        ) * tta_noise_std
+        x_perturbed = x_norm.clone()
+        x_perturbed[..., :2] = x_norm[..., :2] + noise * pad_mask
+        x_enc = encode_inputs(x_perturbed, num_freq)
+        with amp_ctx:
+            pred_k = model({"x": x_enc})["preds"]
+        pred_k = pred_k.float()
+        if sum_pred is None:
+            sum_pred = pred_k
+            sum_sq = pred_k * pred_k
+        else:
+            sum_pred = sum_pred + pred_k
+            sum_sq = sum_sq + pred_k * pred_k
+    pred_mean = sum_pred / tta_k
+    pred_var = (sum_sq / tta_k - pred_mean * pred_mean).clamp(min=0)
+    pred_std = pred_var.sqrt()
+    return pred_mean, pred_std
+
+
+def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_type: str = "l1",
+                   use_bf16: bool = False, tta_k: int = 0, tta_noise_std: float = 0.0,
+                   tta_generator: torch.Generator | None = None) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    When ``tta_k > 1``, each batch is forwarded ``tta_k`` times with independent
+    Gaussian coord-noise (std ``tta_noise_std``) added to dims 0-1 of x_norm
+    pre-Fourier; metrics use the averaged prediction. ``mean_tta_std_norm`` is
+    the per-element K-pass std (in normalized output space) averaged over valid
+    nodes and channels — a diagnostic for how much TTA is actually engaging.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+    tta_std_sum = 0.0
+    tta_std_count = 0
 
     amp_ctx = (
         torch.autocast(device_type="cuda", dtype=torch.bfloat16)
@@ -336,12 +390,16 @@ def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_typ
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            x_enc = encode_inputs(x_norm, num_freq)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            with amp_ctx:
-                pred = model({"x": x_enc})["preds"]
-            # Cast model output back to fp32 for metrics/loss numerical comparability
-            pred = pred.float()
+            pred, pred_std = _tta_predict(
+                model, x_norm, mask, num_freq, amp_ctx,
+                tta_k=tta_k, tta_noise_std=tta_noise_std, generator=tta_generator,
+            )
+            if tta_k > 1:
+                m3 = mask.unsqueeze(-1).to(pred_std.dtype)
+                denom = m3.sum() * pred_std.shape[-1]
+                tta_std_sum += (pred_std * m3).sum().item()
+                tta_std_count += int(denom.item())
 
             # NaN guard: some samples (e.g. test_geom_camber_cruise idx 20) have
             # non-finite ground-truth. IEEE 754 propagates NaN through NaN * 0,
@@ -380,6 +438,8 @@ def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_typ
     out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
            "loss": vol_loss + surf_weight * surf_loss}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
+    if tta_k > 1 and tta_std_count > 0:
+        out["mean_tta_std_norm"] = tta_std_sum / tta_std_count
     return out
 
 
@@ -566,6 +626,9 @@ class Config:
     lion_lr: float = 1e-4  # Lion lr; canonical: AdamW_lr / 3..10
     lion_wd: float = 1e-3  # Lion wd; canonical: AdamW_wd * 3..10
     use_qk_norm: bool = False  # ViT-22B-style LayerNorm(head_dim) on Q and K before SDPA
+    tta_k: int = 0  # K-sample test-time augmentation at end-of-run eval; 0 = disabled
+    tta_noise_std: float = 0.005  # coord-noise std (dims 0-1) for TTA perturbations
+    tta_seed: int = 1234  # seed for TTA noise generator (reproducible per-pass draws)
 
 
 cfg = sp.parse(Config)
@@ -836,6 +899,63 @@ if best_metrics:
             test_log[f"test_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
+
+        # --- TTA evaluation: K-pass coord-noise averaging on the best checkpoint ---
+        # Same weights as the deterministic K=1 eval above; only the eval-time
+        # procedure changes. Logged under *_tta/* / *_tta_avg/* so it does not
+        # collide with the baseline test_/test_avg/ metrics used for model
+        # selection and prior comparisons.
+        if cfg.tta_k > 1:
+            print(f"\nTTA evaluation: K={cfg.tta_k} passes, "
+                  f"noise_std={cfg.tta_noise_std}, seed={cfg.tta_seed}...")
+            tta_gen = torch.Generator(device=device).manual_seed(cfg.tta_seed)
+            val_tta_metrics = {
+                name: evaluate_split(
+                    model, loader, stats, cfg.surf_weight, device, cfg.num_freq,
+                    cfg.loss_type, cfg.use_bf16,
+                    tta_k=cfg.tta_k, tta_noise_std=cfg.tta_noise_std, tta_generator=tta_gen,
+                )
+                for name, loader in val_loaders.items()
+            }
+            val_tta_avg = aggregate_splits(val_tta_metrics)
+            print(f"\n  VAL  (TTA K={cfg.tta_k}) avg_surf_p={val_tta_avg['avg/mae_surf_p']:.4f}  "
+                  f"(K=1 LIVE best {best_avg_surf_p:.4f}, "
+                  f"Δ={val_tta_avg['avg/mae_surf_p'] - best_avg_surf_p:+.4f})")
+            for name in VAL_SPLIT_NAMES:
+                print_split_metrics(name, val_tta_metrics[name])
+
+            test_tta_metrics = {
+                name: evaluate_split(
+                    model, loader, stats, cfg.surf_weight, device, cfg.num_freq,
+                    cfg.loss_type, cfg.use_bf16,
+                    tta_k=cfg.tta_k, tta_noise_std=cfg.tta_noise_std, tta_generator=tta_gen,
+                )
+                for name, loader in test_loaders.items()
+            }
+            test_tta_avg = aggregate_splits(test_tta_metrics)
+            test_k1 = test_avg["avg/mae_surf_p"]
+            test_k = test_tta_avg["avg/mae_surf_p"]
+            print(f"\n  TEST (TTA K={cfg.tta_k}) avg_surf_p={test_k:.4f}  "
+                  f"(K=1 baseline {test_k1:.4f}, Δ={test_k - test_k1:+.4f})")
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(name, test_tta_metrics[name])
+
+            tta_log: dict[str, float] = {}
+            for split_name, m in val_tta_metrics.items():
+                for k, v in m.items():
+                    tta_log[f"val_tta/{split_name}/{k}"] = v
+            for k, v in val_tta_avg.items():
+                tta_log[f"val_tta_{k}"] = v
+            for split_name, m in test_tta_metrics.items():
+                for k, v in m.items():
+                    tta_log[f"test_tta/{split_name}/{k}"] = v
+            for k, v in test_tta_avg.items():
+                tta_log[f"test_tta_{k}"] = v
+            tta_log["tta/k"] = cfg.tta_k
+            tta_log["tta/noise_std"] = cfg.tta_noise_std
+            tta_log["tta/delta_test_avg_mae_surf_p"] = test_k - test_k1
+            wandb.log(tta_log)
+            wandb.summary.update(tta_log)
 
     save_model_artifact(
         run=run,
