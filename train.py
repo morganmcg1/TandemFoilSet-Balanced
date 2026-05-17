@@ -137,7 +137,8 @@ class SwiGLUFFN(nn.Module):
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64,
+                 use_qk_norm=False):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
@@ -153,7 +154,17 @@ class PhysicsAttention(nn.Module):
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
+        self.use_qk_norm = use_qk_norm
+        if use_qk_norm:
+            self.q_norm = nn.LayerNorm(dim_head)
+            self.k_norm = nn.LayerNorm(dim_head)
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
+
+        # Set _log_diag=True before a forward to capture per-vector L2-norm
+        # diagnostics into self._diag (mean over [B, heads, slice_num]). The
+        # flag is consumed (reset) inside the forward to avoid stale reads.
+        self._log_diag: bool = False
+        self._diag: dict[str, float] = {}
 
     def forward(self, x):
         B, N, _ = x.shape
@@ -178,6 +189,23 @@ class PhysicsAttention(nn.Module):
         q = self.to_q(slice_token)
         k = self.to_k(slice_token)
         v = self.to_v(slice_token)
+
+        log_diag = self._log_diag
+        if log_diag:
+            self._log_diag = False
+            self._diag = {
+                "q_norm_pre": q.detach().float().norm(dim=-1).mean().item(),
+                "k_norm_pre": k.detach().float().norm(dim=-1).mean().item(),
+            }
+
+        if self.use_qk_norm:
+            q = self.q_norm(q)
+            k = self.k_norm(k)
+
+        if log_diag:
+            self._diag["q_norm_post"] = q.detach().float().norm(dim=-1).mean().item()
+            self._diag["k_norm_post"] = k.detach().float().norm(dim=-1).mean().item()
+
         out_slice = F.scaled_dot_product_attention(
             q, k, v,
             dropout_p=self.dropout.p if self.training else 0.0,
@@ -191,13 +219,14 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 use_qk_norm=False):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
-            dropout=dropout, slice_num=slice_num,
+            dropout=dropout, slice_num=slice_num, use_qk_norm=use_qk_norm,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = SwiGLUFFN(hidden_dim, hidden_dim * mlp_ratio, hidden_dim)
@@ -221,7 +250,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 use_qk_norm=False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -242,6 +272,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                use_qk_norm=use_qk_norm,
             )
             for i in range(n_layers)
         ])
@@ -534,6 +565,7 @@ class Config:
     use_lion: bool = False  # use Lion optimizer (sign-of-momentum) instead of AdamW
     lion_lr: float = 1e-4  # Lion lr; canonical: AdamW_lr / 3..10
     lion_wd: float = 1e-3  # Lion wd; canonical: AdamW_wd * 3..10
+    use_qk_norm: bool = False  # ViT-22B-style LayerNorm(head_dim) on Q and K before SDPA
 
 
 cfg = sp.parse(Config)
@@ -572,6 +604,7 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=cfg.mlp_ratio,
+    use_qk_norm=cfg.use_qk_norm,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -655,7 +688,9 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    for batch_idx, (x, y, is_surface, mask) in enumerate(
+        tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False)
+    ):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
@@ -669,6 +704,14 @@ for epoch in range(MAX_EPOCHS):
             x_norm[..., :2] = x_norm[..., :2] + noise
         x_enc = encode_inputs(x_norm, cfg.num_freq)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
+
+        # Capture Q/K norm diagnostics on the first batch of each epoch.
+        # Cheap: one extra .item() sync per attention layer, only on this batch.
+        log_diag_this_batch = (batch_idx == 0)
+        if log_diag_this_batch:
+            for blk in model.blocks:
+                blk.attn._log_diag = True
+
         with train_amp_ctx():
             pred = model({"x": x_enc})["preds"]
         # Cast model output back to fp32 so loss/metric arithmetic stays in fp32
@@ -724,6 +767,12 @@ for epoch in range(MAX_EPOCHS):
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+
+    # Per-layer Q/K norm diagnostics captured on this epoch's first batch.
+    for layer_idx, blk in enumerate(model.blocks):
+        for diag_key, diag_val in blk.attn._diag.items():
+            log_metrics[f"qk_diag/layer_{layer_idx}/{diag_key}"] = diag_val
+
     wandb.log(log_metrics)
 
     tag = ""
