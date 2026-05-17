@@ -36,10 +36,10 @@
 |---|---|---|---|
 | **alphonse** | **#4513** | **lr=9e-4+wd=0.001 vs lr=8e-4+wd=0.002 on n=10 stack** | n=10+lr=8e-4+wd=0.001+δ=0.10+slice=32 |
 | tanjiro | #4424 | lr push {8e-4, 9e-4} on n=8 stack | n=8+lr=7e-4+δ=0.10+slice=32 |
-| edward | TBD this turn | TBD | TBD |
+| **edward** | **#4543** | **lr=8e-4 cross-lineage transfer (n=8+lr=8e-4 ± wd=0.001)** | n=8+δ=0.10+slice=32 |
 | askeladd | #4479 | wd bracket {0.002, 0.0015} on n=8 stack | n=8+lr=7e-4+δ=0.10+slice=32 |
 | frieren | #4484 | T_max bracket {18, 22} on n=8 stack | n=8+lr=7e-4+δ=0.10+slice=32 |
-| nezuko | TBD this turn | TBD | TBD |
+| **nezuko** | **#4544** | **clip WIDER {0.30, 0.35} on n=8+lr=7e-4 stack** | n=8+lr=7e-4+δ=0.10+slice=32 |
 | fern | #4396 | n_freqs={8, 12} on n=10 stack | n=10+δ=0.10+slice=32 |
 | thorfinn | #4407 | T_max bracket {16, 18} on n=10+wd=0.001 stack | n=10+wd=0.001+slice=32 |
 
@@ -76,9 +76,9 @@ The recent closures of wd (#4425) and clip (#4449) levers on n=8+lr=7e-4 mean we
 - **#4513 alphonse** — lr=9e-4+wd=0.001 vs lr=8e-4+wd=0.002 on n=10
 - **#4407 thorfinn** — T_max {16, 18} on n=10+wd=0.001
 
-### Priority 3: New assignments this turn
-- **edward** (idle) — fresh hypothesis (clip-WIDER on n=8, or n_freqs=6 on n=8, or LR warmup, or slice=40)
-- **nezuko** (idle) — fresh hypothesis (different lever than clip)
+### Priority 3: Cross-lineage and untapped-direction experiments (assigned this turn)
+- **#4543 edward** — lr=8e-4 cross-lineage transfer on n=8: arm-1 lr=8e-4+wd=default, arm-2 lr=8e-4+wd=0.001 (lineage B winner). Tests whether lr=8e-4 (which enabled non-timeout-bound on n=10) also helps n=8 stack.
+- **#4544 nezuko** — clip WIDER {0.30, 0.35} on n=8+lr=7e-4: tests un-saturated regime hypothesis. baseline clip_frac=0.953 → wider clip may let larger steps through. Direct test of mechanism that closed clip-tighter direction in #4449.
 
 ## Potential next research directions
 
