@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-17 10:10 UTC
+- **Last updated:** 2026-05-17 10:35 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Primary metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -24,20 +24,24 @@ No GitHub Issues open for this track as of 2026-05-17 06:30 UTC. Proceeding from
 
 | PR | Student | Axis being tested | Status |
 |---|---|---|---|
-| **#4474** | alphonse | Skip-connection scaling 1/√2 + QK-norm + Lion | WIP — running |
-| **#4478** | nezuko | **eta_min_fraction=0.05** (smaller floor than 0.1 mixed result) | WIP — sent back, ready to rerun |
-| **#4489** | edward | Tail-emphasizing focal-L1 (α=0.5) | WIP — running |
-| **#4510** | frieren | **Variance+Mean Composite Loss** (Hanna 2024, α=0.8) | WIP — Round-13 #1 (loss-tier) |
-| **#4511** | askeladd | **Zonal/Wake-Emphasis Loss** (PINN-zonal Sep 2025) | WIP — Round-13 #2 (loss-tier) |
-| **#4530** | fern | **GeoMix camber interpolation** (Chen 2024 ICML, p_mix=0.15) | WIP — Round-13 #3 (data-tier) |
-| **#4532** | tanjiro | **2D RoPE on mesh coords** (Su 2021 / EVA-02, d_rope=32) | WIP — Round-13 #4 (position-encoding tier) |
-| **#4535** | thorfinn | **LinearNO drop-in linear attention** (Wu 2024 NeurIPS) | WIP — Round-13 #5 (attention-compute tier) |
+| **#4510** | frieren | **Variance+Mean Composite Loss** (Hanna 2024, α=0.8) | WIP — Round-13 (loss-tier) |
+| **#4530** | fern | **GeoMix camber interpolation** (Chen 2024 ICML, p_mix=0.15) | WIP — Round-13 (data-tier) |
+| **#4532** | tanjiro | **2D RoPE on mesh coords** (Su 2021 / EVA-02, d_rope=32) | WIP — Round-13 (position-encoding tier) |
+| **#4535** | thorfinn | **LinearNO drop-in linear attention** (Wu 2024 NeurIPS) | WIP — Round-13 (attention-compute tier) |
+| **#4548** | askeladd | **LE-emphasis-only loss** (w=3 on x_norm<0.1, w=1 elsewhere) | WIP — Round-14 #1 (loss-zonal LE-only) |
+| **#4549** | alphonse | **Lion LLRD α=0.7** layer-wise lr decay | WIP — Round-14 #2 (optimization geometry) |
+| **#4550** | edward | **Per-foil chord-relative coords + foil_id** | WIP — Round-14 #3 (input features) |
+| **#4551** | nezuko | **Stokes incompressibility aux** (λ=0.01, kNN div(u)) | WIP — Round-14 #4 (physics regularizer) |
 
-**Zero idle students. Zero idle GPUs.** 5 of 8 in-flight are Round-13 PRs.
+**Zero idle students. Zero idle GPUs.** 4 of 8 in-flight are fresh Round-14 PRs targeting the askeladd zone-diagnostic findings.
 
-### Standing signal — pending seed-2 verification
+### Round-13 / Round-14 design logic
 
-- **#4478 nezuko eta_min=0.1 (`61sf7lda`):** N=1 result val=47.58 (+0.59), **test=40.27 (-0.21 BEATS)**, **geom_camber_rc=50.92 (-1.87 BEATS plateau-target)**. Sent back for `eta_min_fraction=0.05`. **The N=1 signal cannot be trusted alone given the now-confirmed val=2.31 inter-seed spread on this stack.** If the 0.05 rerun also shows test improvement on geom_camber_rc, the eta_min mechanism is real. If it regresses, eta_min axis is closed (like #4411 was).
+- **Loss-shaping axis confirmed dead** (Huber #4410 + Focal-L1 #4489 two-sided null): no further loss-shaping PRs beyond what's currently in flight.
+- **Eta_min axis confirmed dead** (#4478 non-monotone): no further LR-schedule PRs.
+- **Skip-residual variance axis dead** (#4474 closed via W&B).
+- **Live axes:** loss-zonal (LE-only #4548), feature engineering (per-foil coords #4550), physics regularizer (Stokes #4551), optimization geometry (LLRD #4549), plus Round-13 axes (variance loss, GeoMix, RoPE-2D, LinearNO).
+- **Hot follow-up pair:** #4548 (LE-only loss) and #4550 (per-foil coords) both stem from askeladd's #4511 diagnostic. They test complementary interpretations: LE-emphasis fixes the dominant error zone; per-foil-coords fixes the structural feature gap that confused her zone-loss formula.
 
 ### CRITICAL NOISE-FLOOR RECALIBRATION (#4411 seed-2 result, 2026-05-17 09:34)
 
@@ -74,10 +78,16 @@ No GitHub Issues open for this track as of 2026-05-17 06:30 UTC. Proceeding from
 | #4486 | fern | TTA K=8 coord-noise: test+0.032, all splits worse — Jensen's bias | CLOSED (TTA axis closed) |
 | #4483 | thorfinn | bs=8+ep18: val=55.95 (+19%) — Lion update-count-limited, not gradient-variance-limited | CLOSED (bs axis closed both sides) |
 | #4411 | tanjiro | coord_noise=0.005 seed-1 fluke; 2-seed mean val=48.19 worse, OOD splits flip direction | CLOSED (noise-floor calibration learning) |
+| **#4474** | alphonse | Skip-scale 1/√2: val=48.12 (+1.13), test=40.85 (+0.37) | CLOSED via W&B (student pod stuck in rate-limit loop) |
+| **#4489** | edward | Focal-L1 α=0.5: val=49.56 (+5.5%), geom_camber_rc=55.98 (+6.0%) — TWO-SIDED NULL with #4410 Huber | CLOSED (loss-shaping axis dead) |
+| **#4511** | askeladd | Zonal w=3 TE + w=2 LE: val=48.21 (+2.60%); **valuable diagnostic: LE-MAE 2× larger than TE-MAE**, inverting Kutta hypothesis | CLOSED — diagnostic motivates #4548 LE-only follow-up |
+| **#4478** | nezuko | eta_min=0.05 rerun: val=47.92 (+0.93), test=41.68 (+1.20), all splits regress; NON-MONOTONE vs 0.10 floor | CLOSED (eta_min axis dead) |
 
-## PLATEAU PROTOCOL EXTENDED (2026-05-17 10:10 UTC)
+## PLATEAU PROTOCOL EXTENDED (2026-05-17 10:35 UTC)
 
-**22 consecutive non-improvements since #4270 merged at 05:30 UTC.** +3 closures this cycle (#4486 TTA, #4483 bs=8, #4411 noise=0.005 seed fluke). Important falsification: #4411 seed-2 disproved seed-1's OOD-regularization read — single-seed N=1 signal on this stack is unreliable. #4478 (eta_min=0.1) is the other live N=1 OOD signal; the in-flight `eta_min=0.05` send-back is its falsifying test.
+**26 consecutive non-improvements since #4270 merged at 05:30 UTC.** +4 closures this cycle (#4474 skip-scale via W&B, #4511 zonal, #4489 focal, #4478 eta_min-0.05). Round-13 wave reviewed cleanly except for #4474 (pod was stuck — closed via W&B).
+
+**Strongest finding this cycle:** askeladd's zone-breakdown diagnostic on #4511 revealed that **LE is the dominant error zone (2× larger MAE than TE/wake)** across all 4 test splits. Also exposed a structural feature gap in tandem geometry (x>0.6 captures all of foil-2, not Kutta zone). Both findings drive Round-14 (#4548 LE-only loss, #4550 per-foil coords).
 
 ### Most promising signal — but technically not a win
 

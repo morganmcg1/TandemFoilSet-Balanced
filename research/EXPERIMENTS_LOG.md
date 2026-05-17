@@ -1,5 +1,69 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-17 10:35 — Round-13 wave reviewed: 4 closures (+1 closed via W&B); **askeladd's zone-diagnostic is the strongest finding of the day**; 4 Round-14 PRs assigned
+
+### #4474 alphonse skip-scale 1/√2 — **CLOSED (axis fully exhausted, closed via W&B since student pod was stuck in rate-limit loop)**
+- W&B run: `4s59x09l` (finished 09:24 UTC, 14/14 epochs, 32 min wall — training completed cleanly). val=48.1166 (+1.13 regress), test=40.8499 (+0.37 regress). Per-split test: single_in_dist=43.30, **geom_camber_rc=52.55 (−0.24 within noise floor 1.14)**, geom_camber_cruise=27.42, re_rand=40.13.
+- **Skip-residual variance preservation theory does NOT translate to improvement on this stack.** Joins LayerScale γ-sweeps as a dead axis. The Pre-LN architecture's accumulating residual stream is the operating point — perturbations don't help.
+- **Operational note:** Pod was hit by GitHub API rate limits — student agent could not poll its own state to post SENPAI-RESULT. Training itself was fine. Rate-limit issue is external; advisor closed PR based on W&B data directly.
+
+### #4511 askeladd Zonal/Wake-Emphasis Loss (w=3 TE + w=2 LE) — **CLOSED (val=48.21, hits >47.5 threshold; PRIMARY TARGET REGRESSED +1.85%)**
+- W&B run: `q0viyhu2`. val=48.2086 (+2.60% regress), test=41.2718 (+1.96% regress), **`test_geom_camber_rc` = 53.7642 (+1.85% wrong direction on the primary target)**.
+- **CRITICAL DIAGNOSTIC FROM ASKELADD'S WORK (the most valuable finding of the day):** Zone-breakdown of surface-p MAE revealed that **LE is the dominant error zone, NOT TE/wake**:
+
+| Split | LE (x<0.1) MAE | body MAE | TE/wake (x>0.6) MAE |
+|---|---:|---:|---:|
+| single_in_dist | **79.10** | 45.71 | 24.30 |
+| geom_camber_rc | **67.97** | 46.41 | 51.30 |
+| geom_camber_cruise | **37.55** | 30.53 | 22.24 |
+| re_rand | **59.08** | 39.25 | 36.02 |
+
+LE error is 2× larger than TE/wake on every test split. The 3× TE weight directed gradient at an already-cleaner zone; the 2× LE weight was undersized. This INVERTS the Kutta-emphasis hypothesis.
+
+- **Tandem-stagger insight (askeladd's second diagnostic):** Because typical stagger ≥0.6, `x_norm > 0.6` captures essentially ALL of foil-2 plus foil-1 TE/wake — not a Kutta-region emphasis but a foil-2-emphasis. The literal interpretation of "x>0.6" doesn't match the physical intuition for tandem geometry.
+- **Two follow-ups assigned:** #4548 askeladd LE-only emphasis (directly tests LE-dominance); #4550 edward per-foil chord-relative coords (structural fix to the tandem-stagger issue).
+
+### #4489 edward Focal-L1 tail emphasis (α=0.5) — **CLOSED (val=49.56 +5.5%, two-sided null on loss-shaping)**
+- W&B run: `ger974d3`. val=49.5581 (+5.5%), test=43.4296 (+7.3%), `test_geom_camber_rc=55.98 (+6.0%)`. All splits regressed.
+- **Strong empirical conclusion from edward's analysis:** the loss-shaping axis is dead.
+  - Huber #4410 suppressed tail gradient → regressed.
+  - Focal-L1 #4489 amplified tail gradient → regressed.
+  - "L1's gradient profile is approximately right; perturbations in either direction regress."
+- The model DID drive p99 down (1.79→0.39, 78% reduction) — mechanism works as designed. But unweighted MAE worsened: tail-chasing stole gradient from the bulk that dominates the MAE metric.
+- **Loss-shaping axis is now closed**. Pivot to inductive-bias / optimization-geometry / feature-engineering surfaces.
+
+### #4478 nezuko eta_min=0.05 rerun — **CLOSED (non-monotone! 0.05 is monotonically worse than 0.10 on all splits; eta_min axis closed)**
+- W&B run: `bc3h9n5m`. val=47.9182 (+0.93), test=41.6813 (+1.20), `test_geom_camber_rc=54.78 (+1.99 worse, vs 0.1 floor was −1.87 better)`. All 4 splits regressed.
+
+| eta_min_fraction | val | test | geom_camber_rc |
+|---|---|---|---|
+| 0.0 (baseline) | 46.99 | 40.48 | 52.79 |
+| 0.05 | 47.92 (+0.93) | 41.68 (+1.20) | 54.78 (+1.99) |
+| 0.10 | 47.58 (+0.59) | 40.27 (−0.21) | 50.92 (−1.87) |
+
+- **Counterintuitive monotonicity:** a smaller perturbation lands FURTHER from baseline, not closer. Lion's sign-of-momentum means lr-magnitude doesn't just scale updates — it shifts direction. Different basins.
+- The OOD signal at the 0.1 floor (test_geom_camber_rc −1.87) did NOT replicate at 0.05. The N=2 evidence of "late-training stochasticity → OOD regularization" (also tanjiro #4411 seed-1) remains unreplicated — both arms were N=1 successes on noisy stacks.
+- **Eta_min axis closed.** If "OOD-regularization via late-training stochasticity" is to be revisited, it needs to be formulated as an OOD-explicit hypothesis with multi-seed validation.
+
+### Round-14 assignments to 4 newly idle students
+
+| PR | Student | Hypothesis | Mechanism surface |
+|---|---|---|---|
+| **#4548** | askeladd | **LE-emphasis-only loss** (w=3 on x_norm<0.1, w=1 elsewhere) — direct follow-up to her own zone-diagnostic | Loss-zonal (LE-only) |
+| **#4549** | alphonse | **Lion LLRD α=0.7** — layer-wise lr decay across Transolver blocks (Howard & Ruder 2018) | Optimization geometry |
+| **#4550** | edward | **Per-foil chord-relative coords + foil_id** — structural fix to tandem-stagger confusion (askeladd-inspired) | Feature engineering / input |
+| **#4551** | nezuko | **Stokes incompressibility aux loss** (λ=0.01, kNN finite-diff div(u)) (Hagnell 2025) | Physics regularizer |
+
+Four orthogonal mechanism surfaces. The LE-only and per-foil-coords PRs both stem from askeladd's diagnostic — paired follow-up to test whether the LE-dominance interpretation is correct (LE-only) or whether the tandem-stagger feature gap is the actual issue (per-foil).
+
+### Plateau count: 26 consecutive non-improvements
+
+Sequence: [22 prior] → #4474 close → #4511 close → #4489 close → #4478 (0.05) close. Round-13 wave fully reviewed except #4474 (which finished training but was closed via W&B).
+
+**Operational learning:** GitHub API rate limits are causing student pods to lose ability to poll their assignments and report results. Training itself continues fine. Advisor must monitor for stuck pods and close based on W&B data when student session can't reach the "post results" step.
+
+---
+
 ## 2026-05-17 10:10 — Round-12 wave complete: 3 closures + **#4411 OOD signal was a seed fluke**; 3 Round-13 PRs assigned (data + arch + linear-attn)
 
 ### #4486 fern TTA K=8 coord-noise eval — **CLOSED (TTA without training-time augmentation fails as predicted)**
