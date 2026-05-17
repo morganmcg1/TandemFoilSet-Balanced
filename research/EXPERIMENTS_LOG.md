@@ -1389,3 +1389,31 @@ k=5 reproduces canonical exactly. k=3 nearly tied (+0.94% val) — sub-resonance
 - Branch: `willowpai2i48h3-thorfinn/slice-num-sweep`
 - Hypothesis: `slice_num=64` (Transolver PhysicsAttention) has never been tuned alone. TandemFoilSet's complex tandem wake interactions may benefit from more granular physics decomposition (slice_num=96) or coarser grouping (slice_num=32).
 - 2 arms: slice_num ∈ {32, 96} vs canonical 64 reference.
+
+## 2026-05-17 02:50 — PR #4216 (fern): LR sweep {5e-4, 1e-3, 2e-3, 3e-3} on bf16 canonical — **CLOSED**
+
+- Branch: `willowpai2i48h3-fern/lr-sweep-on-canonical`
+- W&B runs: `xcao5av1` (arm1 lr=1e-3 old), `j07fzguw` (arm2 lr=5e-4 old), `t56ruvca` (arm3 lr=2e-3 bf16), `c3clycdo` (arm4 lr=3e-3 bf16)
+
+**Result:**
+
+| Arm | LR | Stack | val | test_excl_cruise | best_epoch |
+|---|---|---|---|---|---|
+| 1 (canonical repro) | 1e-3 | old (no bf16) | 45.9199 | 45.1094 | 14 |
+| 2 | 5e-4 | old (no bf16) | 49.9487 (+8.77%) | 49.6046 | 14 |
+| 3 | 2e-3 | bf16 | 41.8561 (+0.99%) | **42.7289 (−1.13%)** | 17 |
+| 4 | 3e-3 | bf16 | 42.2462 (+1.93%) | **42.8290 (−0.90%)** | 17 |
+
+Reference: canonical val=41.4446, test=43.2173.
+
+**Analysis:** LR hypothesis falsified for val on bf16 canonical. lr=1e-3 remains optimal on val. However, a notable val/test divergence emerged: higher LR → worse val, better OOD test. The val−test gap shrinks monotonically (1.77→0.87→0.58) as LR increases, consistent with implicit regularization from larger step sizes. SOAP+Lookahead+grad_clip keep all arms stable even at lr=3e-3 — no divergence at any LR.
+
+**Key insight:** LR=2e-3 beats canonical on the OOD test composite by −1.13% while losing only +0.99% val. This val/test divergence is interesting but val is the merge gate. Arm 4 shows test gains plateau between 2e-3 and 3e-3.
+
+**Conclusion:** lr=1e-3 confirmed optimal for val. Val/test divergence noted in research log. **CLOSED.**
+
+## 2026-05-17 02:50 — Assignment: #4305 fern mlp-ratio-revisit-bf16
+
+- Branch: `willowpai2i48h3-fern/mlp-ratio-revisit-bf16`
+- Hypothesis: PR #3169 crashed on mlp_ratio=4 at launch (fp32 ~95% VRAM, no mitigations). Now unblocked by bf16 (33 GB vs 42 GB), grad_clip=1.0, and SOAP+Lookahead.
+- 2 arms: mlp_ratio ∈ {3 (incremental), 4 (original crashed config)} on full bf16 canonical.
