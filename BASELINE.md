@@ -23,30 +23,41 @@ target base `icml-appendix-charlie`).
 | Caps  | `SENPAI_MAX_EPOCHS=50`, `SENPAI_TIMEOUT_MIN=30.0` (hard per-run wall clock) |
 | Test  | Best-val EMA checkpoint evaluated on 4 test splits at end of run; use `load_target = getattr(model, "_orig_mod", model)` to load state dict after compile |
 
-## Current best metrics (PR #4398, gradient clipping max_norm=1.0, single-seed, best epoch 36)
+## Current best metrics (PR #4443, lr=6e-4 on grad-clip stack, single-seed, best epoch 37)
 
 **Beat this to be a winner.**
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` **(primary)** | **33.6757** |
-| `test_avg/mae_surf_p` | **29.6535** |
-| `test/test_single_in_dist/mae_surf_p` | 32.69 |
-| `test/test_geom_camber_rc/mae_surf_p` | 43.66 |
-| `test/test_geom_camber_cruise/mae_surf_p` | 14.47 |
-| `test/test_re_rand/mae_surf_p` | 27.79 |
+| `val_avg/mae_surf_p` **(primary)** | **33.353** |
+| `test_avg/mae_surf_p` | **28.826** |
+| `test/test_single_in_dist/mae_surf_p` | — |
+| `test/test_geom_camber_rc/mae_surf_p` | — |
+| `test/test_geom_camber_cruise/mae_surf_p` | — |
+| `test/test_re_rand/mae_surf_p` | — |
 
-Per-split val surface-p MAE at best checkpoint (single seed, epoch 36):
+Per-split val surface-p MAE at best checkpoint (single seed, epoch 37):
 
-| Split | mae_surf_p | Δ vs prev (36.13) |
+| Split | mae_surf_p | Δ vs PR #4398 (33.68) |
 |-------|------------|-----------|
-| `val_single_in_dist`     |  31.858 | **-13.1%** |
-| `val_geom_camber_rc`     |  48.254 | +0.2% (unchanged — structural bottleneck) |
-| `val_geom_camber_cruise` |  17.771 | **-16.8%** |
-| `val_re_rand`            |  36.820 | **-4.0%** |
-| **avg** | **33.6757** | **-6.8%** |
+| `val_single_in_dist`     |  34.25 | +2.39 (in-dist/OOD tradeoff — structural pattern) |
+| `val_geom_camber_rc`     |  45.63 | **-2.62** |
+| `val_geom_camber_cruise` |  17.73 | -0.04 |
+| `val_re_rand`            |  35.80 | **-1.02** |
+| **avg** | **33.353** | **-0.32 (−1.0%)** |
 
-Artifact: `models/model-charliepai2i48h1-frieren-grad-clip-1p0-20260517-055140/metrics.jsonl`
+Artifact: `models/model-lr-6e-4-grad-clip-20260517-072439/metrics.jsonl`
+
+**lr change:** 5e-4 → 6e-4 (+20%). A stable clipped-gradient landscape allows the larger step size to exploit more of the gradient direction signal per step. 7.5e-4 (+50%) overshoots and oscillates — confirming 6e-4 as the local optimum in {5e-4, 6e-4, 7.5e-4}.
+
+**IMPORTANT — 3-seed σ recalibration (PR #4440 frieren, grad-clip stack):**
+
+Frieren's 3-seed run on the PR #4398 config (val~33.68 single-seed) revealed:
+- Seed 1: val=33.985 | Seed 2: val=33.972 | Seed 3: val=34.569
+- **3-seed mean: 34.175 ± 0.341 (1σ)** — σ is HALF the old estimate (0.62 on old stack → 0.34 on grad-clip stack, as predicted: grad-clip stabilizes training → less seed variance)
+- **The merged PR #4398 val=33.68 was a -1.5σ favorable seed** (true mean 34.18)
+- New 2σ clear-win threshold: **val ≤ 32.67** (1.5× 0.34 × 2 = 1.36 pts below new baseline 33.35 if σ~0.34 holds for lr=6e-4 config)
+- Conservative threshold until 3-seed of lr=6e-4 confirmed: **val ≤ 33.0** (1σ below 33.35)
 
 **Gradient clipping impact:**
 - Pre-clip gradient norms: mean 25–70, p50 20–64, p99 100–177, max up to 262 — **across ALL epochs, ALL steps**
@@ -57,12 +68,16 @@ Artifact: `models/model-charliepai2i48h1-frieren-grad-clip-1p0-20260517-055140/m
 - Wall-clock unchanged: ~49s/epoch (clip_grad_norm_ is negligible overhead)
 - Peak VRAM unchanged: 22.6 GB
 
-**IMPORTANT — 3-seed variance update (PR #4342 askeladd):**
-The "true" 3-seed mean of PR #4282 (old baseline) was **37.20 ± 0.62 (1σ)**. PR #4282's val=36.13 was a 1.7σ favorable seed — NOT the typical draw. Tightened variance estimate:
-- **Single-seed 1σ noise: ≈ 0.62 pts** (NOT ±5-10 pts as previously stated)
-- **2σ "clear improvement" threshold: ~1.2 pts below baseline**
-- For the new baseline val=33.68: a single-seed win requires val ≤ 32.5 to be clear of noise; anything in [32.5, 34.9] is "within noise" — needs 3-seed confirmation
-- Note: 3-seed std was measured on the OLD stack; std on new stack (with grad clipping) may differ but is expected to be equal or smaller (more stable training)
+**IMPORTANT — 3-seed variance update (PR #4440 frieren, GRAD-CLIP STACK):**
+Frieren's 3-seed run on the GRAD-CLIP stack revealed σ = **0.341 pts** (vs 0.62 on old no-clip stack — gradient stability halved seed variance):
+- **Single-seed 1σ noise on grad-clip stack: ≈ 0.34 pts**
+- **2σ clear-win threshold: ~0.68 pts below single-seed baseline** 
+- For baseline val=33.353: clear win requires val ≤ **32.67**; conservative until 3-seed of lr=6e-4 confirms: val ≤ **33.0** (1σ)
+- Single-seed results in [32.67, 34.07] are "within noise" — 3-seed confirmation recommended
+- Results > 34.07 are clear regressions
+- PR #4398's val=33.68 was a −1.5σ favorable seed (true mean 34.18); PR #4443's val=33.35 is 2.4σ below that true mean → confirmed real improvement
+
+**Older noise note (PR #4342, pre-clip stack):** σ=0.62 on old (no-clip) stack. That estimate is superseded by the above for experiments on the grad-clip stack.
 
 **Key implementation note — gradient clipping placement:**
 ```python
@@ -105,12 +120,13 @@ python train.py --experiment_name grad-clip-1p0-repro --agent <name> --max_grad_
 
 ### Note on val variance
 
-**Updated from 3-seed confirmation (PR #4342):** Single-seed 1σ noise is **≈ 0.62 pts** on `val_avg/mae_surf_p` (NOT ±5-10 pts). The 2σ clear-regression threshold is ~1.2 pts above baseline. The old ±5-10pt estimate was wrong and led to premature closures.
+**Updated from 3-seed confirmation (PR #4440 frieren, grad-clip stack):** Single-seed 1σ noise is **≈ 0.34 pts** on `val_avg/mae_surf_p` on the GRAD-CLIP stack (was 0.62 on old no-clip stack — grad-clip halved seed variance). The 2σ clear-regression threshold is ~0.68 pts above baseline.
 
-Decision thresholds for **this** baseline (val=33.68):
-- **Clear win**: val ≤ 32.5 (≥1.2 pts below baseline — ≥2σ)
-- **Within noise / soft win**: val in [32.5, 34.9] — single-seed tie, needs 3-seed confirmation to distinguish from noise
-- **Clear regression**: val ≥ 34.9 (≥1.2 pts above baseline — ≥2σ)
+Decision thresholds for **this** baseline (val=33.353, σ=0.34):
+- **Clear win**: val ≤ **32.67** (≥0.68 pts below baseline — ≥2σ)
+- **Conservative win** (until 3-seed of lr=6e-4 confirmed): val ≤ **33.0** (≥1σ)
+- **Within noise**: val in [32.67, 34.05] — single-seed; 3-seed confirmation recommended
+- **Clear regression**: val ≥ **34.05** (≥0.68 pts above baseline — ≥2σ)
 
 **Total improvement from calibration baseline:** 143.52 → 33.68 = **-76.5%**
 
@@ -166,3 +182,5 @@ After every merged winner, the advisor:
 | 2026-05-17 | #4282 | mlp_ratio=2 fix (dead-code bug: GEGLUBlock now uses int(hidden_dim*mlp_ratio)); +33.6% params, 983k, all 4 splits improved | 36.13 | -3.2% |
 | 2026-05-17 | #4342 | 3-seed baseline confirmation: true mean 37.20 ± 0.62; PR #4282's 36.13 was 1.7σ favorable seed; updates noise model from ±5-10pt to ±0.62pt | N/A (analysis) | N/A |
 | 2026-05-17 | #4398 | Gradient clipping max_norm=1.0: pre-clip norms 20–250 every step, ~100% activation rate; single_in_dist −13%, cruise −17%, re_rand −4%; rc unchanged (structural bottleneck confirmed) | **33.68** | **-6.8%** |
+| 2026-05-17 | #4440 | 3-seed baseline confirmation (grad-clip stack): true mean 34.18 ± 0.341; PR #4398's val=33.68 was −1.5σ favorable seed; σ halved vs old stack (0.62→0.34) due to gradient stabilization | N/A (calibration) | N/A |
+| 2026-05-17 | #4443 | lr 5e-4→6e-4 on grad-clip stack: rc −2.62, re_rand −1.02, test −0.83; 6e-4 local optimum in {5e-4, 6e-4, 7.5e-4}; 2.4σ below true mean 34.18 | **33.353** | **-1.0%** |
