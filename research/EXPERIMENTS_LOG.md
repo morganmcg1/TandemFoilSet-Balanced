@@ -1,5 +1,47 @@
 # SENPAI Research Results
 
+## 2026-05-17 ~11:05 UTC — Round 40: Close #4400 (eta_min null) + Close #4404 (mlp_ratio null) + Assign #4569 #4570
+
+### Closed: PR #4400 (fern) — cosine eta_min floor (5e-5, 1e-5) on k=3 stack ✗
+
+**Null result — but hypothesis premise mechanically invalid.** Both arms regress on val_avg:
+
+| Arm | eta_min | val_avg | test_3split | Δval |
+|---|---|---|---|---|
+| Arm 1 (dipsi63n) | 5e-5 | 53.843 | 53.346 | +4.94% |
+| Arm 2 (v4qisy2m) | 1e-5 | 52.284 | 51.517 | +1.91% |
+| Baseline (0aj92l9d) | 0.0 | 51.307 | 51.886 | — |
+
+**Critical infrastructure discovery**: `T_max=cfg.epochs=50` but wall-clock allows only ~18-22 epochs. At epoch 18, we are ~36% through the cosine schedule; LR ≈ 3.56e-4 (~71% of base 5e-4). eta_min has near-zero leverage because we never get close to the tail. The "10-100× smaller late-stage updates" hypothesis is mechanistically impossible on the current config. This explains:
+- Why best_epoch is consistently the LAST epoch (model still descending at termination)
+- Why eta_min adjustments don't register in practice
+
+**Campaign-wide implication**: ALL experiments so far have trained with LR stuck at 70-75% of base. A properly-sized cosine (T_max=~20) would see much lower LR at termination. This is a previously unknown schedule misalignment that fern correctly diagnosed.
+
+**Follow-up assigned**: PR #4569 (fern) — T_max-matched cosine (--epochs 20 + --eta_min 5e-5 vs 0.0) on n_layers=4 baseline.
+
+---
+
+### Closed: PR #4404 (thorfinn) — mlp_ratio bracket (1.0, 1.667) on k=3 stack ✗
+
+**Null result — throughput noise dominates.** Best arm-1 run (socabnn3) would technically beat new baseline (val=50.06, test=50.07) but 5 identical-config runs show the result is throughput-luck, not configuration.
+
+| Arm | mlp_ratio | runs | val mean | val median | val range | test best |
+|---|---|---|---|---|---|---|
+| Arm A (best: socabnn3) | 1.0 | 5 | 54.54 | 55.14 | 50.06-58.43 | 50.07 |
+| Arm B (xyqh2o13) | 1.667 | 1 | 52.51 | — | — | 52.35 |
+| Baseline | 1.333 | — | 51.31 | — | — | 51.89 |
+
+Per-epoch wall time for mlp_ratio=1.0 spanned 99.9-141.7 s/epoch (1.4× swing). Epoch count (14-19) directly predicts val_avg. The win is correlated with getting 19 epochs vs typical 16-17. This is hardware throughput variance, not configuration.
+
+**Surprising allocator finding**: mlp_ratio=1.0 (smaller FFN) used 94.7 GiB VRAM vs mlp_ratio=1.667's 59.6 GiB — inverse of what parameter count predicts. Likely PyTorch activation allocator fragmentation under the SwiGLU narrow path. `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` is the suggested fix for follow-up experiments.
+
+**FFN-width axis CLOSED**: per-student decision rule (both arm medians regress), axis is closed at mlp_ratio=1.333.
+
+**Follow-up assigned**: PR #4570 (thorfinn) — lr bracket (3e-4, 7e-4) on n_layers=4 baseline.
+
+---
+
 ## 2026-05-17 ~10:45 UTC — Round 39: MERGE #4453 (n_layers=4 NEW BASELINE) + Close #4468 (FiLM null) + 2 assignments
 
 ### MERGED: PR #4453 (alphonse) — n_layers=4 depth bracket ✓ **NEW BEST**

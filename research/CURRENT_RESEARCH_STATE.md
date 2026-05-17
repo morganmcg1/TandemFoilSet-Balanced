@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-17 ~10:50 UTC
+- **Last updated:** 2026-05-17 ~11:05 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
-- **Most recent direction from human researcher team:** None (no open issues at 10:50 UTC)
+- **Most recent direction from human researcher team:** None (no open issues at 11:05 UTC)
 
 ## Current best baseline — n_layers=4 (PR #4453 alphonse, merged ~10:45 UTC)
 
@@ -64,8 +64,8 @@ Total improvement since raw seed: **−64.9%** on val.
 | **#4491** | **tanjiro** | β1 bracket (0.85, 0.95) on eps=1e-9 baseline | eps=1e-9+n_layers=5 | WIP |
 | **#4534** | **nezuko** | Lookahead k=4 retest on eps=1e-9 (2 seeds) | eps=1e-9+n_layers=5 | WIP |
 | **#4469** | **frieren** | surf_weight bracket (5, 20) on k=3 baseline | old k=3 (pre-eps, n_layers=5) | WIP (stale_wip) |
-| **#4404** | **thorfinn** | mlp_ratio bracket (1.0, 1.667) on k=3 baseline | old k=3 (pre-eps, n_layers=5) | WIP (stale_wip) |
-| **#4400** | **fern** | Cosine eta_min floor (5e-5, 1e-5) on k=3 baseline | old k=3 (pre-eps, n_layers=5) | WIP (stale_wip) |
+| **#4570** | **thorfinn** | lr bracket (3e-4, 7e-4) on n_layers=4 baseline | n_layers=4 baseline | NEW — lr axis untested on current config |
+| **#4569** | **fern** | T_max-matched cosine (epochs=20) + eta_min bracket | n_layers=4 baseline | NEW — schedule-fix from #4400 T_max discovery |
 
 **Note on pre-n_layers=4 PRs**: #4490, #4491, #4534, #4469, #4404, #4400 were assigned against older baselines (val=50.17 or 51.31). They now need to beat **50.12** to merge. Most will still provide axis characterization even if they don't clear the new bar. An eps fine-grid result below the n_layers=4 baseline (50.12) on the OLD n_layers=5 stack would suggest eps stacking is especially powerful.
 
@@ -74,7 +74,9 @@ Total improvement since raw seed: **−64.9%** on val.
 | PR | Student | Hypothesis | val | Action |
 |----|---------|-----------|-----|--------|
 | ✓ **#4453** | **alphonse** | **n_layers=4 depth bracket** | **50.12** | ✓ **MERGED — NEW BASELINE** |
-| ✗ **#4468** | **askeladd** | **FiLM conditioning on camber M** | **56.89** | ✗ **Closed — +5.58 val regression. M already in input features; post-block residual modulation too destructive. FiLM conditioning direction CLOSED.** |
+| ✗ **#4468** | **askeladd** | **FiLM conditioning on camber M** | **56.89** | ✗ **Closed — FiLM conditioning CLOSED** |
+| ✗ **#4400** | **fern** | **eta_min floor** | **52.28** | ✗ **Closed — T_max mismatch makes eta_min mechanically inactive; follow-up #4569 tests T_max-matched schedule** |
+| ✗ **#4404** | **thorfinn** | **mlp_ratio bracket (1.0, 1.667)** | **54.54 mean** | ✗ **Closed — throughput noise dominates; best run 50.06 is cherry-pick. FFN-width axis CLOSED at 1.333.** |
 
 ## Prior closures (rounds 37/32)
 
@@ -94,6 +96,8 @@ Total improvement since raw seed: **−64.9%** on val.
 - **α-axis on k=3 CLOSED**: α=0.3 (failed), α=0.5 (optimal), α=0.7 (PR #4461, +4.60% worse, 3 seeds). The k=5+α=0.7 win does NOT transfer to k=3.
 - **FiLM conditioning CLOSED**: scalar M conditioning fails. M is already in input features; post-block modulation destroys residual structure; camber_rc gap is about tandem wake interactions, not M-extrapolation.
 - **Capacity axis closed**: n_hidden≥192 doubles epoch time; n_head=4 at n_hidden=128 below expressive threshold
+- **FFN-width axis CLOSED at mlp_ratio=1.333** (PR #4404): mlp_ratio=1.0/1.667 both regress at median; per-epoch wall time is attention/IO-bound not FFN-bound; throughput variance dominates
+- **T_max scheduling gap discovered** (PR #4400 fern): cfg.epochs=50 is T_max but only ~18-22 epochs fit in wall-clock. All experiments train at ~70% of peak LR at termination. T_max-matched cosine is now being tested (PR #4569)
 - **Data-side axis CLOSED**: frequency reweighting + feature-space mixup both failed; FiLM conditioning also closed
 - **Slice axis closed at 8**: unimodal optimum, both directions degrade
 
@@ -113,6 +117,8 @@ Total improvement since raw seed: **−64.9%** on val.
 - β1 axis: β1=0.85 or β1=0.95 on OLD pre-Lookahead stack (retesting on new full stack via #4491)
 - β2=0.95 under Lookahead k=3 (substitutive at short excursion window)
 - n_layers=7 (too few epochs, severe under-training at 30-min budget)
+- mlp_ratio ≠ 1.333 (both 1.0 and 1.667 regress at median; FFN-width axis closed)
+- eta_min tuning without T_max matching (T_max=50 makes eta_min mechanically inactive at ~18 epoch cutoff)
 - EMA=0.995 (substitutes with Lookahead)
 - AGC, grad_clip=1.0; bs=8, DropPath, dropout, SWA
 - All loss-shape axes tested: Huber δ bracket, asym Huber, log-cosh, Welsch
