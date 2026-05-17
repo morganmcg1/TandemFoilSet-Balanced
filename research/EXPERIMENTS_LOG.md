@@ -2545,3 +2545,53 @@ Arm B (λ=0.01): val=37.1878 (Δ-0.07 within noise). Arm A (λ=0.1): val=39.07 (
 | #4395 | frieren | **H121: SWA (start ep18, ep15) on H106 stack** | MED |
 
 **Cycle summary:** H106 Fourier K=4 merged (new best val=35.92). H113/H114/H107 closed. H118 label bug fixed. 8 WIP, 0 idle.
+
+---
+
+## 2026-05-17 — PR #4389: H119 WSD 0/3/18 + Fourier K=4 compound (nezuko) — CLOSED, no compound
+
+- Branch: `charliepai2i48h3-nezuko/h119-wsd-fourier-compound`
+- Hypothesis: WSD long-decay schedule (Δ-0.97 at H99) and Fourier PE (Δ-1.35 at H99) are orthogonal mechanisms (schedule shape vs input encoding) → compound at H106 should give val ~34.9-35.5.
+
+| Metric | H119 | H106 baseline | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 36.6814 | 35.9159 | +0.77 (worse) |
+| val_single_in_dist | 34.2591 | 32.2282 | +2.03 |
+| val_geom_camber_rc | 51.2425 | 50.3515 | +0.89 |
+| val_re_rand | 39.4214 | 39.4884 | -0.07 |
+| test 3-split | 35.4354 | 35.1221 | +0.31 |
+
+**LR trace verified correct** (3 ep at peak 3e-4, 18 ep cosine to 0). Per-epoch trajectory shows the WSD start was rough: val=159→107→104 over the 3 stable epochs, vs H106 cosine which is already in active decay by ep 3. The model couldn't recover the early gap during the 18-epoch decay tail.
+
+**Mechanism (per student's analysis):** The 3-epoch high-LR plateau is destabilising on Fourier PE's richer input space (fun_dim 22→38). Per-split: regression concentrated on val_single_in_dist (+2.03), other splits essentially unchanged — the plateau hurt fitting precision on easy examples while the long decay tail couldn't compensate.
+
+**Conclusion:** WSD does not compound with Fourier at H106. Schedule-shape attack at this baseline is exhausted. Closed. Reassigning nezuko to H122 (Lookahead — orthogonal optimization-level direction).
+
+---
+
+## 2026-05-17 — PR #4357: H115 slice_num=80, 64 (edward) — SENT BACK FOR COMPOUND
+
+- Branch: `charliepai2i48h3-edward/h115-slice-num-sub96`
+- Hypothesis: At Lion+bf16+T_max=21, sub-96 slice_num may improve over slice_num=96 (which was set under old optimizer).
+
+| Arm | slice_num | val_avg | Δ vs H99 (37.26) | test 3-split |
+|-----|-----------|---------|-------------------|--------------|
+| A | 80 | **35.9161** | -1.35 | **34.9972** |
+| B | 64 | 37.2214 | -0.04 | 35.3223 |
+
+**Updated slice_num curve under Lion+bf16+T_max=21:** 64→37.22, **80→35.92**, 96→37.26, 112→41.07, 128→41.74. slice_num=80 is the new candidate optimum.
+
+**Critical caveat:** Arm A ran on H99 base (no Fourier PE). Comparing slice_num=80 (no Fourier) val=35.9161 vs H106 (slice_num=96 + Fourier K=4) val=35.9159 — TIE on val (Δ+0.0002), test 3-split Δ-0.12 (within noise). Two orthogonal mechanisms reach the same accuracy.
+
+**Decision:** Send back for compound test — Arm C: slice_num=80 + Fourier K=4 on H106 baseline. If mechanisms truly orthogonal, predict val ~34.8-35.5.
+
+---
+
+## 2026-05-17 — Cycle 42 Assignments
+
+| PR | Student | Hypothesis | Priority |
+|----|---------|-----------|---------|
+| #4357 | edward | **H115 Arm C: slice_num=80 + Fourier K=4 (compound)** | TOP (two ties → compound predicted -0.4 to -1.1) |
+| #4422 | nezuko | **H122: Lookahead(Lion) k=5 α=0.5 at H106 baseline** | HIGH (orthogonal optimizer-level mechanism) |
+
+**Cycle summary:** H119 closed (no compound). H115 returned to wip for slice80+Fourier compound. Nezuko reassigned to Lookahead. 8 WIP, 0 idle.
