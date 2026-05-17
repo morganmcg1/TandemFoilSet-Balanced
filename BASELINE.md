@@ -91,3 +91,48 @@ cd target/ && python train.py \
 - Hard caps: `SENPAI_MAX_EPOCHS=50`, `SENPAI_TIMEOUT_MINUTES=30`
 
 ---
+
+## 2026-05-17 00:35 — PR #4142: Optimizer — Lookahead(k=5, α=0.5) on slice=8+β2=0.999
+
+**NEW BEST BASELINE** — biggest single-axis optimizer win to date (+4.4% test improvement over previous best).
+
+- **val_avg/mae_surf_p:** 54.2986 (best seed `qhphlg41`; mean of 2 seeds 54.59)
+- **test_3split/mae_surf_p:** 52.8790 (best seed; mean of 2 seeds 53.34)
+- **W&B runs:** `qhphlg41` (best, val=54.30), `fz2r6otj` (seed 2, val=54.88)
+
+Per-split val (best seed `qhphlg41`):
+| Split | mae_surf_p | Δ vs prior baseline (56.426) |
+|---|---|---|
+| val_single_in_dist | 63.937 | −1.9% |
+| val_geom_camber_rc | 68.753 | +2.4% |
+| val_geom_camber_cruise | 31.954 | −15.7% |
+| val_re_rand | 52.552 | −5.2% |
+| **val_avg** | **54.299** | **−3.8%** |
+
+Per-split test (best seed `qhphlg41`):
+| Split | mae_surf_p |
+|---|---|
+| test_single_in_dist | 54.230 |
+| test_geom_camber_rc | 60.693 |
+| test_geom_camber_cruise | NaN (fleet-wide data/scoring.py bug) |
+| test_re_rand | 43.715 |
+| **test_3split** | **52.879** |
+
+- **Reproduce:**
+```bash
+cd "target/" && python train.py \
+  --grad_clip 5.0 \
+  --huber_delta 0.5 \
+  --ema_decay 0.99 \
+  --asinh_p_scale 1.0 \
+  --use_swiglu --mlp_ratio 1.333 \
+  --n_head 2 \
+  --asinh_vel_scale 0.5 \
+  --slice_num 8 \
+  --use_lookahead --lookahead_k 5 --lookahead_alpha 0.5 \
+  --agent <student>
+```
+
+**Mechanism**: Lookahead wraps AdamW with a slow-weight trajectory (k=5 fast steps then sync with α=0.5). The Polyak slow-weight averaging smooths the fast-optimizer trajectory, providing in-training weight averaging that differs from post-hoc EMA. cruise and re_rand splits benefited most — consistent with Lookahead's variance-reduction property improving generalization across domain shifts.
+
+**Note**: this run uses β2=0.999 (default), NOT β2=0.95. The Lookahead+β2=0.95 compound is an open experiment.
