@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 01:40
+- **Date:** 2026-05-17 01:50
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
@@ -39,14 +39,14 @@
 
 | Student | PR | Hypothesis | Status |
 |---|---|---|---|
-| edward | #4279 | n_hidden capacity {160, 192} on new best (bs=2+n=10+δ=0.10) | wave-15 NEW (just assigned) |
+| edward | #4289 | n_hidden capacity {160, 192} on new best (bs=2+n=10+δ=0.10) | wave-15 NEW (just assigned) |
+| fern | #4288 | EMA × δ=0.10 compound on new best (τ={0.998, 0.9995}) | wave-15 NEW (just assigned) |
 | tanjiro | #4220 | 4-way merge (n=8+lr=7e-4+δ=0.10) + δ=0.05 | wave-14 WIP (long-running, multiple arms) |
 | thorfinn | #4221 | slice_num lower bracket {32, 48} on new best | wave-14 WIP |
 | frieren | #4222 | lr=7e-4+clip=1.0 on bs=2+n=10+δ=0.10 (5-way compound) | wave-14 WIP |
 | nezuko | #4223 | clip=1.0 + surf_weight=5 on bs=2+n=10+δ=0.10 | wave-14 WIP |
 | alphonse | #4198 | LR upper search {9e-4, 1.2e-3} on bs=2+n=8 | wave-14 WIP |
 | askeladd | #4179 | bs=2+n=8 + Huber δ={0.15, 0.20} — 3-way compound | wave-14 WIP |
-| fern | #4130 | EMA re-test at bs=2 (τ={0.998, 0.995}) | wave-14 WIP (delayed by rate limit) |
 
 ## Current research themes
 
@@ -72,7 +72,7 @@
 - **bs=1 ceiling found**: bs=2 is step-count optimum for 30-min budget.
 - **slice_num>64 fails hard**: routing softmax flattening. Testing {32, 48} with thorfinn.
 - **Monotonic Huber**: δ=0.10 profitable on n=10 stack; δ floor not yet found (δ=0.05 in tanjiro #4220).
-- **EMA dead on BF16**: 3+ tests. Fern re-testing at bs=2.
+- **EMA alive at bs=2** (PR #4130 closed): both τ=0.998/0.995 beat no-EMA bs=2+n=10 baseline by 1.3-1.6 val. EMA gap +4.18 at τ=0.998. Mechanism confirmed (noise-averaging at 13,500 steps), but doesn't beat current best 56.92 (which uses δ=0.10). Compound test running (fern #4288).
 - **Memory headroom**: 18.43 GB peak at bs=2 vs 96 GB. n_hidden expansion is viable.
 
 ## Key insights accumulated
@@ -85,7 +85,7 @@
 - **Memory headroom: 18.43 GB at bs=2** — n_hidden=192 (~41 GB) and n_hidden=256 (~74 GB) viable.
 - **T_max=20 confirmed optimal** for both lineages.
 - **lr=7e-4 confirmed optimal** for lineage A. LR ceiling still unknown (testing {9e-4, 1.2e-3}).
-- **EMA dead on BF16 stack**: 3+ tests confirm. Final check at bs=2 running (fern #4130).
+- **EMA alive at bs=2** (PR #4130): noise-averaging mechanism confirmed (+4.18 EMA gap, beats no-EMA bs=2+n=10 baseline by 1.3-1.6 val). But doesn't beat current best alone. EMA × δ=0.10 compound running (fern #4288).
 - **Capacity expansion**: n_hidden={160, 192} first screen (edward #4279), then wider if it wins.
 
 ## Potential next research directions

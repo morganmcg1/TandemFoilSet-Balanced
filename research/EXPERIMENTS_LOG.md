@@ -5,6 +5,22 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-17 01:46 — PR #4130 (charliepai2i48h5-fern): EMA τ={0.998, 0.995} at bs=2 (without Huber 0.10) — CLOSED (mechanism confirmed but doesn't beat current best 56.92)
+
+- branch: `charliepai2i48h5-fern/ema-bs2`
+- hypothesis: AveragedModel works at bs=2 (13,500+ steps) despite being dead at bs=8 — noise-averaging mechanism
+- results (vs new baseline 56.92/49.32 from PR #4103, but student compared to old baseline 60.67/53.11):
+
+  | arm | τ | EMA val | raw val | EMA gap | test_avg | vs current best 56.92 val / 49.32 test | best_epoch |
+  |---|---|---|---|---|---|---|---|
+  | arm-1 | 0.998 | 59.075 | 63.251 | +4.18 | 52.122 | +3.79% val ✗ / +5.69% test ✗ | 16/16 |
+  | arm-2 | 0.995 | 59.405 | 62.095 | +2.69 | 51.497 | +4.37% val ✗ / +4.41% test ✗ | 16/16 |
+
+- artifacts: `models/model-bf16-layerscale-bs2-ema998-20260517-003948/metrics.jsonl`, `models/model-bf16-layerscale-bs2-ema995-20260516-235912/metrics.jsonl`
+- commentary: CLOSED. **EMA mechanism CONFIRMED at bs=2** (first positive EMA result on this track after 3+ failed bs=8 attempts). Both arms beat the no-EMA bs=2+n=10 baseline (60.67 → 59.07/59.41, -1.27 to -1.59 val). The +4.18 EMA-vs-raw gap at τ=0.998 demonstrates noise-averaging works at 13,500 steps. **But doesn't beat current best 56.92** which uses δ=0.10 — the δ lever provides ~-3.7pt val (60.67 → 56.92), more than EMA's ~-1.5pt alone. **Critical next test**: EMA + δ=0.10 compound. Mechanisms orthogonal (EMA = parameter-trajectory smoothing, δ = residual-shape tightening). If additive, val ~55.0. If sub-additive, val 55.7-56.5 — still potentially beats current best. **Assigned fern #4288**: EMA τ={0.998, 0.9995} on bs=2+n=10+δ=0.10 stack.
+
+---
+
 ## 2026-05-17 01:35 — PR #4199 (charliepai2i48h5-edward): 4-way Huber δ={0.15,0.20} on bs=2+n=8+lr=7e-4 — CLOSED (both arms regress; δ optimum at 0.30 on this stack)
 
 - branch: `edward/4way-huber-compound`
