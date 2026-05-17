@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-17 07:15Z — round 15 of `icml-appendix-charlie-pai2i-48h-r2`
+- 2026-05-17 08:00Z — round 15 of `icml-appendix-charlie-pai2i-48h-r2`
 - No active research directives from the human research team
 - **New baseline: val=38.6750** (PR #4243 askeladd slice_num=48 merged, −2.91% from 39.83)
 
@@ -50,23 +50,23 @@ cd target && python train.py --agent <student> \
 | #4358 | alphonse | SwiGLU activation: gated MLP (SiLU gate) vs GELU on slice=48 stack | WIP | #4308 closed (ffn-dropout regresses); activation-form untested; Arm A param-matched (hidden×2/3), Arm B full hidden |
 | #4414 | fern | Surface-only pressure-weight multiplier (1.5× Arm A, 2.0× Arm B) — redirect loss budget to primary metric | WIP — NEW | #4295 closed (per-group-LR no_improvement — Lion sign masks grad-norm); first asymmetric loss-budget experiment, only surface p loss is boosted |
 | #4306 | askeladd | slice_num coarser: 40 (Arm A), 32 (Arm B) — below new baseline slice=48 | WIP (stale — was rate-limited; GPU active again) | #4243 MERGED (slice=48 strong win); continue coarser direction; trend clear |
-| #4377 | nezuko | Point subsampling augmentation: keep_rate=0.8 (Arm A), 0.6 (Arm B) on non-surface points | WIP | #4278 closed (attn-dropout regresses); pivot to DATA augmentation; targets val_geom_camber_rc (51.62) coverage |
+| #4458 | nezuko | Attention temperature: frozen τ=0.25 (A) vs τ=1.0 (B) on slice-routing softmax | WIP — NEW | #4377 closed (slice routing invariant to point subsample); test if sharper/neutral frozen τ helps OOD |
 | #4433 | tanjiro | Y-mirror geometric augmentation: physics-exact data doubling, p=0.5 (A) / p=1.0 (B) | WIP — NEW | #4365 closed (RMSNorm regresses, mean-centering load-bearing); data coverage is bottleneck |
 | #4435 | thorfinn | LayerScale (CaiT): per-channel learnable residual gating γ_init=1e-4 (A) / 1e-2 (B) | WIP — NEW | #4362 closed (Lookahead triple-smoothing failure); architecture axis — how much each block contributes |
-| #4403 | edward | Fourier feature encoding of mesh pos coords: NeRF octaves K=8 vs RFF K=16 σ=10 | WIP — NEW | #4253 closed (SGDR 3rd schedule-disruption failure); INPUT REPRESENTATION axis first test; spectral bias hypothesis |
+| #4454 | edward | Token-space input feature noise: Gaussian σ=0.02 (A), σ=0.05 (B) on x_norm during training | WIP — NEW | #4403 closed (Fourier convergence-budget hit); direct response to slice-routing token-space diagnostic; zero param cost |
 | #4405 | frieren | DropPath stochastic depth: p_max=0.10 (Arm A), 0.20 (Arm B) — block-level vs element-wise | WIP — NEW | #4327 closed (huber regresses); STRUCTURAL REGULARIZATION axis — drops entire blocks not activations |
 
 ## Key open questions (round 15 — new baseline 38.675, slice_num=48 — ACTIVE ESCALATION)
 
-**Escalation status:** 12 consecutive no_improvement results since slice=48 merged (+#4365 RMSNorm +#4362 Lookahead, +#4295 per-group-lr, +#4327 huber-loss, +#4253 SGDR, +#4278 attn-dropout, +#4308 ffn-dropout, +#4312 SWA, +#4273 n_head v2, +#4235 mlp-ratio, +#4230 weight-decay, +#4287 batch-size). **Optimizer-tuning, loss reshaping, LR-schedule disruption, normalization form, and element-level regularization are all fully closed.** Lion's sign-update masks gradient-norm asymmetry; LayerNorm mean-centering is load-bearing; cosine T_max=40 is the locked schedule. Active pivot to: (a) **data augmentation** (Y-mirror #4433 physics-exact, point-subsample #4377 in-flight); (b) **input representation** (Fourier features #4403 in-flight); (c) **structural regularization** (DropPath #4405 in-flight); (d) **loss-budget redirection** (surf-p-weight-mult #4414 in-flight); (e) **architecture** (SwiGLU #4358 in-flight, LayerScale #4435 new).
+**Escalation status:** 14 consecutive no_improvement results since slice=48 merged (+#4403 Fourier, +#4377 point-subsample, +#4365 RMSNorm, +#4362 Lookahead, +#4295 per-group-lr, +#4327 huber-loss, +#4253 SGDR, +#4278 attn-dropout, +#4308 ffn-dropout, +#4312 SWA, +#4273 n_head v2, +#4235 mlp-ratio, +#4230 weight-decay, +#4287 batch-size). **Closed axes:** optimizer tuning, loss reshaping, LR-schedule disruption, normalization form, element-level reg, input-representation (Fourier), point-level data aug. **Critical new diagnostic from #4377:** PhysicsAttention slice routing is permutation-equivariant and invariant to point-level perturbation — augmentation must operate in *token space* (post-normalization), not point space. **Active pivots:** (a) **data augmentation** (Y-mirror #4433 physics-exact in-flight); (b) **token-space noise** (feature noise #4454 NEW — direct response to diagnostic); (c) **structural regularization** (DropPath #4405 in-flight); (d) **loss-budget redirection** (surf-p-weight-mult #4414 in-flight); (e) **architecture** (SwiGLU #4358 in-flight, LayerScale #4435 in-flight); (f) **slice-routing softmax** (attn-temperature #4458 NEW — direct response to diagnostic).
 
 **Key reading from 3 regularization failures (FFN dropout, attention dropout, SWA):** model is NOT over-fitting in the classic sense at 35 epochs. The OOD gap on val_geom_camber_rc (51.62) is driven by **training data coverage**, not by parameter over-fitting. This pivots us toward data augmentation as the right axis.
 
 1. **Does SwiGLU gating improve over GELU in this timeout-limited PDE regime?** (#4358 alphonse) — modern transformer best practice, first clean test of activation function; Arm A param-matched (hidden×2/3), Arm B full-hidden gating.
 2. **Do even coarser slices (32, 40) continue the slice_num winning trend?** (#4306 askeladd) — slice=48 strong win vs slice=64/96; monotone coarser trend may continue.
 3. **Does up-weighting surface pressure loss (specifically, not uniformly) improve mae_surf_p?** (#4414 fern) — surf_p_weight_mult=1.5 (A) or 2.0 (B); effective surface-p loss weight 3.0 or 4.0 vs uniform 2.0; redirects gradient budget to the primary metric.
-4. **Does point subsampling augmentation improve OOD generalization?** (#4377 nezuko) — drop 20% (A) or 40% (B) of non-surface points per training batch; tests data-coverage hypothesis directly; surface points always preserved.
-5. **Does Fourier feature encoding unlock high-frequency spatial signal for surface pressure?** (#4403 edward) — NeRF octaves K=8 vs RFF K=16 σ=10; removes spectral bias of raw coord inputs; may disproportionately help val_geom_camber_rc OOD split.
+4. **Does token-space input feature noise help where point-space augmentation cannot?** (#4454 edward) — Gaussian σ=0.02 (A) or σ=0.05 (B) on x_norm during training; zero param cost; direct response to slice-routing-invariance diagnostic from #4377.
+5. **Does forcing a fixed slice-routing temperature outperform the learnable τ?** (#4458 nezuko) — frozen τ=0.25 (A, sharper) vs τ=1.0 (B, neutral); slice-routing softmax temperature has been learnable per-head init=0.5; never tested.
 6. **Does DropPath (block-level dropout) succeed where element-wise dropout failed?** (#4405 frieren) — drops entire residual branches at p=0.10/0.20; stronger generalization pressure with less per-step noise; linear schedule 0→p_max over 5 layers.
 7. **Does Y-mirror data augmentation improve OOD generalization via physics-exact symmetry?** (#4433 tanjiro) — Navier-Stokes y-mirror symmetry doubles effective training data; p=0.5 (A) vs p=1.0 always-mirror (B); targets val_geom_camber_rc bottleneck specifically.
 8. **Does LayerScale (CaiT) enable the model to learn per-channel block contribution?** (#4435 thorfinn) — learnable γ per residual branch; γ_init=1e-4 (A) vs 1e-2 (B); allows near-identity start and automatic block gating; 1280 new params.
@@ -132,6 +132,8 @@ cd target && python train.py --agent <student> \
 | #4295 (fern per-group-lr) | no_improvement: Arm A (lr_other×0.5) val=40.07, Arm B (lr_attn×2.0) val=39.50; Lion sign-update masks grad-norm asymmetry; per-group LR only changes trajectory length not step size → #4414 surf-p-weight-mult |
 | #4365 (tanjiro rmsnorm) | no_improvement: Arm A (scope=all) val=39.79 (+1.12), Arm B (scope=pre_only) val=39.97 (+1.29); mean-centering load-bearing in this architecture; post-norm slightly better than pre-only; LayerNorm locked → #4433 y-mirror |
 | #4362 (thorfinn lookahead-lion) | no_improvement: Arm A (k=5) val=43.53 (+12.6%), Arm B (k=10) val=41.92 (+8.4%); triple-smoothing: Lion sign-update + EMA + Lookahead redundant; k=5→k=10 monotone trend confirms k→∞ optimal → #4435 layerscale |
+| #4403 (edward fourier-features) | no_improvement: Arm A (NeRF K=8) val=42.45 (+3.77), Arm B (RFF K=16 σ=10) val=42.08 (+3.40); +32 input channels hit convergence budget; OOD got worse; redundant with PhysicsAttention slice routing → #4454 feature-noise |
+| #4377 (nezuko point-subsample) | no_improvement: Arm A (keep=0.8) val=40.65 (+5.10%), Arm B (keep=0.6) val=39.85 (+3.04%); critical diagnostic — **slice routing is permutation-equivariant and invariant to point subsampling**; augmentation must operate in TOKEN space → #4454 feature-noise, #4458 attn-temperature |
 
 ## Potential next research directions
 
@@ -154,14 +156,16 @@ cd target && python train.py --agent <student> \
 - **Huber loss** — CLOSED as #4327 (frieren); asinh already handles outliers; loss-reshaping slows convergence under timeout → #4405 DropPath
 - **SGDR warm restarts** — CLOSED as #4253 (edward); restart spike, 3rd schedule-disruption failure → #4403 Fourier features
 - **Slice_num coarser** — IN PROGRESS as #4306 (askeladd); slice=40/32
-- **Fourier feature encoding** — IN PROGRESS as #4403 (edward); NeRF octaves K=8 vs RFF K=16 σ=10; first input-representation experiment
+- **Fourier feature encoding** — CLOSED as #4403 (edward); +32 input channels hit convergence budget; OOD got worse; redundant with PhysicsAttention slice routing on pos → #4454 feature-noise
 - **DropPath stochastic depth** — IN PROGRESS as #4405 (frieren); p_max=0.10/0.20; first block-level regularization attempt
 - **Attention dropout** — CLOSED as #4278 (nezuko); both arms regress on bottleneck split; train/val gap GROWS with dropout (signal-removal not co-adaptation); 3rd regularization failure → #4377 point-subsample
-- **Point subsampling augmentation** — IN PROGRESS as #4377 (nezuko); keep_rate=0.8 (A), 0.6 (B); first data-augmentation experiment in the program
+- **Point subsampling augmentation** — CLOSED as #4377 (nezuko); slice routing invariant to point-level perturbation; critical diagnostic — token-space diversity needed → #4454 feature-noise (token-space), #4458 attn-temperature
 - **Per-group LR** — CLOSED as #4295 (fern); Arm A (lr_other×0.5) val=40.07, Arm B (lr_attn×2.0) val=39.50; Lion sign-update masks grad-norm asymmetry; per-group LR only changes trajectory length → #4414 surf-p-weight-mult
 - **Surface-only pressure-weight multiplier** — IN PROGRESS as #4414 (fern); surf_p_weight_mult=1.5/2.0 — asymmetric loss budget targeting primary metric
 - **Y-mirror geometric augmentation** — IN PROGRESS as #4433 (tanjiro); physics-exact NS symmetry; p=0.5 (A), p=1.0 (B); targets camber_rc OOD bottleneck
 - **LayerScale (CaiT)** — IN PROGRESS as #4435 (thorfinn); per-channel γ learnable gating; γ_init=1e-4 (A), 1e-2 (B)
+- **Token-space input feature noise** — IN PROGRESS as #4454 (edward); Gaussian on x_norm σ=0.02/0.05; zero param cost; addresses slice-routing-token-space diagnostic
+- **Attention temperature (slice-routing softmax)** — IN PROGRESS as #4458 (nezuko); frozen τ=0.25/1.0 vs current learnable init=0.5
 
 **Not yet tried (candidates for next round):**
 - GeGLU (GELU gate variant of SwiGLU) — if SwiGLU #4358 shows signal, test sibling variant

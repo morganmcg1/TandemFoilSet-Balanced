@@ -1285,3 +1285,45 @@ Stop condition triggered (val > 41.0 threshold); Arm B (warmup=3) correctly not 
 - **Analysis:** Both arms substantially regress. LR cosine schedule intact (verified), per-epoch time and VRAM identical to baseline. Monotonic k=5→k=10 trend (worse → less-worse) suggests k→∞ (no Lookahead) is the local optimum.
 - **Key insight (from student's diagnostic):** Triple-smoothing problem. Lion already produces signed (±lr) updates that implicitly average over momentum via β1=0.9, β2=0.99. A second EMA (Lookahead α=0.5 slow-weight anchor) damps useful exploration. "Lookahead is simply making the underlying optimizer worse."
 - **Decision:** CLOSED — no_improvement. **11th consecutive optimizer/schedule failure** since slice=48 merge. Lion+EMA+cosine triple is the locked optimal. Optimizer direction comprehensively closed. Pivoting to architecture (LayerScale #4435) and data augmentation (Y-mirror #4433).
+
+---
+
+## 2026-05-17 07:55 — PR #4403: Fourier feature encoding of mesh pos coords (NeRF K=8 vs RFF K=16)
+
+- **Branch:** charliepai2i48h2-edward/fourier-features
+- **Hypothesis:** Fourier feature encoding of mesh pos coords (NeRF octaves K=8 vs RFF K=16 σ=10) would unlock high-frequency spatial signal and disproportionately help val_geom_camber_rc OOD split.
+
+| Metric | Baseline (PR #4243) | Arm A (NeRF K=8) | Arm B (RFF K=16, σ=10) |
+|--------|---------------------|------------------|------------------------|
+| **val_avg/mae_surf_p** | **38.6750** | 42.4488 (+3.77) | 42.0794 (+3.40) |
+| **test_avg/mae_surf_p** | **33.4948** | 36.6978 (+3.20) | 37.6176 (+4.12) |
+| val_geom_camber_rc | 51.6180 | 56.4726 (+4.85) | 55.5293 (+3.91) |
+| Best epoch | 35 | 35 (still descending) | 35 (still descending) |
+| Per-epoch time | 51.7 s | 52.4 s | 52.3 s |
+| Input width | 24 | 56 (+32) | 56 (+32) |
+| Metric artifacts | | `models/model-charliepai2i48h2-edward-fourier-features-A-*/metrics.jsonl` | `models/model-charliepai2i48h2-edward-fourier-features-B-*/metrics.jsonl` |
+
+- **Analysis:** Both arms timeout-bound at epoch 35, val still descending but ~3.4 units above baseline. OOD got WORSE not better — val_geom_camber_rc +4.85/+3.91. The +32 channels added 8,192 params at the input projection layer; Lion+cosine(T_max=40) was tuned against 24-d input, so the larger embedding needs more SGD steps. NeRF vs RFF essentially identical at convergence (both ~42 val_avg, same channel count).
+- **Key insight (from student's diagnostic):** PhysicsAttention slice routing already partitions by learned coords; explicit Fourier basis on pos is redundant *and* costly. Convergence-speed penalty inside fixed budget dominates whatever spectral-bias improvement might exist.
+- **Decision:** CLOSED — no_improvement. Input-representation axis closed for now. Future work: encode rare physics dims (Re, NACA) instead of pos; replace pos rather than append. → #4454 feature-noise (token-space augmentation, no capacity addition)
+
+---
+
+## 2026-05-17 07:55 — PR #4377: Point subsampling augmentation: drop 20%/40% non-surface points
+
+- **Branch:** charliepai2i48h2-nezuko/point-subsample
+- **Hypothesis:** Per-batch point subsampling (keep_rate=0.8 vs 0.6 on non-surface points) acts as effective data augmentation, increasing diversity in slice-routing token statistics and improving OOD generalization.
+
+| Metric | Baseline (PR #4243) | Arm A (keep=0.8) | Arm B (keep=0.6) |
+|--------|---------------------|------------------|------------------|
+| **val_avg/mae_surf_p** | **38.6750** | 40.6471 (+5.10%) | 39.8499 (+3.04%) |
+| **test_avg/mae_surf_p** | **33.4948** | 34.5265 (+3.08%) | 34.4628 (+2.89%) |
+| val_geom_camber_rc | 51.6180 | 53.8964 (+4.41%) | 53.8278 (+4.28%) |
+| val_geom_camber_cruise | 22.4830 | 23.5716 (+4.84%) | **22.1761 (−1.36%)** |
+| Best epoch | 35 | 35 | 35 |
+| Per-epoch time | 51.7 s | 51.8 s | 51.8 s |
+| Metric artifacts | | `models/model-charliepai2i48h2-nezuko-point-subsample-A-*/metrics.jsonl` | `models/model-charliepai2i48h2-nezuko-point-subsample-B-*/metrics.jsonl` |
+
+- **Analysis:** Both arms regress; OOD bottleneck (camber_rc) worse on both. Surprising **inversion**: Arm B (heavier 40% drop) is *less bad* than Arm A. Read: at keep=0.8 the model still memorizes per-batch geometry + small noise term; at keep=0.6 the model is forced to compute on genuinely different point clouds, recovering more of the original signal path. Mild signal of val_geom_camber_cruise (−1.36%) on Arm B — possibly genuine in low-Re aerial regime.
+- **Key insight (from student's diagnostic):** **PhysicsAttention slice routing is permutation-equivariant and approximately invariant to random subsampling at these rates.** Slice tokens are robust enough that dropping 20-40% of volume points produces near-identical token statistics. The augmentation behaves as added MC variance per step (input noise) rather than as data diversity (where slice-routing is sensitive — in *token space*, not point space).
+- **Decision:** CLOSED — no_improvement. **Critical pivot signal:** input-side augmentation at the point level cannot affect slice-routing token statistics. → #4454 feature-noise (token-space noise post-normalization, addressing this diagnostic directly), → #4458 attn-temperature (perturb the slice-routing softmax itself, sharper τ may help OOD).
