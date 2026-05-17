@@ -820,3 +820,86 @@ python train.py \
 # NEXT: lr=3e-3 is still monotonically improving — explore {3e-3, 4e-3, 5e-3, 6e-3}
 ```
 
+---
+
+## 2026-05-17 08:00 — PR #4248: Model depth sweep — n_layers=3 NEW BEST
+
+**val_avg/mae_surf_p: 45.654** (Δ **−12.64% vs prior canonical 52.258**; Δ −14.74% paired vs Arm B n_layers=5 control)
+**test_3split_mean/mae_surf_p: 44.878** (Δ −12.36% vs prior canonical test 51.206)
+
+**This is the biggest single-PR improvement in the round.** Arm A (n_layers=3) crushes all deeper alternatives. Monotone descent l3 < l4 < l5 < l7 on every val split AND every clean test split. Val/test directions agree perfectly (no flip).
+
+| Arm | n_layers | n_params | epochs (cap=50) | sec/ep | val_avg | Δ vs B paired | Δ vs prior canon |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **A (winner)** | **3** | **537K** | **26** | **69.3s** | **45.654** | **−14.74%** | **−12.64%** |
+| B (control) | 5 | 846K | 17 | 111.3s | 53.549 | — | +2.47% |
+| C | 7 | 1.15M | 12 | 153.3s | 61.044 | +14.00% | +16.81% |
+| D | 4 | 691K | 20 | 90.5s | 50.693 | −5.33% | −2.99% |
+
+### Val surface pressure MAE (winner Arm A)
+
+| Split | val/mae_surf_p |
+|---|---:|
+| `val_single_in_dist`     | 46.762 |
+| `val_geom_camber_rc`     | 59.317 |
+| `val_geom_camber_cruise` | 29.120 |
+| `val_re_rand`            | 47.415 |
+| **val_avg**              | **45.654** |
+
+### Test surface pressure MAE (3 finite splits; cruise NaN pre-existing)
+
+| Split | test/mae_surf_p |
+|---|---:|
+| `test_single_in_dist`   | 41.948 |
+| `test_geom_camber_rc`   | 54.253 |
+| `test_re_rand`          | 38.432 |
+| **test_3split_mean**    | **44.878** |
+
+### Mechanism note (honest)
+
+At iso-epoch=12, all arms cluster within ~1% of each other — meaning the win is dominated by **step count, not capacity**: sec/epoch scales near-linearly with depth (1.16 / 1.51 / 1.85 / 2.56 min for l3/l4/l5/l7), so the shallower arm fits more optimization steps in the 30-min wall-clock budget. None of the arms had converged at termination (best_epoch == last_epoch for all). Our advisor regime IS wall-clock, so this is a valid deployment-regime improvement, but follow-ups should test convergence/longer-budget behaviour.
+
+### Peak VRAM
+
+| Arm | n_layers | peak_mem_gb |
+|---|---:|---:|
+| A | 3 | 24.97 |
+| B | 5 | 38.92 |
+| C | 7 | 52.87 |
+| D | 4 | 31.94 |
+
+### Metric artifacts
+
+- Winner (n_layers=3): `models/model-charliepai2i48h4-frieren-n-layers-r1-armA-l3-20260517-042742-20260517-042745/metrics.jsonl`
+- Control (n_layers=5): `models/model-charliepai2i48h4-frieren-n-layers-r1-armB-l5-20260517-033637-20260517-033640/metrics.jsonl`
+- Arm C (n_layers=7): `models/model-charliepai2i48h4-frieren-n-layers-r1-armC-l7-20260517-052644-20260517-052647/metrics.jsonl`
+- Arm D (n_layers=4): `models/model-charliepai2i48h4-frieren-n-layers-r1-armD-l4-20260517-062841-20260517-062844/metrics.jsonl`
+
+### Reproduce
+
+```bash
+cd target/
+python train.py \
+  --amp_dtype bf16 \
+  --use_ema --ema_decay 0.999 \
+  --film_cond --two_shot_film \
+  --grad_clip_norm 1.0 \
+  --use_schedule_free --lr 3e-3 \
+  --n_layers 3
+```
+
+### Current best config (carry forward to all new experiments)
+
+```python
+# Loss: Huber (smooth_l1_loss, beta=1.0)
+# AMP: --amp_dtype bf16
+# Scheduler: NONE (--use_schedule_free replaces cosine)
+# EMA: --use_ema --ema_decay 0.999
+# FiLM: --film_cond --two_shot_film
+# Optimizer: SF-AdamW lr=3e-3, weight_decay=1e-4, warmup_steps=500, betas=(0.9,0.999)
+# Gradient clip: --grad_clip_norm 1.0
+# Model: n_hidden=128, n_layers=3 (NEW), n_head=4, slice_num=64, mlp_ratio=2
+# surf_weight=10
+# NEXT: shallower probe {1,2,3}; longer-budget rerun at n_layers=3; re-test architecture axes at new canonical
+```
+
