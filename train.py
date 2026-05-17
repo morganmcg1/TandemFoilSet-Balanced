@@ -399,6 +399,7 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     ema_decay: float = 0.997  # EMA decay for shadow model evaluated at val/test
     sf_warmup_steps: int = 200  # Schedule-Free linear LR warmup
+    slice_num: int = 8  # PhysicsAttention slice count
 
 
 cfg = sp.parse(Config)
@@ -434,7 +435,7 @@ model_config = dict(
     n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=8,
+    slice_num=cfg.slice_num,
     mlp_ratio=2,
     dropout=0.1,
     output_fields=["Ux", "Uy", "p"],
