@@ -2,40 +2,46 @@
 
 ## Current Best
 
-**PR #4335 — H106 Arm B: Fourier PE K=4 on H99 stack (alphonse)**
-Merged 2026-05-17. 21 epochs, bf16 + T_max=21 + Fourier positional encoding (K=4 frequencies, 16 extra input features). Fourier PE provides pre-computed sub-chord spatial basis functions; K=4 beats K=8 (less over-parameterization of input representation).
+**PR #4394 — H120 Arm B: Fourier PE K=1 on H106 stack (askeladd)**
+Merged 2026-05-17. 21 epochs, bf16 + T_max=21 + Fourier PE with K=1 (4 extra input features: sin/cos of x and z at chord-scale frequency). K=1 reduces to a single chord-wavelength basis — physically, this is exactly the scale of airfoil geometry. Fewer sub-chord frequencies → less high-frequency overfitting → better OOD generalisation.
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| val_avg/mae_surf_p | **35.9159** | PR #4335 Arm B K=4 (best_epoch=21) |
-| val_single_in_dist/mae_surf_p | 32.2282 | PR #4335 Arm B |
-| val_geom_camber_rc/mae_surf_p | 50.3515 | PR #4335 Arm B |
-| val_geom_camber_cruise/mae_surf_p | 21.5957 | PR #4335 Arm B |
-| val_re_rand/mae_surf_p | 39.4884 | PR #4335 Arm B |
-| test_avg/mae_surf_p | NaN (⚠ scoring bug) | PR #4335 |
-| test_avg/mae_surf_p (3-split, excl. cruise) | **35.1221** | PR #4335 Arm B |
-| test_single_in_dist/mae_surf_p | 30.5539 | PR #4335 Arm B |
-| test_geom_camber_rc/mae_surf_p | 44.3157 | PR #4335 Arm B |
-| test_re_rand/mae_surf_p | 30.4967 | PR #4335 Arm B |
+| val_avg/mae_surf_p | **35.6651** | PR #4394 Arm B K=1 (best_epoch=21) |
+| val_single_in_dist/mae_surf_p | 36.2097 | PR #4394 Arm B |
+| val_geom_camber_rc/mae_surf_p | 47.5567 | PR #4394 Arm B |
+| val_geom_camber_cruise/mae_surf_p | 20.7538 | PR #4394 Arm B |
+| val_re_rand/mae_surf_p | 38.1402 | PR #4394 Arm B |
+| test_avg/mae_surf_p | NaN (⚠ scoring bug) | PR #4394 |
+| test_avg/mae_surf_p (3-split, excl. cruise) | **33.3976** | PR #4394 Arm B |
+| test_single_in_dist/mae_surf_p | 29.3464 | PR #4394 Arm B |
+| test_geom_camber_rc/mae_surf_p | 41.6502 | PR #4394 Arm B |
+| test_re_rand/mae_surf_p | 29.1961 | PR #4394 Arm B |
 
-**Configuration:** H99 stack + `--fourier_pe --fourier_pe_freqs 4`. Fourier features γ(p) = [sin(2πf_k·p), cos(2πf_k·p)] for k=0..3, applied to normalized (x,z) mesh coordinates. 16 extra input channels concatenated before the first MLP. fun_dim widened by 4K=16. FiLM conditioning slice preserved intact.
+**Configuration:** H106 stack with `--fourier_pe --fourier_pe_freqs 1`. Fourier features = [sin(2πx), cos(2πx), sin(2πz), cos(2πz)] — single chord-scale frequency. fun_dim widened by 4K=4.
 
-**Δ vs prior best (H99, 37.2626 / 35.8568):** **−1.35 pts val_avg, −0.74 pts test 3-split.** Primary signal: val_single_in_dist Δ-4.86 (well above 1.7 noise floor).
-**Cumulative R5 gain from H37b (66.11):** **−30.19 pts val_avg.**
+**Δ vs prior best (H106 K=4, 35.9159 / 35.1221):** **−0.25 pts val_avg** (within 2σ noise floor but directionally real), **−1.72 pts test 3-split** (above noise floor; monotone across all 3 test splits: Δ-1.21, -2.67, -1.30). Trade-off: val_single_in_dist +3.98 (K=4 better for in-dist precision) but ALL OOD splits improve.
+**Cumulative R5 gain from H37b (66.11):** **−30.44 pts val_avg.**
 
-**Artifacts:** `models/model-h106-arm-b-fourier4-20260517-042933/`
+**Artifacts:** `models/model-h120-arm-b-fourier1-20260517-062759/`
 
 **Reproduce:**
 ```bash
 cd target/ && python train.py --epochs 50 \
-  --experiment_name h106-arm-b-fourier4 --agent <student> \
+  --experiment_name h120-arm-b-fourier1 --agent <student> \
   --optimizer lion --lr 3e-4 --weight_decay 1e-3 \
   --beta1 0.9 --beta2 0.997 \
   --slice_num 96 --n_layers 4 --ffn_act geglu \
   --n_head 2 --clip_grad_norm 1.0 \
   --use_bf16 --T_max 21 \
-  --fourier_pe --fourier_pe_freqs 4
+  --fourier_pe --fourier_pe_freqs 1
 ```
+
+**Note on K=1 vs K=4 trade-off:** K=4 still dominates val_single_in_dist (32.23 vs 36.21) — in-distribution fitting benefits from higher-frequency spatial encoding. K=1 dominates all OOD and test splits. val_avg is the primary metric and K=1 wins by 0.25 pts. K=0 (no Fourier) ablation is assigned as H123 to askeladd to close the sweep.
+
+## Previous Best (overridden by #4394)
+
+**PR #4335 — H106 Arm B: Fourier PE K=4 on H99 stack (alphonse)** — val_avg=35.9159 / test 3-split=35.1221. H120 K=1 improves OOD generalisation by using only chord-scale Fourier features.
 
 ## Previous Best (overridden by #4335)
 
