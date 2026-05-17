@@ -458,6 +458,7 @@ class Config:
     cosine_t_max_epochs: int = 80  # default unchanged from current behavior
     ema_decay: float = 0.999
     compile_mode: str = ""  # empty = no compile (baseline behavior)
+    slice_num: int = 64
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -498,7 +499,7 @@ model_config = dict(
     n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=64,
+    slice_num=cfg.slice_num,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
