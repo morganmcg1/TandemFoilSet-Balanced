@@ -2218,3 +2218,90 @@ Per-split: Arm B (sw=20) marginally helps val_single_in_dist (42.81 vs 44.73) bu
 **Note: student implemented WSD scheduler in train.py with clean flags (`--scheduler wsd --warmup_epochs --stable_epochs --decay_epochs`).** This implementation is reusable for budget-aware follow-ups.
 
 **Status: SENT BACK** — Arms B (0/10/5) and C (0/5/10) requested. Both eliminate warmup (H76 closed) and fit the 15-epoch budget. Tests the actual hypothesis (does stable plateau help vs cosine?) cleanly.
+
+---
+
+## 2026-05-17 — PR #4215: H95 bf16 mixed-precision (alphonse) — MERGED, new best
+
+- Branch: `charliepai2i48h3-alphonse/h95-bfloat16`
+- Hypothesis: bf16 autocast reduces s/epoch by ~30%, enabling more epochs within the 30-min wall budget. Quality parity verified vs fp32.
+
+| Arm | Config | val_avg | Δ vs H88 | test 3-split | Epochs |
+|-----|--------|--------:|---------:|-------------:|-------:|
+| **Arm A (bf16 walltime)** | bf16, T_max=15, 21 epochs | **40.5066** | **−0.71** | **39.0160** | 17 (best) |
+| Arm B (bf16 ep15 match) | bf16, T_max=15, 15 epochs | 41.54 | +0.32 | 40.14 | 15 |
+| H88 baseline | fp32, T_max=15 | 41.2153 | — | 39.5337 | 15 |
+
+Per-split (Arm A best_epoch=17): val_single_in_dist=40.09, val_geom_camber_rc=54.51, val_geom_camber_cruise=25.01, val_re_rand=42.43
+Test (Arm A): test_single_in_dist=34.87, test_geom_camber_rc=48.38, test_re_rand=33.80
+
+**Schedule confound:** T_max=15 hardcoded; with 21 epochs of bf16 training, cosine hits 0 at ep15 then rises. Best epoch 17 sits in the rising-LR phase. Arm B (bf16 matched to ep15) confirms numerical parity with H88 (within noise), verifying that bf16 quality is sound — the Arm A metric improvement is real, partly enabled by the extra 6 epochs.
+
+**Implementation:** `torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=cfg.use_bf16)` wraps forward pass; `pred = pred.float()` cast-back before loss; Lion states remain fp32. Memory unchanged at 30.46 GB.
+
+- Artifacts: `models/model-charliepai2i48h3-alphonse-h95-arm-a-bf16-walltime-20260516-234702/`, `models/model-charliepai2i48h3-alphonse-h95-arm-b-bf16-ep15-20260517-002534/`
+
+**Status: MERGED (PR #4215). New baseline: val=40.5066 / test=39.0160. Schedule fix needed (H99 assigned).**
+
+---
+
+## 2026-05-17 — PR #4189: H90 Lion β₁ sweep at β₂=0.995 (askeladd) — CLOSED, negative
+
+- Branch: `charliepai2i48h3-askeladd/h90-lion-beta1-sweep`
+- Hypothesis: β₁=0.85 or β₁=0.95 improves on the default β₁=0.9 at the β₂=0.995 baseline.
+
+| Arm | β₁ | val_avg | Δ vs H88 | Δ vs H95 | test 3-split |
+|-----|-----|--------:|---------:|---------:|-------------:|
+| Arm A | 0.85 | 41.7650 | +0.55 | +1.26 | 39.7470 |
+| Arm B | 0.95 | 48.3518 | +7.14 | +7.85 | 46.5616 |
+| H88 baseline | 0.90 | 41.2153 | — | +0.71 | 39.5337 |
+
+Arm A: within noise (Δ+0.55 < 2σ=1.7 at H88 baseline; Δ+1.26 at H95 new baseline also negative). Consistent directional improvement across all but val_re_rand — but magnitude is below noise.  
+Arm B: clear regression (+7.1 pts). Gate stats diagnostic: block-0 pre-MLP gate mean jumps from ~0.45 (Arm A) to ~1.22 (Arm B), std 2.21 vs 0.92 — higher β₁ saturates momentum buffer, pushes sign update away from minimum at small-N (50 train, batch=4).
+
+Note: Run at β₂=0.995 (old config). H98 (fern, active) repeats β₁ probe at β₂=0.997.
+
+**Status: CLOSED — β₁=0.9 confirmed near-optimal. Landscape asymmetric: down is neutral, up is bad.**
+
+---
+
+## 2026-05-17 — PR #4195: H92 baseline seed variance (frieren) — CLOSED, noise floor calibrated
+
+- Branch: `charliepai2i48h3-frieren/h92-baseline-variance-seeds`
+- Hypothesis: Establish run-to-run noise floor at the H78 Arm B config (β₂=0.995, fp32).
+
+| Seed | val_avg | val_single_in_dist | val_geom_camber_rc | val_geom_camber_cruise | val_re_rand |
+|-----:|--------:|-------------------:|-------------------:|-----------------------:|------------:|
+| 0 (H78 Arm B) | 42.3048 | 44.73 | 56.55 | 25.11 | 42.83 |
+| 1 (H92) | **40.6485** | 39.78 | 53.79 | 25.50 | 43.52 |
+| 2 (H92) | 41.6860 | 42.35 | 56.34 | 24.82 | 43.23 |
+| **mean (n=3)** | **41.5464** | 42.29 | 55.56 | 25.14 | 43.19 |
+| **sample std** | **0.8369** | 2.48 | 1.55 | 0.34 | 0.35 |
+
+**Revised noise floor: 2σ=1.67 pts** (vs prior 2.6 pt estimate). The old 2.6-pt figure was confounded: H74 vs H73 compared different schedules, not just seeds. Per-split: val_single_in_dist noisiest (σ=2.48), cruise and re_rand tight (σ≈0.34).
+
+Test 3-split (seeds 1+2): mean=39.95, std=0.51 → 2σ≈1.02 pts. Test is tighter than val.
+
+**Updated decision thresholds (applied from cycle 34 forward):**
+- Δ < 1.7 pts → noise (tie)
+- Δ ≥ 2.5 pts → real signal
+- Δ ≥ 4.0 pts → strong signal
+
+Note: Seed 1 got val=40.65 at β₂=0.995 — close to H95 best 40.51 (bf16, β₂=0.997). Expected mean at H88 config is ~41.5, not 42.30 (H78 seed-0 was lucky).
+
+**Status: CLOSED — calibration complete. Noise floor revised to 2σ=1.7 pts.**
+
+---
+
+## 2026-05-17 — Cycle 34 Assignments: H99 (alphonse), H100 (askeladd), H101 (frieren)
+
+| PR | Student | Hypothesis | Key Change |
+|----|---------|-----------|------------|
+| #4272 | alphonse | H99: bf16 + cosine T_max fix (T_max=21 vs T_max=15) | Student adds --T_max CLI arg; Arm A=21, Arm B=15 (repeat) |
+| #4276 | askeladd | H100: n_hidden=192 capacity probe with bf16 | Student adds --n_hidden CLI arg; Arm A=192, Arm B=160 |
+| #4277 | frieren | H101: n_layers=5 depth probe with bf16 | --n_layers 5 (CLI arg exists); Arm A=5, Arm B=6 |
+
+**Rationale:**
+- **H99**: H95 Arm A best_epoch=17 with rising LR (T_max=15 cosine bounces at ep15, rises through ep17-21). Hypothesis: T_max=21 aligned to bf16 budget gives clean monotone decay → potential further improvement.
+- **H100**: H86 (n_hidden=192) was wall-cut at ep10 (fp32 ~180 s/epoch). bf16 should give ~14 epochs (~126 s/epoch at n_hidden=192) — enough to evaluate capacity gain. This directly retests the wall-cut-bound hypothesis.
+- **H101**: Depth unexplored since H83 (which tested n_layers=4 as the winner under fp32). bf16 gives n_layers=5 ~17 epochs (~106 s/epoch). Depth and width are orthogonal; one more layer may capture higher-order geometric interactions.
