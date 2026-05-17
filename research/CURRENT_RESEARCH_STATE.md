@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 (updated 04:00 — #4244 alphonse CLOSED (n_hidden=192, wall-clock binding; matched-epoch advantage exists but truncated at 14 epochs); #4348 alphonse assigned (n_head sweep {2, 8}))
+- **Date:** 2026-05-17 (updated 04:45 — #4305 fern CLOSED (mlp_ratio {3,4} both regress val on primary metric; bf16+grad_clip crash unblock confirmed; val/test divergence on test_re_rand noted); #4359 fern assigned (warmup_epochs sweep {1, 5} on T_max=25))
 - **Branch:** `icml-appendix-willow-pai2i-48h-r3`
 - **Most recent human researcher directive:** None this launch.
 - **Canonical baseline (merged):** `val_avg/mae_surf_p = 37.9354`, `test_avg/mae_surf_p (excl cruise) = 39.0519`
@@ -67,6 +67,7 @@ Old launch baseline: 135.30. Total gain: **−72.0%** over 14 compounding improv
 | #4070 | alphonse | Lookahead α sweep {0.3, 0.5, 0.7} | α=0.5 optimal on new stack; α=0.3 catastrophic; {k,α} space closed |
 | #3736 | thorfinn | surf_weight {10, 5, 3} rerun | sw=10 ties canonical on val; sw=5 wins test by 1.92% but loses val — not merge-grade |
 | #4200 | tanjiro | Lookahead k sweep {3, 5, 10} | k=5 exactly reproduces canonical; k=3 nearly tied (+0.94%); k=10 catastrophic (+4.88%) — k/precond_freq=5 resonance confirmed |
+| #4305 | fern | mlp_ratio revisit {3, 4} on bf16 canonical | Both regress val: mlp=3 +0.75%, mlp=4 +2.59% (matched-stack); crash unblocked confirmed (no OOM, no NaN); interesting val/test divergence: mlp=3 better test_re_rand (−8.6%), test_geom_camber_rc (−5.4%) — under-trained wider FFN helps OOD but hurts val. mlp_ratio=2 stays canonical. |
 
 ## Active WIP experiments (target: val < 41.4446, full canonical stack with --use_bf16)
 
@@ -79,8 +80,8 @@ Old launch baseline: 135.30. Total gain: **−72.0%** over 14 compounding improv
 | **#4245** | **nezuko** | **Weight decay sweep {1e-4, 1e-3, 1e-2} on bf16 canonical** | **Regularization** | **WIP — training.** |
 | **#4296** | **thorfinn** | **Transolver slice_num sweep {32, 96} on bf16 canonical** | **Architecture** | **WIP — rebase in progress (conflict from #4263 train.py change).** |
 | **#4348** | **alphonse** | **Attention head sweep {2, 8} on 14-winner canonical** | **Architecture** | **WIP — just assigned.** |
-| **#4305** | **fern** | **MLP ratio revisit {3, 4} on bf16 canonical** | **Architecture** | **WIP — training.** |
-| **#4336** | **tanjiro** | **LR re-tune on T_max=25 canonical: {1.5e-3, 2e-3}** | **Optimization** | **WIP — just assigned.** |
+| **#4336** | **tanjiro** | **LR re-tune on T_max=25 canonical: {1.5e-3, 2e-3}** | **Optimization** | **WIP — training.** |
+| **#4359** | **fern** | **Warmup epochs re-tune on T_max=25 canonical: {1, 5}** | **Optimization** | **WIP — just assigned.** |
 
 Zero idle students.
 
@@ -103,7 +104,7 @@ Zero idle students.
 ### Immediate (active)
 - **Frieren log-Re (#3415).** −1.20% within-PR on older stack. Input-side, orthogonal — **highest-EV pending result**; expected val ≈ 35-37 if compounding holds on new T_max=25 canonical.
 - **Edward log-pressure (#3952).** Moderate within-PR signal; now re-running on full canonical. Must beat val=37.9354.
-- **Architecture unlocks (batch/attention/FFN):** #4234 askeladd batch sweep, #4296 thorfinn slice_num (rebase in progress), #4305 fern mlp_ratio, #4348 alphonse n_head sweep.
+- **Architecture unlocks (batch/attention/FFN):** #4234 askeladd batch sweep, #4296 thorfinn slice_num (rebased), #4348 alphonse n_head sweep. mlp_ratio closed (#4305).
 - **Width closed:** n_hidden=192 fails under 30-min cap even with bf16 (14 epochs vs 17; matched-epoch advantage real but truncated).
 - **Regularization:** #4245 nezuko weight decay sweep.
 - **LR re-tune on T_max=25 (#4336 tanjiro):** lr ∈ {1.5e-3, 2e-3} on correct schedule. Previous sweep (pr#4216) ran on broken T_max=50.
@@ -120,8 +121,9 @@ Zero idle students.
 ### Post-current-round stack
 1. **Log-Re sinusoidal (frieren #3415):** if it wins → merge; orthogonal to architecture changes.
 2. **LR re-tune on T_max=25 (#4336 tanjiro):** high-EV — corrects confounded fern sweep; if lr=1.5e-3 or 2e-3 wins → another compound gain.
-3. **mlp_ratio revisit (fern #4305):** if mlp_ratio=4 works on bf16, major capacity unlock.
+3. **Warmup epochs re-tune (#4359 fern):** {1, 5} on T_max=25 — schedule-interaction sweep; 2 epoch swing in high-LR phase.
 4. **T_max finer sweep {20, 22}:** after LR re-tune settles; may squeeze another 0.2-0.5 val points.
-5. **warmup_epochs re-tune:** now that T_max=25 is set, warmup_epochs=3 vs {1,2} is worth checking.
-6. **n_head sweep {2, 8}:** not yet swept on this stack; pairs naturally with width experiments.
-7. **LR re-tune on merged architecture** (batch/width/FFN winner): SOAP step size will shift.
+5. **n_head sweep {2, 8}:** not yet swept on this stack; in-flight (#4348).
+6. **LR re-tune on merged architecture** (batch/width/FFN winner): SOAP step size will shift.
+7. **Dropout sweep {0.05, 0.1}:** never tested on SOAP+L1 stack; could regularize against in-dist overfit (val 37.93 vs test_single_in_dist 40.71 = 7% gap).
+8. **mlp_ratio=3 on T_max=25 stack:** student-flagged follow-up — val regressed on old stack but test improved on OOD splits; might resolve on corrected schedule. Deprioritized vs other ideas.

@@ -1466,3 +1466,32 @@ Per-split test (arm 3 / T_max=25):
 
 - Branch: `willowpai2i48h3-alphonse/n-head-sweep`
 - Hypothesis: n_head=4 never swept; try {2, 8} on 14-winner canonical. n_head=2 (per-head dim=64) follows ViT-Base convention; n_head=8 (per-head dim=16) tests specialization. Epoch_time expected ~canonical at all values (attention not the bottleneck).
+
+## 2026-05-17 04:45 — PR #4305 (fern): MLP ratio revisit {3, 4} on bf16 canonical — **CLOSED**
+
+- Branch: `willowpai2i48h3-fern/mlp-ratio-revisit-bf16`
+- W&B runs: `tmwsbo6o` (arm1 mlp=3), `px6si6ig` (arm2 mlp=4)
+- Hypothesis: PR #3169 (mlp_ratio=4) crashed in fp32 launch round (OOM + no grad_clip). Now with bf16 (33 GB used / 96 GB) + grad_clip=1.0 + SOAP+Lookahead, mlp_ratio ∈ {3, 4} should be viable and improve capacity. Both arms tested on pre-cosine_t_max=25 stack (in-flight when #4263 merged; per advisor instruction "do not restart in-flight arms").
+
+**Result (vs matched-stack canonical mlp=2, val=41.4446):**
+
+| Arm | mlp_ratio | params | epoch_time | epochs | val | test_excl_cruise | peak VRAM |
+|---|---|---|---|---|---|---|---|
+| canonical | 2 | 0.66M | ~107s | 17 | 41.4446 | 43.2173 | 33.0 GB |
+| 1 | 3 | ~0.99M | 111.8s | 17 | 41.7574 (+0.75%) | **41.3248 (−4.38%)** | 35.5 GB |
+| 2 | 4 | ~1.32M | 114.8s | 16 | 42.5190 (+2.59%) | 43.0275 (−0.44%) | 38.1 GB |
+
+**Per-split test_mae_surf_p (mlp=3):** test_re_rand 34.54→31.55 (**−8.6%**), test_geom_camber_rc 49.19→46.56 (**−5.4%**), test_single_in_dist 45.92→45.86 (flat).
+
+**Analysis:** Three findings:
+1. **Crash mechanism confirmed unblocked.** bf16+grad_clip make mlp_ratio=4 trainable for the first time. Documented for future capacity work.
+2. **Hypothesis fails on val** (primary selection metric). Both arms regress val on the matched-stack baseline.
+3. **Interesting val/test divergence in mlp_ratio=3.** Worse val (+0.75%) but substantially better test on OOD splits (re_rand and camber_rc). Pattern suggests larger FFN helps OOD generalization but hurts in-distribution val — checkpoint selection on val_avg captures the val cost but not the OOD benefit. Generic signal worth tracking.
+
+**Decision: CLOSED.** mlp_ratio=2 stays canonical. Capacity-via-FFN closed under 30-min wall-clock cap (same pattern as n_hidden, n_layers). Student suggestion to revisit mlp_ratio=3 with cosine_t_max=25 — deprioritized vs other ideas; logged as potential follow-up.
+
+## 2026-05-17 04:45 — Assignment: #4359 fern warmup-epochs-retune-cosine-t25
+
+- Branch: `willowpai2i48h3-fern/warmup-epochs-retune-cosine-t25`
+- Hypothesis: warmup_epochs=3 was chosen on the old T_max=50 schedule. With T_max=25 now binding the cooldown, the warmup fraction shifts. Shortening warmup (=1) gives 2 more epochs at peak LR; lengthening (=5) gives SOAP eigendecomposition more time to stabilize before peak. Previous sweep (#3319) found "flat region" but was on pre-SOAP, pre-bf16, T_max=50 stack — completely different landscape.
+- 2 arms: warmup_epochs ∈ {1, 5}, both with cosine_t_max=25.
