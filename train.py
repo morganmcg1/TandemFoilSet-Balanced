@@ -95,7 +95,7 @@ class PhysicsAttention(nn.Module):
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
 
         self.in_project_x = nn.Linear(dim, inner_dim)
-        self.in_project_fx = nn.Linear(dim, inner_dim)
+        self.in_project_fx = GEGLUProj(dim, inner_dim)
         self.in_project_slice = nn.Linear(dim_head, slice_num)
         torch.nn.init.orthogonal_(self.in_project_slice.weight)
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
@@ -148,6 +148,18 @@ class GEGLUBlock(nn.Module):
     def forward(self, x):
         gate, val = self.w1(x).chunk(2, dim=-1)
         return self.w2(F.gelu(gate) * val)
+
+
+class GEGLUProj(nn.Module):
+    """GEGLU projection: Linear(d, 2*d_out) -> GELU-gate -> d_out output."""
+    def __init__(self, in_dim, out_dim):
+        super().__init__()
+        self.gate_proj = nn.Linear(in_dim, out_dim * 2)
+        self.out_proj = nn.Linear(out_dim, out_dim)
+
+    def forward(self, x):
+        gate, val = self.gate_proj(x).chunk(2, dim=-1)
+        return self.out_proj(F.gelu(gate) * val)
 
 
 class TransolverBlock(nn.Module):
