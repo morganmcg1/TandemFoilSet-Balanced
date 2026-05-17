@@ -451,6 +451,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 class Config:
     lr: float = 1e-3       # was 5e-4 — higher peak for warmup schedule
     warmup_epochs: int = 3  # new field: linear warmup length
+    cosine_t_max: int = 0  # PR #4263: cosine T_max in epochs (sentinel 0 = MAX_EPOCHS)
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
@@ -557,9 +558,12 @@ warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
     end_factor=1.0,
     total_iters=cfg.warmup_epochs,
 )
+_cosine_total = cfg.cosine_t_max if cfg.cosine_t_max > 0 else MAX_EPOCHS
+_cosine_T_max = max(_cosine_total - cfg.warmup_epochs, 1)
+print(f"Cosine T_max: {_cosine_T_max} epochs (total={_cosine_total}, warmup={cfg.warmup_epochs})")
 cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
     _inner_optimizer,
-    T_max=max(MAX_EPOCHS - cfg.warmup_epochs, 1),
+    T_max=_cosine_T_max,
 )
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     _inner_optimizer,
@@ -579,6 +583,8 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "cosine_T_max_effective": _cosine_T_max,
+        "cosine_total_epochs": _cosine_total,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
