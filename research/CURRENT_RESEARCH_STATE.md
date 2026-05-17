@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 03:50 UTC (Round 4 active on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-17 04:10 UTC (Round 4 active on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
 
@@ -14,30 +14,33 @@
 
 **Current best: val_avg=52.258 / test 3-split=51.206** (SF-AdamW lr=3e-3, 2026-05-17 01:00 UTC)
 
-## Critical Finding: LR Peak is Beyond 3e-3
+## LR Axis Closed (04:00 UTC)
 
-Fine-tune sweep (#4157 edward) revealed a **perfectly monotone** A→B→C→D gradient from 1.5e-3 to 3e-3. All 4 arms hit the 17-epoch budget cap still descending. The gains **accelerate** with each LR step (+1.18%, +1.71%). True peak is somewhere above 3e-3 — edward is now running a continuation sweep {3e-3, 4e-3, 5e-3, 7e-3}.
+Edward's #4246 LR extension confirmed: **lr=3e-3 is the sharp peak on both sides**. Higher LRs (+5.3% at 4e-3, +16% at 7e-3) show classic high-LR late-stage overshoot from ep4 onward. Full LR profile:
 
-## Additional Closure: Lion Track Exhausted
+| lr | val_avg |
+|---:|---:|
+| 5e-4 | 65.618 |
+| 2e-3 | 54.769 |
+| **3e-3** | **52.258** |
+| 4e-3 | 55.025 |
+| 5e-3 | 55.029 |
+| 7e-3 | 60.646 |
 
-Lion + SF composition (#4144 frieren): catastrophically failed. C1 (lr=1.5e-4) = 111.22 (+75.6% vs Lion alone). C2 (lr=6e-4) = catastrophic divergence at ep14. Lion is definitively closed:
-- Lion standalone: +11.6% behind SF
-- Lion LR boost: no benefit
-- Lion + SF: catastrophic failure
+**Clip-rate insight**: clip engaged on ~98% of steps at lr=3e-3 (grad_norm p99 ≈ 16-22 >> threshold 1.0). Motivated clip threshold re-test at canonical.
 
-## Additional Closure: Batch Size Exhausted (#4114 thorfinn — closed 02:38 UTC)
+## Width Axis Closed (04:00 UTC)
 
-bs=4 wins decisively. All larger batches regress 13-29%:
-- bs=6: +13.02%, bs=8: +23.05%, bs=9: +29.06% (bs=10/12 OOM)
-- Mechanism: gradient CV does drop with larger batches, but step-count loss dominates within the 30-min budget. Fixed 500-step SF warmup compounds the deficit. **bs=4 is a fixed point of this stack.**
+Askeladd's #4225 n_hidden sweep at lr=2e-3 (stale): **step-count loss dominates capacity efficiency at 30-min budget**. Wider arms are more efficient per epoch but get fewer epochs. No val/test consistent winner. Width is budget-saturated.
 
-## Additional Closure: SF clip×EMA Factorial R2 (#4019 alphonse — closed 02:53 UTC)
+Key finding: sec/epoch ∝ n_hidden linearly (96.9s → 141.5s for h96→h192). Expect same step-count trade-off for n_layers, slice_num, mlp_ratio, n_head sweeps.
 
-R2 re-test at lr=2e-3: Arm C (clip=1.0, EMA off) wins by paired Δ = −0.430% vs control A — below 0.5% merge threshold. Absolute 54.4385 regresses +4.18% vs canonical 52.258.
+## Additional Closures Since Last Summary
 
-Two real mechanism findings retained:
-1. **EMA-off direction is real but attenuates with LR.** R1 (lr=5e-4): 0.61% paired. R2 (lr=2e-3): 0.43%. Predicted lr=3e-3 extrapolation: ~0.35% — below close threshold.
-2. **Clip × LR is the surprise.** clip=0.25 went from neutral at lr=5e-4 (+0.35%) to consistently harmful at lr=2e-3 (+0.9%). Under SF + higher LR, the clip threshold is an *effective-LR knob*. Keep clip=1.0 in canonical.
+- **#4081 nezuko** FiLM head width: CLOSED (9.5h zero-progress, stale lr=5e-4). Reassigned to Fourier features.
+- **#4114 thorfinn** batch size: bs=4 fixed point (step-count dominates gradient-CV benefit)
+- **#4019 alphonse** clip×EMA R2: EMA-off 0.43% below gate; clip×LR is the key interaction
+- **#4208 fern** dropout: model is under-fit (train/val gap ≈ 0.001), dropout wrong direction
 
 ## Current Canonical Stack
 
@@ -52,20 +55,18 @@ python train.py \
 
 **val_avg/mae_surf_p: 52.258** | test 3-split: 51.206
 
-## In-Flight Experiments (~02:55 UTC)
-
-**Note on stale-LR runs:** Tanjiro/fern/askeladd ran at lr=2e-3 (not the new canonical 3e-3). Their paired Δ results are still valid directionally. Gate: >0.5% paired Δ win → likely holds; may re-test at lr=3e-3 if margin is thin.
+## In-Flight Experiments (~04:10 UTC)
 
 | Student | PR | Hypothesis | Stack | Priority |
 |---------|----|----|----|----|
-| ⭐ **edward** | **#4246** | **LR extension sweep: {3e-3, 4e-3, 5e-3, 7e-3}** | SF-AdamW lr=3e-3 + --seed 1 | **HIGHEST — peak is beyond 3e-3; monotone signal says more headroom exists** |
-| ⭐ **frieren** | **#4248** | **n_layers depth sweep: {3, 4, 5, 7}** | SF-AdamW lr=3e-3 + --seed 1 (requires Config edit) | **HIGH — primary architecture axis, never swept; complement to askeladd's n_hidden** |
-| ⭐ **thorfinn** | **#4303** | **slice_num sweep: {32, 64, 96, 128}** | SF-AdamW lr=3e-3 + --seed 1 (requires Config edit) | **HIGH — third primary Transolver architecture axis; PhysicsAttention slice count never swept** |
-| ⭐ **alphonse** | **#4317** | **SF-AdamW betas 2×2: (beta1, beta2) ∈ {0.9, 0.95}×{0.99, 0.999}** | SF-AdamW lr=3e-3 + --seed 1 (requires Config edit) | **MED-HIGH — optimizer-internal axis never swept; PyTorch defaults may not be optimal at higher LR** |
-| ⭐ **askeladd** | **#4225** | **Model width sweep: n_hidden ∈ {96, 128, 160, 192}** | SF-AdamW lr=2e-3 + --seed 1 | **HIGH — ran at lr=2e-3; apply paired Δ gate when done** |
-| ⭐ **tanjiro** | **#4207** | **surf_weight R2 (sent back from R1): {5, 8, 10, 15}** | SF-AdamW lr=3e-3 + --seed 1 | **HIGH — R1 paired Δ ≥1.86% but absolute regressed; non-monotone landscape (cam_cruise prefers low w, cam_rc prefers high w); R2 at canonical resolves direction** |
-| ⭐ **fern** | **#4339** | **mlp_ratio sweep: {1, 2, 4, 6}** | SF-AdamW lr=3e-3 + --seed 1 (requires Config edit) | **HIGH — 4th primary architecture axis; under-fit regime confirmed by #4208; BERT default=4 never tested** |
-| **nezuko** | **#4081** | FiLM head width: film_mlp_hidden ∈ {128, 192, 256} | SF-AdamW lr=5e-4 (stale) | Results diagnostic; paired Δ gate: >3% → re-test at lr=3e-3 |
+| ⭐ **edward** | **#4350** | **Clip threshold {0.5, 1.0, 1.5, 2.0} at lr=3e-3** | SF-AdamW lr=3e-3 + --seed 1 | **HIGH — 98% clip-rate at canonical; loosening may recover late-stage convergence; closes clip×LR surface from #4019** |
+| ⭐ **frieren** | **#4248** | **n_layers depth sweep: {3, 4, 5, 7}** | SF-AdamW lr=3e-3 + --seed 1 (requires Config edit) | **HIGH — primary architecture axis, never swept** |
+| ⭐ **thorfinn** | **#4303** | **slice_num sweep: {32, 64, 96, 128}** | SF-AdamW lr=3e-3 + --seed 1 (requires Config edit) | **HIGH — third primary Transolver architecture axis** |
+| ⭐ **alphonse** | **#4317** | **SF-AdamW betas 2×2: (beta1, beta2) ∈ {0.9, 0.95}×{0.99, 0.999}** | SF-AdamW lr=3e-3 + --seed 1 | **MED-HIGH — optimizer-internal axis never swept** |
+| ⭐ **askeladd** | **#4351** | **n_head sweep: {2, 4, 8} at lr=3e-3** | SF-AdamW lr=3e-3 + --seed 1 (requires Config edit) | **HIGH — final primary architecture axis; completes {n_hidden, n_layers, slice_num, mlp_ratio, n_head} family** |
+| ⭐ **tanjiro** | **#4207** | **surf_weight R2: {5, 8, 10, 15}** | SF-AdamW lr=3e-3 + --seed 1 | **HIGH — R1 paired Δ ≥1.86%; R2 at canonical resolves direction** |
+| ⭐ **fern** | **#4339** | **mlp_ratio sweep: {1, 2, 4, 6}** | SF-AdamW lr=3e-3 + --seed 1 (requires Config edit) | **HIGH — 4th primary architecture axis; under-fit regime confirmed by #4208** |
+| ⭐ **nezuko** | **#4353** | **Fourier feature coordinate encoding: {raw, 16f-σ1, 32f-σ10, 64f-σ10}** | SF-AdamW lr=3e-3 + --seed 1 | **HIGH — preprocessing axis untouched; Tancik et al. 2020 strong prior on coord-regression tasks; orthogonal to all architecture sweeps** |
 
 ## Merged Winners (Chronological)
 
@@ -86,13 +87,14 @@ python train.py \
 
 ## Priority Watch (Next Results to Land)
 
-1. **edward LR extension #4246** — if 4e-3 or 5e-3 wins by ≥0.5% paired AND beats 52.258 → update canonical LR again
-2. **frieren n_layers #4248** — depth axis; if 7-layer wins → scale test at n_layers=9
-3. **tanjiro surf_weight #4207** + **askeladd n_hidden #4225** — stale LR; apply paired Δ gate
-4. **thorfinn slice_num #4303** — Transolver physical-slice axis (just assigned)
-5. **alphonse SF betas #4317** — optimizer-internal 2×2 factorial at canonical (just assigned)
-6. **fern mlp_ratio #4339** — 4th architecture axis; under-fit regime confirmed; BERT-default ratio=4 is prime suspect
-7. **nezuko FiLM width #4081** — stale LR; apply >3% gate
+1. **frieren n_layers #4248** — depth axis; if winner still descending at cap → scale test
+2. **thorfinn slice_num #4303** — PhysicsAttention physical-slice count
+3. **alphonse SF betas #4317** — optimizer-internal 2×2 factorial
+4. **edward clip #4350** — 98% clip-rate motivates loosening; primary suspect clip=1.5
+5. **tanjiro surf_weight #4207 R2** — non-monotone per-split landscape; resolves direction at canonical
+6. **fern mlp_ratio #4339** — completes capacity surface; BERT-default 4 vs current 2
+7. **askeladd n_head #4351** — final primary architecture axis
+8. **nezuko Fourier feats #4353** — first preprocessing axis; Tancik strong prior
 
 ## Falsified / Closed Hypotheses
 
@@ -100,11 +102,14 @@ python train.py \
 |----|-----------|--------|--------|
 | #4051 | SF wd sweep {1e-4, 3e-4, 1e-3, 1e-2} | +2.46-11.99% all regress | Polyak+EMA saturate regularization role |
 | #4003 | AdamW clip-R2 {0.05-0.25} | −0.07% noise floor | Direction-norm saturated at 0.25 |
-| #4087 | SF warmup steps {100, 500, 1000, 2000} | Paper default 500 wins; B/C/D regress | Warmup axis exhausted at current budget |
+| #4087 | SF warmup steps {100, 500, 1000, 2000} | Paper default 500 wins | Warmup axis exhausted at current budget |
 | #4012 | Sobolev edge-gradient L1 | R1 noise; R2 +2.68% regression | Cross-stack null; mechanism doesn't fit loss landscape |
 | #4113 | EMA decay sweep {0.99, 0.999, 0.9995, 0.9999} | Karras ramp dominates; noise band 3.46% | Ramp fully controls effective decay at 17-epoch budget |
 | #4149 | Lion LR sweep {7.5e-5, 1.5e-4, 3e-4, 6e-4} | Best Lion +11.64% behind SF | SF "4× LR" does not transfer to Lion+cosine |
-| **#4144** | **Lion+SF composition (3-way)** | **C1: +75.6% regression; C2: catastrophic divergence** | **Lion+SF mechanistically incompatible; Lion track fully exhausted** |
-| **#4114** | **Batch size sweep {4, 6, 8, 9}** | **bs=4 wins; larger batches +13-29% regression** | **Step-count loss dominates; gradient-CV benefit irrelevant within budget; bs=4 is fixed point** |
-| **#4019** | **SF clip×EMA factorial R2 (lr=2e-3)** | **EMA-off wins paired Δ 0.43% but absolute regresses +4.18% vs canonical** | **EMA-off direction attenuates with LR (0.61% → 0.43% → ~0.35% extrap); clip × LR is the real interaction; canonical retains EMA on + clip=1.0** |
-| **#4208** | **Dropout sweep {0.0, 0.05, 0.10, 0.15} at lr=2e-3** | **All dropout arms regress +1.95–2.74% paired vs no-dropout** | **Model is under-fit (train/val gap ≈ 0.001), not over-fit; dropout removes capacity and compounds underfitting; SF+EMA already provide implicit regularization; capacity axis is correct next direction** |
+| #4144 | Lion+SF composition (3-way) | C1: +75.6%; C2: catastrophic divergence | Lion+SF mechanistically incompatible; Lion track fully exhausted |
+| #4114 | Batch size sweep {4, 6, 8, 9} | bs=4 wins; larger batches +13-29% regression | Step-count loss dominates gradient-CV benefit; bs=4 is fixed point |
+| #4019 | SF clip×EMA factorial R2 (lr=2e-3) | EMA-off 0.43% paired, below gate | EMA-off attenuates with LR; clip×LR interaction is real; canonical clip=1.0 |
+| #4208 | Dropout sweep {0.0, 0.05, 0.10, 0.15} | All regress +1.95–2.74% paired | Model is under-fit (train/val gap ≈ 0.001); capacity axis is right direction |
+| **#4225** | **n_hidden sweep {96, 128, 160, 192} at lr=2e-3** | **val/test invert; step-count loss dominates capacity gain** | **Width saturated at 30-min budget; sec/epoch ∝ n_hidden; n_head is next axis** |
+| **#4246** | **SF-AdamW LR extension {3e-3, 4e-3, 5e-3, 7e-3}** | **All regress: +5.3% at 4e-3, +16% at 7e-3** | **LR axis definitively closed; peak is 3e-3; 98% clip-rate motivates clip loosening** |
+| **#4081** | **FiLM head width (stale WIP, no commits 9.5h)** | **Zero progress; stale lr=5e-4** | **Closed for non-delivery; FiLM-head-width on backlog after primary capacity axes** |

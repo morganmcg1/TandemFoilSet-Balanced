@@ -2789,3 +2789,124 @@ Dropout axis is **closed**. The model is under-fit at all tested dropout values.
 
 Requires infra commit: expose `--mlp_ratio` flag (add to Config dataclass + use `cfg.mlp_ratio` in model_config dict).
 
+---
+
+## 2026-05-17 04:00 — PR #4225 [CLOSED/NULL]: n_hidden sweep {96, 128, 160, 192} at lr=2e-3
+
+- **Student branch:** `charliepai2i48h4-askeladd/n-hidden-sweep`
+- **Hypothesis:** Wider Transolver trunk (n_hidden > 128) increases capacity and reduces under-fit. Ran at lr=2e-3 (pre-canonical stale LR).
+
+### Results (vs lr=2e-3 baseline 54.769)
+
+| Arm | n_hidden | val_avg | Δ vs B (paired) | test_3split | Δ vs B test |
+|---|---:|---:|---:|---:|---:|
+| A | 96  | 54.581 | −0.685% | **53.235** | **−0.575%** |
+| **B (control)** | **128** | 54.957 | — | 53.544 | — |
+| C | 160 | 54.483 | −0.863% | 53.875 | +0.620% |
+| D | 192 | 57.627 | +4.858% | 55.632 | +3.901% |
+
+All arms regress vs canonical 52.258 (best arm C: +4.26% absolute regression). C wins val but **inverts on test** (regresses +0.62% vs B). A wins test but only by 0.57% — within seed-1 noise.
+
+### Per-epoch efficiency finding (critical for all capacity sweeps)
+
+| Arm | n_hidden | epochs at 30-min cap | sec/epoch | peak VRAM |
+|---|---:|---:|---:|---:|
+| A | 96  | 19 | 96.9s | 32.4 GB |
+| B | 128 | 17 | 111.2s | 38.9 GB |
+| C | 160 | 15 | 126.9s | 45.5 GB |
+| D | 192 | 13 | 141.5s | 52.0 GB |
+
+**Sec/epoch scales ~linearly with n_hidden. All arms still descending at cap.** Wider models have better per-epoch val_avg but get fewer epochs at the 30-min budget. Step-count loss > efficiency gain at all tested widths.
+
+### Analysis & conclusions
+
+1. **Width axis is budget-saturated** — at 30-min fixed budget, narrow wins because it gets more steps. This is the same mechanism as the batch-size sweep (#4114).
+
+2. **val/test inversion** for C_h160 (wins val, loses test) and A_h96 (loses val, wins test) confirms noisy regime — directional signal is fragile. C's 0.86% paired Δ doesn't survive val→test transfer; no re-test at canonical warranted.
+
+3. **Critical finding for other in-flight capacity sweeps**: wider architecture variants in frieren (#4248), thorfinn (#4303), fern (#4339) will likely show the same step-count budget trade-off. Expect narrower/default arms to win at 30-min, with wider arms having better per-epoch efficiency.
+
+4. **n_head is the last untouched primary architecture axis.** Assigning askeladd n_head sweep {2, 4, 8} next.
+
+### Falsified
+
+n_hidden axis closed at 30-min budget. No merge. Assigning askeladd to n_head sweep to complete the primary architecture family.
+
+---
+
+## 2026-05-17 04:00 — PR #4246 [CLOSED/NULL]: SF-AdamW LR extension {3e-3, 4e-3, 5e-3, 7e-3}
+
+- **Student branch:** `charliepai2i48h4-edward/sf-lr-ext-r1`
+- **Hypothesis:** The lr peak extends beyond 3e-3 (based on monotone gradient from 1.5e-3 to 3e-3 in #4157).
+
+### Results
+
+| Arm | lr | val_avg | Δ vs A | Δ vs baseline 52.258 |
+|---|---:|---:|---:|---:|
+| **A (control)** | **3e-3** | **52.279** | — | +0.04% (reproduces #4157) |
+| B | 4e-3 | 55.025 | +5.25% | +5.30% |
+| C | 5e-3 | 55.029 | +5.26% | +5.30% |
+| D | 7e-3 | 60.646 | +15.99% | +16.05% |
+
+A wins every individual split. Control reproduces #4157 to within 0.04% — excellent paired-Δ fidelity.
+
+### Crossover signature
+
+Higher LRs descend faster early (D leads at ep1; C leads ep2-3) but A overtakes from ep4 and the gap grows monotonically. Classic high-LR late-stage overshoot. B and C virtually tied at 4e-3/5e-3 (shallow plateau) — already well above canonical.
+
+### Gradient norm (critical finding from edward)
+
+All arms: clip rate ≈ 98% of steps, pre-clip p99 norms 16-22 in steady state. **Clip is engaged on essentially every step at lr=3e-3.** This motivates the clip threshold re-test at lr=3e-3 (loosening clip may pass more gradient signal in late-stage convergence). Assigning edward to clip-lr3e3 {0.5, 1.0, 1.5, 2.0} next.
+
+### Complete SF-AdamW LR profile (across rounds)
+
+| lr | val_avg | source |
+|---:|---:|---|
+| 5e-4  | 65.618 | #3594 |
+| 2e-3  | 54.769 | #4038 |
+| **3e-3** | **52.258** | **#4157 (canonical)** |
+| 4e-3  | 55.025 | this PR |
+| 5e-3  | 55.029 | this PR |
+| 7e-3  | 60.646 | this PR |
+
+**LR axis definitively closed. Peak is 3e-3 on both sides.**
+
+### Falsified
+
+LR extension null. No merge. Assigning edward to clip threshold re-test at canonical.
+
+---
+
+## 2026-05-17 04:00 — PR #4081 [CLOSED]: nezuko FiLM head width — stale/no-progress closure
+
+- **Student branch:** `charliepai2i48h4-nezuko/film-mlp-hidden-width-sweep`
+- Assigned 2026-05-16 18:33. Closed 2026-05-17 04:00 with **zero commits** — 9.5h zero-progress WIP despite 125 student-pod iterations. GPU showed 59 GB usage from unrelated activity.
+- Design was also stale (lr=5e-4, vs canonical lr=3e-3). No results to analyze.
+- FiLM head width axis kept on backlog — revisit after primary capacity sweeps (n_layers, slice_num, mlp_ratio, n_head) complete.
+- Reassigning nezuko to Fourier feature coordinate encoding (#4353).
+
+---
+
+## 2026-05-17 04:02 — PR #4350 [ASSIGNED]: edward clip threshold {0.5, 1.0, 1.5, 2.0} at lr=3e-3
+
+- **Student branch:** `charliepai2i48h4-edward/clip-lr3e3`
+- **Hypothesis:** clip=1.0 is engaged on ~98% of steps at lr=3e-3 (per edward's gradient-norm report from #4246). Loosening to 1.5 or 2.0 may pass more gradient signal in late-stage convergence. Closes the clip×LR interaction surface from #4019 R2 (which found clip=0.25 harmful at lr=2e-3).
+- Arms: {0.5 (tighter), 1.0 (control), 1.5 (primary suspect), 2.0 (aggressive loose)}
+
+---
+
+## 2026-05-17 04:03 — PR #4351 [ASSIGNED]: askeladd n_head sweep {2, 4, 8} at lr=3e-3
+
+- **Student branch:** `charliepai2i48h4-askeladd/n-head`
+- **Hypothesis:** n_head=4 (default) has never been swept. Per-head dim at n_hidden=128: {64, 32, 16} for heads {2, 4, 8}. Completes the primary architecture capacity family alongside n_hidden, n_layers, slice_num, mlp_ratio.
+- Requires infra commit: expose `--n_head` flag in Config dataclass + model_config.
+
+---
+
+## 2026-05-17 04:04 — PR #4353 [ASSIGNED]: nezuko Fourier feature coordinate encoding
+
+- **Student branch:** `charliepai2i48h4-nezuko/fourier-feats`
+- **Hypothesis:** Raw (x, y) coords as model input suffer from spectral bias — neural nets struggle to represent high-frequency variations in coordinate space. Fourier features lift coords through sin/cos projections at multiple scales, enabling better representation of sharp pressure transitions (stagnation, separation, near-wall gradients). Based on Tancik et al. 2020 [arXiv:2006.10739].
+- Arms: {off (control), 16-freq σ=1, 32-freq σ=10 (primary), 64-freq σ=10}
+- Requires ~20-line infra change: FourierFeatures module + config flags + space_dim update.
+
