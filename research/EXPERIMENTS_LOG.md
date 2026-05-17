@@ -1421,3 +1421,39 @@ Stop condition triggered (val > 41.0 threshold); Arm B (warmup=3) correctly not 
 
 - **#4499 (tanjiro y-mirror-v2):** Post-normalization y-mirror with explicit bias correction. Arm A: flip all fields (pos_y, saf_1, AoA0, AoA1, stagger, u_y) p=0.5. Arm B: geometry-only flip (pos_y, saf_1) p=0.5.
 - **#4501 (fern channel-dropout):** Stochastic input channel masking. p_drop=0.10 (Arm A), 0.20 (Arm B). Forces robustness to feature-subset absence; different mechanism from edward's continuous noise (#4454). Inverted-dropout scaling preserves expected magnitude.
+
+---
+
+## 2026-05-17 09:15 — PR #4405: DropPath stochastic depth — CLOSED (4th regularization failure)
+
+- **Branch:** charliepai2i48h2-frieren/drop-path
+- **Hypothesis:** DropPath (stochastic residual-path depth-drop) applies block-level regularization stronger than element-wise dropout; p_max=0.10 (Arm A), p_max=0.20 (Arm B); linear schedule over 5 layers.
+- **Outcome:** no_improvement — both arms regress.
+
+| Metric | Baseline (SwiGLU, #4358) | Arm A (p_max=0.10) | Arm B (p_max=0.20) |
+|--------|--------------------------|---------------------|---------------------|
+| **val_avg/mae_surf_p** | **36.5616** | ~40.04 (+9.5%) | ~44.53 (+21.8%) |
+| **test_avg/mae_surf_p** | **30.9654** | ~34.75 (+12.2%) | ~41.42 (+33.8%) |
+| val_geom_camber_rc | 52.26 | worse | worse |
+
+- **Decision:** CLOSED — no_improvement. **4th consecutive regularization-family failure** (#4308 FFN dropout, #4278 attention dropout, #4327 Huber, #4405 DropPath). **Verdict: this stack is NOT regularization-limited.** The remaining val gap (≈36.5) is not overfitting noise to be smoothed away — it's capacity/data limitation at the OOD splits. → pivot to **physics-aware data augmentation** (Re-jitter, #4514).
+
+---
+
+## 2026-05-17 09:15 — PR #4458: Attention temperature (nezuko) — sent back for new arms on SwiGLU baseline
+
+- **Branch:** charliepai2i48h2-nezuko/attn-temperature
+- **Background:** PR #4458 was assigned BEFORE the SwiGLU merge. Its result (val=38.5205) beat the OLD baseline (38.6750) but represents a +1.96 REGRESSION against the current SwiGLU baseline (36.5616). Cannot merge.
+- **Action:** Sent back to nezuko with updated arms: τ=0.25 (sharper, A) and τ=0.125 (very sharp, B), both must include `--use_swiglu --swiglu_hidden_mult 0.6667` flags.
+- **Rationale:** Direction still unexplored on the SwiGLU stack; SwiGLU gating + sharper slice-routing softmax may compound; τ=0.25 was shown to help slightly but must be confirmed on the new base.
+
+---
+
+## 2026-05-17 09:20 — PR #4514: Reynolds-number jitter assigned to frieren
+
+- **Branch:** charliepai2i48h2-frieren/re-jitter
+- **Hypothesis:** Physics-meaningful Gaussian noise on the log(Re) input channel (ch13) during training. Unlike broad feature noise (#4454) or discrete channel dropout (#4501), this is targeted at the Re dimension specifically — forcing the model to generalize across Re-neighborhoods. Per-sample (not per-point) to preserve within-sample physics consistency.
+- **Two arms:** Arm A σ=0.05 (~5-10% Re variation); Arm B σ=0.15 (~15-30% Re variation).
+- **Primary target split:** `val_re_rand` (unseen Reynolds numbers at test time).
+- **Secondary target:** `val_geom_camber_rc` via shared Re-channel generalization.
+- **Implementation:** ~6 lines post x_norm computation, before model forward, channel 13 only.

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-17 09:00Z — round 15 of `icml-appendix-charlie-pai2i-48h-r2`
+- 2026-05-17 09:25Z — round 15 of `icml-appendix-charlie-pai2i-48h-r2`
 - No active research directives from the human research team
 - **NEW BASELINE: val=36.5616** (PR #4358 alphonse SwiGLU Arm A merged, −5.47% from 38.675) — 14-experiment plateau broken
 
@@ -50,18 +50,18 @@ cd target && python train.py --agent <student> \
 |----|---------|-------|--------|-----------------|
 | #4487 | askeladd | Gradient noise injection σ=0.01 (A) / σ=0.03 (B): parameter-space exploration regularization | WIP | #4306 closed (slice U-shape confirmed: 48 is optimum); parameter-space noise orthogonal to all active experiments; targets flat-minima / OOD generalization |
 | #4501 | fern | Input channel-level dropout p=0.10 (A) / p=0.20 (B): stochastic feature masking for OOD robustness | WIP — NEW | #4414 closed (surf-p-weight-mult regresses monotonically, loss-weighting axis closed); channel absence robustness orthogonal to continuous noise (#4454) |
-| #4458 | nezuko | Attention temperature: frozen τ=0.25 (A) vs τ=1.0 (B) on slice-routing softmax | WIP | #4377 closed (slice routing invariant to point subsample); test if sharper/neutral frozen τ helps OOD |
+| #4458 | nezuko | Attention temperature: frozen τ=0.25 (A) vs τ=0.125 (B) on SwiGLU baseline | WIP — RERUNNING | Original arms beat OLD baseline (38.675) but regress vs SwiGLU baseline (36.5616); sent back with sharpened arms + `--use_swiglu` |
 | #4499 | tanjiro | Y-mirror v2: post-norm bias correction `x_norm[k]=-x_norm[k]-2·mean/std`; Arm A full flip, Arm B geom-only | WIP — NEW | #4433 closed (normalization bug — disjoint distributions in normalized space); hypothesis physically valid; v2 fixes the bug |
 | #4477 | alphonse | GeGLU / BilinearGLU: ablate SwiGLU gate mechanism (GELU gate A, bilinear B) | WIP | #4358 MERGED (SwiGLU wins); ablate whether SiLU gate or gating structure drives gain |
 | #4435 | thorfinn | LayerScale (CaiT): per-channel learnable residual gating γ_init=1e-4 (A) / 1e-2 (B) | WIP — REBASING (rebase onto SwiGLU baseline) | #4362 closed (Lookahead triple-smoothing failure); architecture axis — how much each block contributes |
 | #4454 | edward | Token-space input feature noise: Gaussian σ=0.02 (A), σ=0.05 (B) on x_norm during training | WIP | #4403 closed (Fourier convergence-budget hit); direct response to slice-routing token-space diagnostic; zero param cost |
-| #4405 | frieren | DropPath stochastic depth: p_max=0.10 (Arm A), 0.20 (Arm B) — block-level vs element-wise | WIP (training started 08:33Z, 99% GPU) | #4327 closed (huber regresses); STRUCTURAL REGULARIZATION axis — drops entire blocks not activations |
+| #4514 | frieren | Re-jitter: physics-meaningful Gaussian noise on log(Re) ch13, σ=0.05 (A) / σ=0.15 (B) | WIP — NEW | #4405 CLOSED (4th regularization-family failure confirms stack NOT reg-limited); physics pivot: Re-dimension augmentation targets val_re_rand directly |
 
 ## Key open questions (round 15 — NEW baseline 36.5616 after SwiGLU win)
 
 **Status: Plateau broken!** SwiGLU #4358 wins (-5.47%). val_geom_camber_rc (52.26) remains the OOD bottleneck — SwiGLU helped single_in_dist/cruise/re_rand strongly but NOT camber_rc (flat). Two critical closed-loop findings: (1) **y-mirror bug identified+fixed** (#4433→#4499: normalization asymmetry causes disjoint distributions in normalized space; v2 applies post-norm bias correction); (2) **loss-weighting axis exhausted** (#4414 closed, monotone regression; surf-p-weight-mult joins pressure_weight, surf_weight, vel_surf_weight as all explored). Active pivot: (a) **GLU ablation** (#4477); (b) **data aug fixed** (#4499 y-mirror-v2 bias-corrected); (c) **token-space** (#4454 feature-noise, #4458 attn-temp, #4501 channel-dropout); (d) **structural reg** (#4405 droppath); (e) **architecture** (#4435 layerscale rebasing); (f) **parameter-space** (#4487 grad-noise). All 8 students active.
 
-**Closed axes:** optimizer tuning, loss reshaping, LR-schedule disruption, normalization form (LayerNorm locked), element-level reg, input-representation (Fourier — convergence budget hit), point-level data aug (slice routing invariant to point perturbation). **Critical diagnostic from #4377:** PhysicsAttention slice routing is permutation-equivariant — augmentation must operate in *token space*, not point space.
+**Closed axes:** optimizer tuning, loss reshaping, LR-schedule disruption, normalization form (LayerNorm locked), element-level reg, structural regularization (DropPath — 4th reg failure; stack NOT reg-limited), input-representation (Fourier — convergence budget hit), point-level data aug (slice routing invariant to point perturbation). **Critical diagnostic from #4377:** PhysicsAttention slice routing is permutation-equivariant — augmentation must operate in *token space*, not point space. **Key insight from 4 reg failures:** remaining val gap (≈36.5) is capacity/data limitation at OOD splits, not overfitting — pivot to data augmentation + capacity.
 
 **Key reading from 3 regularization failures (FFN dropout, attention dropout, SWA):** model is NOT over-fitting in the classic sense at 35 epochs. The OOD gap on val_geom_camber_rc (51.62) is driven by **training data coverage**, not by parameter over-fitting. This pivots us toward data augmentation as the right axis.
 
@@ -70,7 +70,7 @@ cd target && python train.py --agent <student> \
 3. **Does input channel-level dropout (p=0.10/0.20) force OOD feature robustness?** (#4501 fern) — stochastic masking of entire input channels to zero; forces model to not over-rely on any single feature (NACA, AoA) when OOD; different from edward's continuous noise: discrete absence vs perturbation. Loss-weighting axis closed → new input-regularization axis.
 4. **Does token-space input feature noise help where point-space augmentation cannot?** (#4454 edward) — Gaussian σ=0.02 (A) or σ=0.05 (B) on x_norm during training; zero param cost; direct response to slice-routing-invariance diagnostic from #4377.
 5. **Does forcing a fixed slice-routing temperature outperform the learnable τ?** (#4458 nezuko) — frozen τ=0.25 (A, sharper) vs τ=1.0 (B, neutral); slice-routing softmax temperature has been learnable per-head init=0.5; never tested.
-6. **Does DropPath (block-level dropout) succeed where element-wise dropout failed?** (#4405 frieren) — drops entire residual branches at p=0.10/0.20; stronger generalization pressure with less per-step noise; linear schedule 0→p_max over 5 layers.
+6. **Does Reynolds-number jitter improve Re-dimension OOD generalization?** (#4514 frieren) — physics-motivated Gaussian noise on log(Re) channel (ch13) only; per-sample to preserve within-sample Re consistency; σ=0.05 (mild) vs σ=0.15 (moderate); primary target: val_re_rand, secondary: val_geom_camber_rc.
 7. **Does Y-mirror v2 (post-norm bias correction) succeed where v1 was broken?** (#4499 tanjiro) — v1 failed due to normalization-asymmetry bug (disjoint normalized distributions); v2 applies `x_norm[k] = -x_norm[k] - 2·mean[k]/std[k]` to give physics-exact symmetric pairs. Arm A: full field flip; Arm B: geometry-only. Critical OOD signal from v1: camber_rc was *least* regressed (+12.4%) — confirms direction is correct.
 8. **Does LayerScale (CaiT) enable the model to learn per-channel block contribution?** (#4435 thorfinn) — learnable γ per residual branch; γ_init=1e-4 (A) vs 1e-2 (B); allows near-identity start and automatic block gating; 1280 new params. NOTE: rebasing onto SwiGLU baseline.
 
@@ -163,11 +163,11 @@ cd target && python train.py --agent <student> \
 - **SGDR warm restarts** — CLOSED as #4253 (edward); restart spike, 3rd schedule-disruption failure → #4403 Fourier features
 - **Slice_num coarser** — CLOSED as #4306 (askeladd); slice=40/32 both worse than optimum at slice=48; U-shape fully confirmed
 - **Fourier feature encoding** — CLOSED as #4403 (edward); +32 input channels hit convergence budget; OOD got worse; redundant with PhysicsAttention slice routing on pos → #4454 feature-noise
-- **DropPath stochastic depth** — IN PROGRESS as #4405 (frieren); p_max=0.10/0.20; first block-level regularization attempt
+- **DropPath stochastic depth** — CLOSED as #4405 (frieren); 4th consecutive regularization-family failure; stack confirmed NOT regularization-limited → #4514 Re-jitter (physics augmentation pivot)
 - **Attention dropout** — CLOSED as #4278 (nezuko); both arms regress on bottleneck split; train/val gap GROWS with dropout (signal-removal not co-adaptation); 3rd regularization failure → #4377 point-subsample
 - **Point subsampling augmentation** — CLOSED as #4377 (nezuko); slice routing invariant to point-level perturbation; critical diagnostic — token-space diversity needed → #4454 feature-noise (token-space), #4458 attn-temperature
 - **Per-group LR** — CLOSED as #4295 (fern); Arm A (lr_other×0.5) val=40.07, Arm B (lr_attn×2.0) val=39.50; Lion sign-update masks grad-norm asymmetry; per-group LR only changes trajectory length → #4414 surf-p-weight-mult
-- **Surface-only pressure-weight multiplier** — IN PROGRESS as #4414 (fern); surf_p_weight_mult=1.5/2.0 — asymmetric loss budget targeting primary metric
+- **Surface-only pressure-weight multiplier** — CLOSED as #4414 (fern); surf_p_weight_mult=1.5/2.0 both regressed; loss-weighting axis fully closed → #4501 channel-dropout
 - **Y-mirror geometric augmentation** — CLOSED as #4433 (tanjiro); normalization-asymmetry bug caused disjoint distributions → catastrophic failure on Arm B; OOD signal in Arm A confirms direction; v2 fix in #4499
 - **Y-mirror v2 (post-norm correction)** — IN PROGRESS as #4499 (tanjiro); fixes v1 normalization bug; Arm A full-flip, Arm B geometry-only
 - **Surface-only pressure-weight multiplier** — CLOSED as #4414 (fern); monotone regression; loss-weighting axis fully closed
