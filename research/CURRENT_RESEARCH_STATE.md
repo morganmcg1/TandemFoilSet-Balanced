@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 (updated 05:35 — #4336 tanjiro MERGED (lr=2e-3, 15th win, −6.33% val); #4388 tanjiro assigned (LR push {2.5e-3, 3e-3}); all 7 WIP students notified of new canonical lr=2e-3)
+- **Date:** 2026-05-17 (updated 06:55 — #4359 fern CLOSED (warmup sweep — strong within-PR signal warmup=1 wins by −2.22% at lr=1e-3 but absolute fails new canonical); #4245 nezuko CLOSED (wd sweep — monotone val improvement +1.3% offset by test_single_in_dist regression — val/test divergence); #4421 fern assigned (warmup retest {1,2} at lr=2e-3); #4423 nezuko assigned (dropout sweep {0.05, 0.1}))
 - **Branch:** `icml-appendix-willow-pai2i-48h-r3`
 - **Most recent human researcher directive:** None this launch.
 - **Canonical baseline (merged):** `val_avg/mae_surf_p = 35.5322`, `test_avg/mae_surf_p (excl cruise) = 37.1052`
@@ -69,6 +69,8 @@ Old launch baseline: 135.30. Total gain: **−73.7%** over 15 compounding improv
 | #3736 | thorfinn | surf_weight {10, 5, 3} rerun | sw=10 ties canonical on val; sw=5 wins test by 1.92% but loses val — not merge-grade |
 | #4200 | tanjiro | Lookahead k sweep {3, 5, 10} | k=5 exactly reproduces canonical; k=3 nearly tied (+0.94%); k=10 catastrophic (+4.88%) — k/precond_freq=5 resonance confirmed |
 | #4305 | fern | mlp_ratio revisit {3, 4} on bf16 canonical | Both regress val: mlp=3 +0.75%, mlp=4 +2.59% (matched-stack); crash unblocked confirmed (no OOM, no NaN); interesting val/test divergence: mlp=3 better test_re_rand (−8.6%), test_geom_camber_rc (−5.4%) — under-trained wider FFN helps OOD but hurts val. mlp_ratio=2 stays canonical. |
+| #4245 | nezuko | weight_decay sweep {1e-4, 1e-3, 1e-2} | Monotone val improvement (37.94 → 37.74 → 37.44, −1.3%) but test_excl_cruise regresses +0.6% (test_single_in_dist 40.71 → 42.20). val/test divergence — same pattern as mlp_ratio. wd=1e-4 stays canonical. |
+| #4359 | fern | warmup_epochs sweep {1, 5} on T_max=25 canonical | Strong within-PR signal: warmup=1 wins by −2.22% val vs warmup=3 at lr=1e-3. Ran pre-PR-#4336 merge so lr=1e-3 dominates gap to new canonical. Re-test at lr=2e-3 in flight (#4421). |
 
 ## Active WIP experiments (target: val < 35.5322, full canonical stack with --use_bf16 --lr 2e-3 --cosine_t_max 25)
 
@@ -77,11 +79,11 @@ Old launch baseline: 135.30. Total gain: **−73.7%** over 15 compounding improv
 | **#3415** | **frieren** | **Log-Re sinusoidal (freqs=4) on full canonical** | **Inputs** | **WIP — training; new canonical notified.** |
 | **#3952** | **edward** | **Log-pressure aux loss (logp_weight=0.1)** | **Loss tuning** | **WIP — rebased; new canonical notified.** |
 | **#4234** | **askeladd** | **Batch size sweep {4, 6, 8} on bf16 canonical** | **Throughput** | **WIP — training; new canonical notified.** |
-| **#4245** | **nezuko** | **Weight decay sweep {1e-4, 1e-3, 1e-2} on bf16 canonical** | **Regularization** | **WIP — training; new canonical notified.** |
 | **#4296** | **thorfinn** | **Transolver slice_num sweep {32, 96} on bf16 canonical** | **Architecture** | **WIP — rebased; new canonical notified.** |
 | **#4348** | **alphonse** | **Attention head sweep {2, 8} on 14-winner canonical** | **Architecture** | **WIP — training; new canonical notified.** |
-| **#4359** | **fern** | **Warmup epochs re-tune on T_max=25 canonical: {1, 5}** | **Optimization** | **WIP — training; new canonical notified.** |
-| **#4388** | **tanjiro** | **LR push above 2e-3: {2.5e-3, 3e-3} on 15-winner canonical** | **Optimization** | **WIP — just assigned.** |
+| **#4388** | **tanjiro** | **LR push above 2e-3: {2.5e-3, 3e-3} on 15-winner canonical** | **Optimization** | **WIP — training.** |
+| **#4421** | **fern** | **Warmup retest at lr=2e-3: {warmup=1, warmup=2}** | **Optimization** | **WIP — just assigned.** |
+| **#4423** | **nezuko** | **Dropout sweep {0.05, 0.1} on 15-winner canonical** | **Regularization** | **WIP — just assigned.** |
 
 Zero idle students.
 
@@ -119,11 +121,12 @@ Zero idle students.
 - **Depth (n_layers=6) closed** under 30-min cap — schedule/LR bottleneck, not capacity; even at matched epoch lags canonical.
 
 ### Post-current-round stack
-1. **Log-Re sinusoidal (frieren #3415):** if it wins → merge; orthogonal to all optimization changes.
+1. **Log-Re sinusoidal (frieren #3415):** if it wins → merge; orthogonal to all optimization changes. **Highest-EV pending**.
 2. **LR push above 2e-3 (#4388 tanjiro):** {2.5e-3, 3e-3} — in-flight; no saturation signal at 2e-3.
-3. **Warmup epochs re-tune (#4359 fern):** {1, 5} on T_max=25 — interaction of warmup with higher peak LR. With lr=2e-3, warmup=3 gives 0.67e-3/epoch ramp; {1, 5} brackets the safe zone.
-4. **Architecture results (#4234 batch, #4245 weight-decay, #4296 slice_num, #4348 n_head):** any winner → merge, update canonical stack.
-5. **T_max finer sweep {20, 22}:** after LR push settles; may squeeze 0.2-0.5 val with adjusted cooldown for lr=2e-3.
-6. **Dropout sweep {0.05, 0.1}:** never tested on SOAP+L1+bf16 stack; test_single_in_dist (38.15) vs val (35.53) = 7.3% gap suggests mild regularization could help generalization.
+3. **Warmup retest at lr=2e-3 (#4421 fern):** {1, 2} — verifying #4359's within-PR signal at new canonical LR; could compound to ~val 34.69 if delta transfers.
+4. **Dropout sweep (#4423 nezuko):** {0.05, 0.1} — orthogonal regularization to wd, which showed val/test divergence. Code change required (add `--dropout` CLI flag).
+5. **Architecture results (#4234 batch, #4296 slice_num, #4348 n_head):** any winner → merge, update canonical stack.
+6. **T_max finer sweep {20, 22}:** after LR push settles; may squeeze 0.2-0.5 val with adjusted cooldown for lr=2e-3.
 7. **LR re-tune on merged architecture winner:** SOAP step size sensitive to model capacity.
-8. **mlp_ratio=3 on T_max=25+lr=2e-3 stack:** deprioritized — original val regression may hold even with correct schedule. Try after architecture sweeps settle.
+8. **Activation function sweep (GELU/SiLU/SwiGLU):** never tested on this stack — small architectural change with broad ML literature support.
+9. **Weight decay closed:** monotone val improvement offset by test_single_in_dist regression — wd=1e-4 stays canonical.

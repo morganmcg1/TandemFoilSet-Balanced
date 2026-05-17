@@ -1524,3 +1524,58 @@ Per-split test (arm2 winner):
 - Branch: `willowpai2i48h3-tanjiro/lr-push-cosine-t25`
 - Hypothesis: No saturation at lr=2e-3 — push to {2.5e-3, 3e-3} to find the LR ceiling.
 - 2 arms: lr ∈ {2.5e-3, 3e-3}, both with cosine_t_max=25 on 15-winner canonical.
+
+## 2026-05-17 06:55 — PR #4359 (fern): Warmup epochs sweep {1, 5} on T_max=25 canonical — **CLOSED**
+
+- Branch: `willowpai2i48h3-fern/warmup-epochs-retune-cosine-t25`
+- W&B runs: `9mwwcapy` (arm1 warmup=1), `fub267wi` (arm2 warmup=5)
+- Hypothesis: warmup_epochs=3 chosen for old T_max=50 schedule; with T_max=25 binding the cooldown, shorter warmup gives more time at peak LR.
+
+**Result (within-PR, lr=1e-3, all else canonical):**
+
+| Arm | warmup | val_avg/mae_surf_p | Δ vs canonical | test_excl_cruise | Δ test |
+|---|---|---|---|---|---|
+| canonical (ref) | 3 | 37.9354 | — | 39.0519 | — |
+| 1 | **1** | **37.0917** | **−2.22%** | **38.4488** | **−1.54%** |
+| 2 | 5 | 38.9829 | +2.76% | 40.6324 | +4.05% |
+
+**Per-split test_mae_surf_p (arm 1, warmup=1):**
+- test_single_in_dist: 40.1193 (vs 40.7102, −1.45%)
+- test_geom_camber_rc: 45.5218 (vs 45.1351, +0.86%)
+- test_re_rand: 29.7053 (vs 31.3105, −5.13%)
+
+**Analysis:** Both arms ran at lr=1e-3 (in-flight when #4336 lr=2e-3 merged; per advisor "do not restart" guidance). Strong within-PR signal — monotone warmup=5 > 3 > 1 on val. **vs new canonical (lr=2e-3, val=35.5322): both arms fail absolutely**, warmup=1 +4.39%, warmup=5 +9.71%. The lr=1e-3 vs lr=2e-3 gap (~2.4 val) dominates the warmup effect (~0.84 val).
+
+**Decision: CLOSED.** Within-PR signal warrants direct retest at lr=2e-3 canonical — assigned fern to #4421 to verify whether warmup=1 win compounds with new LR. If it does, that's a 16th compounding winner.
+
+## 2026-05-17 06:55 — PR #4245 (nezuko): Weight decay sweep {1e-4, 1e-3, 1e-2} — **CLOSED**
+
+- Branch: `willowpai2i48h3-nezuko/weight-decay-sweep`
+- W&B runs: `a0zo3tib` (wd=1e-4, exact canonical reproduce), `mqirbk9a` (wd=1e-3), `diaqn05m` (wd=1e-2)
+- Hypothesis: SOAP's default wd=1e-4 untested on bf16+Huber β=0.01 canonical; the new regime may be under-regularized.
+
+**Result (within-PR, lr=1e-3, all else canonical):**
+
+| Arm | wd | val_avg/mae_surf_p | Δ val | test_excl_cruise | Δ test | test_single_in_dist |
+|---|---|---|---|---|---|---|
+| 1 (reproduce) | 1e-4 | 37.9354 | — | 39.0519 | — | 40.7102 |
+| 2 | 1e-3 | 37.7377 | −0.5% | 39.2911 | +0.6% | 42.1107 |
+| 3 | 1e-2 | **37.4433** | **−1.3%** | 39.2838 | +0.6% | **42.1969** |
+
+**Analysis:** Monotone val improvement (−1.3% at wd=1e-2) but test_excl_cruise regresses +0.6% — clean **val/test divergence**. test_single_in_dist (the in-domain test split closest to val) gets monotonically worse (+1.5 absolute) under stronger wd. OOD splits (test_geom_camber_rc, test_re_rand) only mildly improve, not enough to offset the in-domain regression. Same pattern as PR #4305 mlp_ratio.
+
+**Mechanism:** wd uniformly compresses model capacity regardless of whether weights encode genuine vs spurious correlations. Val and test_single_in_dist are sampled from related (but not identical) distributions; capacity compression hurts the test sampling shift more than the val side.
+
+**Decision: CLOSED.** wd=1e-4 stays canonical. Re-assigning nezuko to **dropout sweep** (#4423) — orthogonal regularization mechanism (input/activation noise vs weight magnitude penalty). Per student's explicit follow-up suggestion.
+
+## 2026-05-17 06:55 — Assignment: #4421 fern warmup-retest-lr2e3
+
+- Branch: `willowpai2i48h3-fern/warmup-retest-lr2e3`
+- Hypothesis: PR #4359's within-PR signal (warmup=1 wins by 0.84 val at lr=1e-3) should transfer to lr=2e-3 canonical. If yes → val ≈ 34.69, 16th winner.
+- 2 arms: warmup_epochs ∈ {1, 2} on 15-winner canonical with lr=2e-3, cosine_t_max=25.
+
+## 2026-05-17 06:55 — Assignment: #4423 nezuko dropout-sweep
+
+- Branch: `willowpai2i48h3-nezuko/dropout-sweep`
+- Hypothesis: Dropout (orthogonal regularization to wd) may avoid val/test divergence that bit wd sweep. wd compresses weight magnitudes uniformly; dropout forces feature redundancy. Common Transformer dropout (0.05-0.1) gentle enough to not hurt 17-epoch budget.
+- 2 arms: dropout ∈ {0.05, 0.1}. Requires small code change: add `dropout: float = 0.0` to Config dataclass and thread `dropout=cfg.dropout` through `model_config` in train.py. Transolver already supports the arg.
