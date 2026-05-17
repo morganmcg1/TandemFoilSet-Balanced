@@ -64,22 +64,23 @@ ACTIVATION = {
 
 
 class MLP(nn.Module):
-    def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
+    def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True, dropout=0.0):
         super().__init__()
         act_fn = ACTIVATION[act]
         self.n_layers = n_layers
         self.res = res
         self.linear_pre = nn.Sequential(nn.Linear(n_input, n_hidden), act_fn())
         self.linear_post = nn.Linear(n_hidden, n_output)
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
         self.linears = nn.ModuleList(
             [nn.Sequential(nn.Linear(n_hidden, n_hidden), act_fn()) for _ in range(n_layers)]
         )
 
     def forward(self, x):
-        x = self.linear_pre(x)
+        x = self.dropout(self.linear_pre(x))
         for i in range(self.n_layers):
             x = self.linears[i](x) + x if self.res else self.linears[i](x)
-        return self.linear_post(x)
+        return self.dropout(self.linear_post(x))
 
 
 class RMSNorm(nn.Module):
@@ -131,21 +132,22 @@ class GatedMLP(nn.Module):
     nonlinearity, so no additional gated block is stacked.
     """
 
-    def __init__(self, n_input, n_hidden, n_output, n_layers=0, gate_act="gelu", res=True):
+    def __init__(self, n_input, n_hidden, n_output, n_layers=0, gate_act="gelu", res=True, dropout=0.0):
         super().__init__()
         self.n_layers = n_layers
         self.res = res
         self.linear_pre = GEGLU(n_input, n_hidden, gate_act=gate_act)
         self.linear_post = nn.Linear(n_hidden, n_output)
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
         self.linears = nn.ModuleList(
             [GEGLU(n_hidden, n_hidden, gate_act=gate_act) for _ in range(n_layers)]
         )
 
     def forward(self, x):
-        x = self.linear_pre(x)
+        x = self.dropout(self.linear_pre(x))
         for i in range(self.n_layers):
             x = self.linears[i](x) + x if self.res else self.linears[i](x)
-        return self.linear_post(x)
+        return self.dropout(self.linear_post(x))
 
 
 class ConditionMLP(nn.Module):
@@ -231,7 +233,7 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32, cond_dim=0,
-                 ffn_act="gelu", norm_type="layernorm"):
+                 ffn_act="gelu", norm_type="layernorm", ffn_dropout=0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = _make_norm(hidden_dim, norm_type)
@@ -242,13 +244,13 @@ class TransolverBlock(nn.Module):
         self.ln_2 = _make_norm(hidden_dim, norm_type)
         if ffn_act == "geglu":
             self.mlp = GatedMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                                n_layers=0, gate_act="gelu", res=False)
+                                n_layers=0, gate_act="gelu", res=False, dropout=ffn_dropout)
         elif ffn_act == "swiglu":
             self.mlp = GatedMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                                n_layers=0, gate_act="silu", res=False)
+                                n_layers=0, gate_act="silu", res=False, dropout=ffn_dropout)
         else:
             self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                           n_layers=0, res=False, act=act)
+                           n_layers=0, res=False, act=act, dropout=ffn_dropout)
         self.cond_dim = cond_dim
         if cond_dim > 0:
             self.film = ConditionMLP(cond_dim, hidden_dim)
@@ -288,6 +290,7 @@ class Transolver(nn.Module):
                  slice_num=32, ref=8, unified_pos=False, cond_dim=0,
                  ffn_act="gelu", norm_type="layernorm",
                  fourier_pe_freqs: int = 0,
+                 ffn_dropout: float = 0.0,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -313,6 +316,7 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 cond_dim=cond_dim, ffn_act=ffn_act, norm_type=norm_type,
+                ffn_dropout=ffn_dropout,
             )
             for i in range(n_layers)
         ])
@@ -601,6 +605,7 @@ class Config:
     T_max: int = 15  # CosineAnnealingLR period; default preserves prior behavior
     fourier_pe: bool = False   # Tancik Fourier PE on (x, z) coords (H106)
     fourier_pe_freqs: int = 8  # Number of log-spaced frequencies; adds 4*K features
+    ffn_dropout: float = 0.0   # Dropout in FFN (MLP/GatedMLP) after activation and after final projection (H126)
 
 
 cfg = sp.parse(Config)
@@ -650,6 +655,7 @@ model_config = dict(
     ffn_act=cfg.ffn_act,
     norm_type=cfg.norm_type,
     fourier_pe_freqs=fourier_pe_freqs,
+    ffn_dropout=cfg.ffn_dropout,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -793,6 +799,7 @@ for epoch in range(MAX_EPOCHS):
         "T_max": cfg.T_max,
         "fourier_pe": cfg.fourier_pe,
         "fourier_pe_freqs": fourier_pe_freqs,
+        "ffn_dropout": cfg.ffn_dropout,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "gate_stats": gate_stats,
