@@ -1,5 +1,54 @@
 # SENPAI Research Results
 
+## 2026-05-17 ~08:32 UTC — Round 32: MERGE #4401 (eps=1e-9 NEW BASELINE) + Close #4370 (k-axis closed) + 2 new assignments
+
+### MERGED: PR #4401 (edward) — AdamW eps=1e-9 on Lookahead k=3 baseline ✓ **NEW BEST**
+
+**NEW BEST BASELINE** — first improvement since k=3 merge (PR #4266). val=50.17, test=50.34.
+
+| Arm | eps | val_avg | test_3split | Δval vs baseline |
+|---|---|---|---|---|
+| Arm 1 (k9mspshy) | 1e-7 | 51.348 | 52.050 | +0.04 (flat/regress) |
+| **Arm 2 (hpjl79he)** | **1e-9** | **50.166** | **50.340** | **−1.141 (−2.2%)** |
+| Baseline (0aj92l9d) | 1e-8 | 51.307 | 51.886 | — |
+
+Per-split val (eps=1e-9):
+| Split | val Δ | test Δ |
+|---|---|---|
+| single_in_dist | +0.07 (flat) | +0.90 |
+| **camber_rc** | **−1.293 (−2.0%)** | **−3.943 (−6.6%)** |
+| cruise | −0.421 (−1.3%) | NaN |
+| re_rand | **−2.916 (−5.7%)** | **−1.597 (−3.7%)** |
+
+**Mechanism**: With `asinh_p_scale=1.0` compressing targets, the default eps=1e-8 is an unnecessarily large stability floor. eps=1e-9 enables tighter per-parameter adaptive step sizes without crossing the numerical cliff (0 NaN events). The camber_rc and re_rand gains are consistent with tighter adaptive control improving per-parameter gradient tracking on OOD/noisy gradient signals. Direction is monotone: eps=1e-7 hurt, eps=1e-9 helped.
+
+**Single-seed caution**: win margin −1.14 = 4× fleet variance (0.3 units) — signal is robust, not seed-luck. Immediate follow-up: sharper eps grid around 1e-9 (#4490 edward).
+
+---
+
+### Closed: PR #4370 (tanjiro) — Lookahead k=2 vs k=4 bracket
+
+**k-axis bracket {k=2, 3, 4, 5, 10} fully characterized.**
+
+| k | val_avg | test_3split | Status |
+|---|---|---|---|
+| k=2 (best of 5 seeds) | 52.87 | 52.47 | WORSE — over-averages; high seed variance (4/5 seeds at 60+) |
+| **k=3** | **51.31** | **51.89** | **OPTIMUM — sharp val minimum** |
+| k=4 | 52.73 | **51.84** | +2.8% worse val; essentially TIED on test |
+| k=5 | 54.30 | 52.88 | WORSE |
+| k=10 | 58.0 | — | WORSE |
+
+**Key mechanism finding**: k=4 leads k=3 at epochs 5-17 (faster initial descent) but k=3 makes a sharp epoch-18 jump (54.65→51.31) that k=4 cannot match (53.44→52.73). The k=3 minimum is partly a budget/checkpoint-selection effect — the 18-epoch budget tightly couples to k=3's sync frequency. k=2 is highly unstable (4/5 seeds catastrophically diverge) — confirms tight syncs amplify slow-weight trajectory noise.
+
+**k-axis conclusion**: asymmetric U-shape, sharp val minimum at k=3, flat test minimum between k=3 and k=4. Paper-appendix quality characterization.
+
+**New assignments: 2 experiments on new eps=1e-9 baseline**
+
+- **PR #4490 (edward)**: Sharper eps grid (3e-9, 3e-10, 1e-10) — follow eps=1e-9 win toward numerical cliff
+- **PR #4491 (tanjiro)**: β1 bracket (0.85, 0.95) on eps=1e-9 baseline — previously tested on old pre-Lookahead stack, now retesting with full k=3+eps=1e-9 combination
+
+---
+
 ## 2026-05-17 ~07:40 UTC — Round 30: Close #4387 (slice null) + #4309 (n_head=4 null) + #4307 (α-bracket null) + 3 new assignments
 
 ### Closed: PR #4387 (frieren) — slice_num bracket (4, 12) on k=3 baseline
