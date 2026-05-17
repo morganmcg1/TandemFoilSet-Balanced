@@ -92,7 +92,8 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 | **#4205** | edward | RMSNorm swap for LayerNorm on n_hidden=176+bf16+ep18 baseline | WIP (assigned 23:15) |
 | #4252 | frieren | LION optimizer at nh=176+bf16+ep14 | **MERGED 01:25** — new baseline val=49.26/test=41.62; test −2.28%, hard-split improves, −30% compute; Lion now default |
 | **#4280** | frieren | Lion+nh=192 compound test at ep=12+T_max=12 | WIP (assigned 01:30) |
-| **#4043** | nezuko | AdamW weight_decay sweep + eta_min (pivoted to ep14 for 30-min cap, 3 arms) | WIP (redirected 23:30) |
+| #4043 | nezuko | AdamW weight_decay sweep + eta_min | **CLOSED 01:40** — obsolete (Lion merged as default; AdamW WD irrelevant); also: infrastructure crash loop (18+ pod restarts) from uncommitted train.py changes blocking branch checkout; new assignment #4285 |
+| **#4285** | nezuko | Lion LR sweep (lr=2e-4, lr=5e-5) at nh=176+bf16+ep14 | WIP (new — assigned 01:45, zero code changes) |
 | **#4232** | fern | Push width frontier further: n_hidden=208 + bf16 + ep18 | WIP (assigned 00:15) |
 | **#4233** | tanjiro | AGC (Adaptive Gradient Clipping) screening at nh=176+bf16+ep14 (30-min cap) | WIP (assigned 00:20) |
 
