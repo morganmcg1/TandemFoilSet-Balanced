@@ -199,10 +199,18 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        # Allow per-block mlp_ratio: int broadcasts; list[len=n_layers] is verbatim.
+        if isinstance(mlp_ratio, (list, tuple)):
+            block_mlp_ratios = list(mlp_ratio)
+            assert len(block_mlp_ratios) == n_layers, (
+                f'mlp_ratio list len {len(block_mlp_ratios)} != n_layers {n_layers}'
+            )
+        else:
+            block_mlp_ratios = [mlp_ratio] * n_layers
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
-                act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
+                act=act, mlp_ratio=block_mlp_ratios[i], out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
             )
             for i in range(n_layers)
@@ -399,6 +407,7 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     ema_decay: float = 0.997  # EMA decay for shadow model evaluated at val/test
     sf_warmup_steps: int = 200  # Schedule-Free linear LR warmup
+    last_block_mlp_ratio: float | None = None  # asymmetric: override mlp_ratio for last block only
 
 
 cfg = sp.parse(Config)
@@ -427,15 +436,22 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+_base_mlp_ratio = 2
+_n_layers = 5
+if cfg.last_block_mlp_ratio is not None:
+    _mlp_ratio_cfg = [_base_mlp_ratio] * (_n_layers - 1) + [cfg.last_block_mlp_ratio]
+else:
+    _mlp_ratio_cfg = _base_mlp_ratio
+
 model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=128,
-    n_layers=5,
+    n_layers=_n_layers,
     n_head=4,
     slice_num=8,
-    mlp_ratio=2,
+    mlp_ratio=_mlp_ratio_cfg,
     dropout=0.1,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
