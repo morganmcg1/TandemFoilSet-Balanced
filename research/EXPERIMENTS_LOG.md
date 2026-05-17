@@ -3002,3 +3002,76 @@ And: frieren #4248 Arm B = 53.549 (+2.47%) at seed=1 on a branch WITH --n_layers
 - **Hypothesis:** Volumetric loss weight is implicit 1.0 and has never been swept. Symmetric axis to surf_weight. Given #4207 found surface loss saturated, the loss balance (surf:vol contribution ratio ~4.5× at canonical) may not be optimal. Primary suspects are D (vol=2.0) and E (vol=4.0) which shift toward matched-contribution ratio.
 - Requires minimal infra: add `vol_weight` to Config dataclass + apply in training loop loss.
 
+
+---
+
+## 2026-05-17 08:00 — PR #4248 [MERGED]: frieren n_layers depth sweep {3, 4, 5, 7} at SF-AdamW lr=3e-3
+
+- **Student branch:** `charliepai2i48h4-frieren/n-layers-r1`
+- **Hypothesis:** n_layers=5 Transolver default may not be optimal at 30-min wall-clock budget. Shallower models compute faster per epoch; with a step-budget constraint, they fit more optimization steps.
+
+### Results
+
+| Arm | n_layers | n_params | epochs | sec/ep | val_avg/mae_surf_p | Δ vs B (paired) | Δ vs baseline 52.258 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **A (winner)** | **3** | **537K** | **26** | **69.3s** | **45.654** | **−14.74%** | **−12.64%** |
+| B (control) | 5 | 846K | 17 | 111.3s | 53.549 | — | +2.47% |
+| C | 7 | 1.15M | 12 | 153.3s | 61.044 | +14.00% | +16.81% |
+| D | 4 | 691K | 20 | 90.5s | 50.693 | −5.33% | −2.99% |
+
+Monotone l3 < l4 < l5 < l7 on ALL 4 val splits and 3 clean test splits. Test: A=44.878 vs canonical 51.206 (−12.36%). At iso-epoch=12 all arms within ~1% — win dominated by step-count. None converged at cap.
+
+**Decision: MERGED.** New canonical: n_layers=3, val=45.654, test=44.878.
+
+---
+
+## 2026-05-17 08:08 — PR #4317 [MERGED]: alphonse SF-AdamW betas 2x2 {(0.9,0.95)} x {(0.99,0.999)}
+
+- **Student branch:** `charliepai2i48h4-alphonse/sf-betas-r1`
+- **Hypothesis:** SF-AdamW betas=(0.9, 0.999) are inherited AdamW defaults; not tuned for Schedule-Free regime.
+
+### Results (at prior n_layers=5 canonical)
+
+| Arm | β1 | β2 | val_avg | Δ vs A (paired) | test 3-split |
+|---|---:|---:|---:|---:|---:|
+| A (control) | 0.9 | 0.999 | 53.549 | — | 52.590 |
+| B | 0.9 | 0.99 | 52.443 | −2.07% | 50.740 |
+| C | 0.95 | 0.999 | 51.810 | −3.25% | 50.008 |
+| **D (winner)** | **0.95** | **0.99** | **50.273** | **−6.12%** | **48.726** |
+
+Both axes independently helpful; D leads from epoch 1 (not step-count artifact). Negative result: β1↑ doesn't reduce clip rate (stays 0.95–0.98 across all arms).
+
+**Decision: MERGED as compound improvement.** New canonical flags: `--sf_beta1 0.95 --sf_beta2 0.99`.
+
+---
+
+## 2026-05-17 08:10 — PR #4303 [SENT BACK]: thorfinn slice_num sweep {32, 64, 96, 128}
+
+- **Student branch:** `charliepai2i48h4-thorfinn/slice-num-r1`
+
+### Results
+
+| Arm | slice_num | best_ep | val_avg | Δ vs A (paired) |
+|---|---:|---:|---:|---:|
+| A (control) | 64 | 17 | 53.549 | — |
+| **B** | **32** | **20** | **51.419** | **−3.98%** |
+| C | 96 | 14 | 57.752 | +7.85% |
+| D | 128 | 12 | 63.233 | +18.08% |
+
+At iso-epoch=12: C(61.65) ≈ A(61.72) < D(63.23) ≈ B(63.89) — B(s32) is BEHIND A at matched steps. Win is step-count artifact (s32=90s/ep vs s64=111s/ep → fits 20 vs 17 epochs).
+
+**Decision: SENT BACK.** Merge held. Student asked to rebase at new canonical (n_layers=3, sf_betas=(0.95,0.99)) and rerun all four arms.
+
+---
+
+## 2026-05-17 08:12 — PR #4464 [ASSIGNED]: frieren shallower depth probe {1, 2, 3}
+
+- **Student branch:** `charliepai2i48h4-frieren/shallower-depth-probe`
+- **Hypothesis:** n_layers sweep showed monotone l3<l4<l5<l7. The floor hasn't been tested. With step-count mechanism, n_layers=1 or 2 could win further. Run at new canonical (n_layers=3, sf_betas=(0.95,0.99)).
+
+---
+
+## 2026-05-17 08:14 — PR #4467 [ASSIGNED]: alphonse LR retune at new canonical {3e-3, 4e-3, 5e-3, 6e-3}
+
+- **Student branch:** `charliepai2i48h4-alphonse/lr-retune-n-layers3`
+- **Hypothesis:** PR #4157 found lr=3e-3 still monotonically improving at n_layers=5 (17 epochs/budget). At n_layers=3 (26 epochs/budget) with sf_beta1=0.95 (stronger Polyak averaging), higher LR may be tolerable and better. Sweep {3e-3, 4e-3, 5e-3, 6e-3} at new canonical.
