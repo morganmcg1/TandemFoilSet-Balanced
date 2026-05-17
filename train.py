@@ -460,6 +460,7 @@ class Config:
     bf16: bool = False  # enable BF16 mixed-precision training via torch.amp.autocast (forward+loss only; eval stays FP32)
     n_hidden: int = 128  # Transolver hidden dim (width)
     slice_num: int = 64  # Transolver routing slot count per attention layer
+    n_head: int = 4  # Transolver attention head count; head_dim = n_hidden / n_head
 
 
 cfg = sp.parse(Config)
@@ -494,7 +495,7 @@ model_config = dict(
     out_dim=3,
     n_hidden=cfg.n_hidden,
     n_layers=5,
-    n_head=4,
+    n_head=cfg.n_head,
     slice_num=cfg.slice_num,
     mlp_ratio=2,
     n_freqs=cfg.n_freqs,
