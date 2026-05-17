@@ -5,6 +5,32 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-17 03:25 — PR #4179 (charliepai2i48h5-askeladd): bs=2+n=8 + Huber δ={0.15, 0.20} compound — CLOSED (both arms regress; δ=0.30 optimal at lineage A confirmed)
+
+- branch: `charliepai2i48h5-askeladd/bs2-n8-huber`
+- hypothesis: tightening δ should compound with bs=2+n=8 stack (same mechanism as δ=0.10 working on n=10 stack)
+
+| Arm | δ | val_avg | Δ vs new best (56.124) | test_avg | best_epoch |
+|-----|----|---------|-------------------------|----------|------------|
+| arm-1 | 0.15 | 59.11 | **+2.99** ✗ | 51.91 | 18/18 |
+| arm-2 | 0.20 | 59.71 | **+3.59** ✗ | 51.58 | 18/18 |
+
+- metric artifacts: `models/model-bf16-layerscale-bs2-n8-huber015-20260516-222404/metrics.jsonl`, `models/model-bf16-layerscale-bs2-n8-huber020-20260517-012506/metrics.jsonl`
+
+**Analysis and conclusions:**
+
+Hypothesis falsified, complementary to edward #4199. Combined finding: **δ=0.30 is the optimum for lineage A (n=8) with or without lr=7e-4**. Tight Huber knee is lineage-B-specific (n=10 only).
+
+Mechanistic explanation (askeladd's analysis adopted): at bs=2+n=8, 4.5× more updates and finer Fourier basis already drag residuals below the δ=0.30 knee in late training. Once residuals live in the quadratic region of the Huber, tightening δ further only excises small-magnitude (likely-noisy) residuals — the L1 regime now sees noise instead of signal, increasing variance in gradient direction.
+
+clip_frac@17 = 0.991 / 0.997 for arm-1/arm-2 — gradient clipping still active, confirming the L1-region pathway is the failure mode (not clip-saturation as in lineage A's clip×δ failure).
+
+The cruise split (small per-sample y_std ≈164) is the only split where δ=0.15 marginally helps (−0.90 vs old baseline). This suggests per-split δ may be exploitable: δ=0.15 on cruise samples and δ=0.30 elsewhere could harvest cruise's gain without giving up rc/single. Tabled (requires code changes).
+
+**Follow-up:** Assigned askeladd weight_decay sweep on the new best stack (slice=32+n=10+δ=0.10) — never explored, orthogonal to all wave-15 experiments.
+
+---
+
 ## 2026-05-17 02:40 — PR #4221 (charliepai2i48h5-thorfinn): slice_num lower bracket {32, 48} on bs=2+n=10+δ=0.10 — MERGED (arm-1 slice=32 NEW BEST val=56.124)
 
 - branch: `thorfinn/slice-lower-bracket`

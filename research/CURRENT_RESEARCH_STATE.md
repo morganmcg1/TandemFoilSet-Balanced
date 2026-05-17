@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 02:50
+- **Date:** 2026-05-17 03:30
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
@@ -49,7 +49,7 @@
 | frieren | #4222 | lr=7e-4+clip=1.0 on bs=2+n=10+δ=0.10 (5-way compound) | wave-14 WIP |
 | nezuko | #4293 | sub-unity clip {0.15, 0.10} on bs=2+n=10+δ=0.10 | wave-15 NEW (just assigned) |
 | alphonse | #4198 | LR upper search {9e-4, 1.2e-3} on bs=2+n=8 | wave-14 WIP |
-| askeladd | #4179 | bs=2+n=8 + Huber δ={0.15, 0.20} — 3-way compound | wave-14 WIP |
+| askeladd | #4322 | weight_decay sweep {0.001, 0.005} on new best stack (slice=32+n=10+δ=0.10) | wave-15 NEW (just assigned) |
 
 ## Current research themes
 
@@ -58,7 +58,7 @@
 **Settled knowledge from PR #4199 (edward, closed):**
 - At the **n=8+lr=7e-4 lineage, δ optimum = 0.30** (NOT lower). δ=0.15 essentially flat (+0.42%), δ=0.20 regresses (+3.95%). Opposite of n=10 lineage. Mechanism: residual saturation + clip-saturation absorb any benefit from tighter Huber knee.
 - **Per-split signature**: δ=0.15 helps cruise (-2.75%) and re_rand (-0.81%) but hurts single/rc — partial split benefit but no avg gain.
-- **δ is now settled for lineage A**: do not sweep δ below 0.30 on n=8+lr=7e-4 stack without a new mechanism.
+- **δ is now settled for ALL lineage A** (n=8, with or without lr=7e-4): PR #4179 askeladd confirms δ=0.30 optimal at n=8 without lr. Combined with edward #4199 (n=8+lr=7e-4), δ mapping complete for lineage A. Do NOT sweep δ below 0.30 on any n=8 stack.
 
 **Active highest-priority experiments:**
 
@@ -98,7 +98,7 @@
 - **n_hidden > 192**: if edward #4279 confirms capacity helps, push to 224/256.
 - **δ=0.05 or L1**: tanjiro #4220 arm-2 testing. If monotonic, push lower.
 - **LR warmup**: 5-epoch warmup on new best — untested.
-- **weight_decay sweep**: current 0.0001 default, never explored. {0.001, 0.01} possible.
+- **weight_decay {0.001, 0.005}**: askeladd #4322 testing on new best stack.
 - **Per-domain loss weighting**: cruise responds to δ=0.15 distinctly (−2.75%). A domain-specific δ or surf_weight could exploit this.
 - **slice_num=40 middle bracket + slice=48+T_max=24**: thorfinn #4298 testing (refining the slice=32 win).
 - **5-way compound (n=10+δ=0.10+lr=7e-4+clip=1.0)**: frieren #4222 testing.
