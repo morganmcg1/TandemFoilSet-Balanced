@@ -1,5 +1,78 @@
 # SENPAI Research Results
 
+## 2026-05-17 19:30 — PR #4518: --weight_decay 1e-3 (Lion ACTIVE WD LOW) ← CLOSED OVER-REGULARIZES
+
+- Branch: `willowpai2i48h1-tanjiro/wd1e3-k6-b2-995-a07`
+- Student: willowpai2i48h1-tanjiro
+- Hypothesis: low-end of active WD bowl (first value above fp32 no-op threshold by 5.6×).
+
+### Result
+
+| Metric | This run | #4402 baseline | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 46.9952 | 45.7284 | **+1.27** (~1.4σ̂) |
+| test_avg/mae_surf_p | 45.7428 | 44.5079 | **+1.23** (~1.37σ̂) |
+
+ALL 4 test splits regress uniformly (largest +2.05 on test_single_in_dist; smallest +0.53 on test_re_rand).
+
+### Lion ACTIVE WD bowl single-seed shape (3 datapoints)
+
+| wd | lr*wd | val (seed=0) | Δ vs #4402 |
+|---|---|---|---|
+| effective 0 | ≤ 1.67e-8 | 45.7284 | 0 (definition) |
+| **1e-3** | 1.67e-7 | **46.9952** | **+1.27 (OVER-REG)** |
+| 3e-3 (alphonse) | 5.00e-7 | 45.4891 | −0.24 (sent back for replication) |
+| 1e-2 (frieren) | 1.67e-6 | 46.7114 | +0.98 |
+
+**Bowl is NON-MONOTONIC** (0 → +1.27 → −0.24 → +0.98). This strongly suggests the wd=3e-3 result is **seed noise** rather than a real bowl floor. Alphonse's 4-seed replication will resolve.
+
+### Mechanism for paper
+
+Tanjiro's fp32 epsilon analysis (#4456) confirmed: at lr*wd ≥ 1.67e-7 the WD update IS active. But the resulting regularization pulls weights toward 0 faster than the compound (Lookahead k=6, α=0.7) + (Lion β2=0.995) trajectory can compensate. **The implicit regularization of the smoothing compound is already saturating the generalization bowl floor — adding explicit decoupled WD over-regularizes.**
+
+Paper claim: "Lion+Lookahead+β2=0.995+k=6 does NOT need explicit weight decay; adding it at any standard transformer value (1e-3 to 1e-2) is at best neutral, at worst regressive."
+
+### Decision
+
+CLOSED. Tanjiro reassigned to **Magnitude-tempered Lion τ=0.5 (#4579)** — optimizer family modification (`sign(c) * |c|^0.5` instead of pure sign).
+
+---
+
+## 2026-05-17 19:30 — PR #4506: (k=7, β2=0.9957, α=0.7) joint shift ← CLOSED INVARIANT FALSIFIED
+
+- Branch: `willowpai2i48h1-edward/k7-b2-9957-a07`
+- Student: willowpai2i48h1-edward
+- Hypothesis: k×(1−β2)≈0.03 invariant — joint shift along this constant should preserve the (k=6, β2=0.995) compound's performance.
+
+### Result
+
+| Metric | (7, 0.9957) | #4402 baseline (6, 0.995) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 46.9852 | 45.7284 | **+1.26** (~1.20σ̂) |
+| test_avg/mae_surf_p | 45.8383 | 44.5079 | **+1.33** (~1.37σ̂) |
+
+### Invariant FALSIFIED
+
+| (k, β2) | k×(1−β2) | val_avg |
+|---|---|---|
+| (6, 0.995) | **0.030** | **45.73** ← winner |
+| (7, 0.995) | 0.035 | 46.42 (closed #4426) |
+| (7, 0.9957) | **0.030** | **46.99** ← this PR |
+
+If invariant held, (7, 0.9957) should match (6, 0.995). Instead +1.27 worse. **The product k×(1−β2) is NOT the controlling quantity.** Raising β2 at k=7 made things WORSE — opposite of prediction.
+
+### Mechanism for paper
+
+The super-additive compound at (k=6, β2=0.995) is a **sweet-spot, not a scaling law**. At k=7, longer Lookahead sync accumulates 7 inner Lion steps, and a longer m-buffer ENHANCES the noise rather than damping it. The "magic" 138-step half-life at β2=0.995 is specifically tuned to (k=6, α=0.7) — not transferable.
+
+Paper claim: "The (k=6, β2=0.995) configuration is a true compound sweet-spot, not a point on a scaling law. Joint shifts along k×(1−β2)=const do NOT preserve performance."
+
+### Decision
+
+CLOSED. Edward reassigned to **Auxiliary curvature regression head (weight=0.3) (#4580)** — physics-aware bold swing on data-side mechanism.
+
+---
+
 ## 2026-05-17 18:30 — PR #4521: --weight_decay 3e-3 (Lion ACTIVE WD MID) ← SENT BACK for 4-seed replication (FIRST POSSIBLE WIN since #4402)
 
 - Branch: `willowpai2i48h1-alphonse/wd3e3-k6-b2-995-a07`

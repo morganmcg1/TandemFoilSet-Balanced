@@ -1,7 +1,7 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 18:30
-- **Launch:** willow-pai2i-48h-r1 (round 32 — Lookahead-Lion era; **⚠️ PLATEAU PROTOCOL ACTIVE**; **PROGRAMME ALL-TIME BEST val=45.7284 / test=44.5079 SEED=0** (PR #4402); **5-seed canonical val=46.83±0.41 SEM / test=45.49±0.40 SEM (PAPER-READY)**; **⚠️ MAJOR FINDING (round-31): Lion WD has been an fp32 NO-OP at wd ≤ 1e-4 for the ENTIRE programme** (tanjiro #4456 bit-identical proof); **23 closures since merge, ZERO improvements**; **⚠️ FIRST POSSIBLE WIN: alphonse #4521 wd=3e-3 single-seed val=45.49 (Δ −0.24) — SENT BACK for 4-seed replication**; **α-axis FULLY RESOLVED; LR-axis FULLY RESOLVED; warm restarts BUDGET-INFEASIBLE; SWA/EMA doesn't compose with Lookahead**; **8 experiments in flight: wd=1e-3 + wd=3e-3-seed-replication + outer momentum + focal-loss + Huber + SWA-last-4 + LLRD + joint (k=7,β2=0.9957)**)
+- **Date:** 2026-05-17 19:30
+- **Launch:** willow-pai2i-48h-r1 (round 33 — Lookahead-Lion era; **⚠️ PLATEAU PROTOCOL ACTIVE**; **PROGRAMME ALL-TIME BEST val=45.7284 / test=44.5079 SEED=0** (PR #4402); **5-seed canonical val=46.83±0.41 SEM / test=45.49±0.40 SEM (PAPER-READY)**; **⚠️ MAJOR FINDING (round-31): Lion WD has been fp32 NO-OP at wd ≤ 1e-4 for entire programme** (tanjiro #4456); **25 closures since merge, ZERO improvements**; **⚠️ ONLY POSSIBLE WIN: alphonse #4521 wd=3e-3 single-seed val=45.49 (Δ −0.24) — seed-replication in flight**; **WD bowl single-seed NON-MONOTONIC (0→+1.27→-0.24→+0.98) — strongly suggests wd=3e-3 result is seed noise**; **k×(1−β2) invariant FALSIFIED (edward #4506)**; **α, LR, warm restarts, EMA, β2-RIGHT, β2-LEFT, k-RIGHT, k×β2 joint all RESOLVED**; **8 experiments in flight: magnitude-tempered Lion + aux curvature + wd=3e-3 seed replication + outer momentum + focal-loss + Huber + SWA-last-4 + LLRD**)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN)
 - **Latest direction from human team:** None (no open issues scoped to this launch)
@@ -162,20 +162,20 @@ Per tanjiro's #4456 finding, every Lion WD probe at wd ≤ 1e-4 in this programm
 
 If any of {1e-3, 3e-3, 1e-2} beats #4402, the entire programme has a new compound. If all regress, the smoothing compound genuinely doesn't want explicit WD — that itself is a paper-grade finding.
 
-## Active WIP experiments (round 32)
+## Active WIP experiments (round 33)
 
 | PR | Student | Hypothesis | Status | Priority |
 |----|---------|-----------|--------|----------|
-| #4562 | frieren | **Layer-wise LR decay (LLRD) decay=0.95 per Transolver block** | NEW (round 32) | Bold per-block training dynamics |
-| #4547 | nezuko | **Huber loss δ=1.0** — loss-curvature reformulation (Lion m-buffer hard-example concentration) | NEW (round 32) | Bold loss-mechanism swing |
-| #4546 | thorfinn | **SWA uniform mean of slow_weights at ep {14,15,16,17}** — variance reduction in converged regime | NEW (round 32) | Bold variance-reduction (distinct from fern #4500 EMA) |
+| #4580 | edward | **Aux curvature regression head (weight=0.3)** — physics-aware multi-task | NEW (round 33) | Bold data-side mechanism |
+| #4579 | tanjiro | **Magnitude-tempered Lion τ=0.5** — `sign(c) * |c|^0.5` instead of pure sign | NEW (round 33) | Bold optimizer-family modification |
+| #4562 | frieren | **Layer-wise LR decay (LLRD) decay=0.95 per Transolver block** | Running (round 32) | Bold per-block training dynamics |
+| #4547 | nezuko | **Huber loss δ=1.0** — loss-curvature reformulation | Running (round 32) | Bold loss-mechanism swing |
+| #4546 | thorfinn | **SWA uniform mean of slow_weights at ep {14,15,16,17}** | Running (round 32) | Bold variance-reduction |
 | #4537 | fern | **Focal-loss per-node hardness weighting γ=1.0** on surface MAE | Running (round 31) | Bold loss reformulation |
 | #4536 | askeladd | **Lookahead OUTER momentum β_outer=0.5** on slow-step direction | Running (round 31) | Bold optimizer mechanism |
-| **#4521** | **alphonse** | **--weight_decay 3e-3 SEED REPLICATION (seeds 1,2,3,4)** | **SENT BACK (round 32)** | **⚠️ FIRST POSSIBLE WIN since #4402 — verify reproducibility** |
-| #4518 | tanjiro | **--weight_decay 1e-3** — Lion ACTIVE WD probe LOW (their own finding) | Running (round 31) | First proper WD-bowl mapping LOW |
-| #4506 | edward | (k=7, β2=0.9957, α=0.7) JOINT shift — k×(1−β2)≈0.03 invariant | Running (round 30) | Bold joint-shift mechanism |
+| **#4521** | **alphonse** | **--weight_decay 3e-3 SEED REPLICATION (seeds 1,2,3,4)** | **SENT BACK (round 32)** | **⚠️ ONLY potential win since #4402 — verify reproducibility** |
 
-**All 8 students active. Zero idle. Single-arm policy in force, except alphonse #4521 doing seed-replication (4 sequential runs ~2h total). 8 axes in flight: LLRD + Huber + SWA + focal-loss + outer-momentum + wd=3e-3 replication + wd=1e-3 + joint k×β2.**
+**All 8 students active. Zero idle. 8 bold-swing axes in flight covering: aux-curvature + magnitude-tempering + LLRD + Huber + SWA + focal-loss + outer-momentum + wd-replication. None are micro-probes — every axis is a mechanism modification or new auxiliary task.**
 
 ### ⚠️ Round-29 strategic theme: PLATEAU PROTOCOL activated
 
@@ -189,6 +189,22 @@ If any of {1e-3, 3e-3, 1e-2} beats #4402, the entire programme has a new compoun
 - **seed=4 canonical (frieren #4498):** strengthens paper SEM from n=4 (0.48 test) to n=5 (~0.43 test). Low-risk paper-strengthening.
 
 If alphonse or fern wins, multi-seed it immediately. If both regress, escalate to: (1) per-region loss weighting, (2) Tiger/ScheduleFree optimizers, (3) cosine warm restarts, (4) data augmentation.
+
+## Round-33 closures (2 closures — completing WD bowl + falsifying k×β2 invariant)
+
+- **#4518 tanjiro (--weight_decay 1e-3)** CLOSED OVER-REG: val=46.9952 (+1.27, ~1.4σ̂), test=45.7428 (+1.23). All 4 splits regress. Lion+Lookahead implicit regularization already saturates — explicit WD over-regularizes. Tanjiro reassigned to **Magnitude-tempered Lion τ=0.5 (#4579)**.
+- **#4506 edward (k=7, β2=0.9957)** CLOSED INVARIANT FALSIFIED: val=46.9852 (+1.26, ~1.20σ̂), test=45.8383 (+1.33). k×(1−β2)=0.030 invariant doesn't hold — (k=6, β2=0.995) is a true compound sweet-spot, not a scaling-law point. Edward reassigned to **Auxiliary curvature regression (weight=0.3, #4580)**.
+
+**Updated WD bowl shape** (single-seed, 3 active datapoints):
+
+| wd | lr*wd | val (seed=0) | Δ vs #4402 | interpretation |
+|---|---|---|---|---|
+| eff. 0 | ≤ 1.67e-8 | 45.7284 | 0 (def) | implicit reg already at floor |
+| **1e-3** | 1.67e-7 | **46.9952** | **+1.27** | over-reg |
+| 3e-3 | 5.00e-7 | 45.4891 | −0.24 | maybe noise (replication in flight) |
+| 1e-2 | 1.67e-6 | 46.7114 | +0.98 | over-reg |
+
+**NON-MONOTONIC pattern strongly suggests wd=3e-3 is seed noise** — typical bowls are monotonic on each side of the minimum. Three points {+1.27, −0.24, +0.98} look like seed noise around a slightly-worse-than-baseline mean (~+0.7 average regression). Alphonse's 4-seed replication will give clean canonical comparison.
 
 ## Round-32 active-WD outcomes (in flight + 1 sent-back + 1 closed)
 
