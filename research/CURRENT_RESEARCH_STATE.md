@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-17 11:45 UTC (R35 — n_layers=4 MERGED val 33.353→32.859 (PR #4520, compute savings mechanism); tanjiro assigned n_layers=3 depth probe PR #4578)
+- **Updated:** 2026-05-17 12:15 UTC (R36 — 3 closures (warmup/batch_size/cosine all confirmed obsolete vs new n_layers=4 baseline); 3 new R36 assignments targeting new compute budget: n_hidden=144 retest, long warmup + higher peak LR, slice_num=16)
 - **Track:** Charlie local-metrics arm (`charlie-pai2i-48h-r1`)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-48h-r1`
 - **Target base:** `icml-appendix-charlie`
@@ -52,14 +52,14 @@ Per-split val: single=33.389, rc=45.420, cruise=17.257, re_rand=35.371.
 
 | PR | Student | Hypothesis | Theme | Status |
 |----|---------|------------|-------|--------|
-| #4515 | frieren | 3-seed noise calibration of lr=6e-4 baseline | calibration | WIP — R32 (NOTE: baseline changed to n_layers=4) |
-| #4516 | edward | warmup_steps sweep {100, 300} on lr=6e-4 | optim | WIP — R32 (NOTE: baseline changed) |
-| #4517 | askeladd | batch_size sweep {4, 12} on lr=6e-4 + grad-clip | optim | WIP — R32 (NOTE: baseline changed) |
-| #4519 | nezuko | n_head sweep {2, 8} on lr=6e-4 — attention expressiveness | architecture | WIP — R32 (NOTE: baseline changed) |
-| #4522 | alphonse | weight_decay sweep {5e-5, 2e-4} on lr=6e-4 | optim/reg | WIP — R32 (NOTE: baseline changed) |
-| **#4578** | **tanjiro** | **n_layers=3 depth probe** | **architecture** | **WIP — R35 fresh** |
-| **#4555** | **fern** | **Cosine annealing LR with SF AdamW** | **optim/schedule** | **WIP — R34 fresh** |
-| **#4542** | **thorfinn** | **LR fine sweep {5.5e-4, 6.5e-4} — close lr axis** | **optim** | **WIP — R33 (NOTE: baseline changed)** |
+| #4515 | frieren | 3-seed noise calibration of lr=6e-4 baseline (n_layers=5) | calibration | WIP — R32 (baseline changed; partial info on old config) |
+| #4519 | nezuko | n_head sweep {2, 8} on lr=6e-4 (n_layers=5) | architecture | WIP — R32 (baseline changed) |
+| #4522 | alphonse | weight_decay sweep {5e-5, 2e-4} on lr=6e-4 (n_layers=5) | optim/reg | WIP — R32 (baseline changed) |
+| #4578 | tanjiro | n_layers=3 depth probe | architecture | WIP — R35 fresh |
+| #4542 | thorfinn | LR fine sweep {5.5e-4, 6.5e-4} on n_layers=5 | optim | WIP — R33 (baseline changed) |
+| **#4591** | **fern** | **n_hidden=144 retest on n_layers=4 — capacity-for-depth** | **architecture** | **WIP — R36 fresh** |
+| **#4592** | **edward** | **warmup=1500 + lr=7.5e-4 on n_layers=4 — long warmup unlock higher peak LR?** | **optim** | **WIP — R36 fresh** |
+| **#4593** | **askeladd** | **slice_num=16 on n_layers=4 — break rc-split structural bottleneck** | **architecture** | **WIP — R36 fresh** |
 
 ## Fully closed axes (updated for lr=6e-4 + grad_clip baseline)
 
@@ -68,8 +68,8 @@ Per-split val: single=33.389, rc=45.420, cruise=17.257, re_rand=35.371.
 | **n_layers** | **OPEN (partial)** — n_layers=4 MERGED (+1.5σ win, PR #4520, compute savings); n_layers=3 probe IN FLIGHT (tanjiro #4578). n_layers=6 clearly regressed. n_layers≤4 may continue trend. |
 | **mlp_ratio (uniform)** | FULLY CLOSED at 2 (both old and new stack; asym placement closed too) |
 | **n_head** | OPEN — closed at 4 on old stack; retesting {2, 8} on new stack (nezuko #4519) |
-| **SF warmup_steps** | OPEN — closed at 200 on old stack; retesting {100, 300} with lr=6e-4 (edward #4516) |
-| **slice_num** | FULLY CLOSED at 8 |
+| **SF warmup_steps** | **FULLY CLOSED at 200** — {100, 300} both regressed on n_layers=5+lr=6e-4 stack (edward #4516 closed). Retesting interaction with HIGHER peak LR: warmup=1500 + lr=7.5e-4 on n_layers=4 (edward #4592). |
+| **slice_num** | OPEN — closed at 8 on old stack (pre-clip); retesting slice_num=16 on n_layers=4 + grad-clip (askeladd #4593) |
 | **weight_decay** | OPEN — closed at 1e-4 on old stack; retesting {5e-5, 2e-4} with grad_clip + lr=6e-4 (alphonse #4522) |
 | **dropout (PhysicsAttention)** | **FULLY CLOSED at p=0.1** — d=0.05/0.0 both within noise vs lr=6e-4 baseline; dropout helps in-dist generalization independently of grad-clip (thorfinn #4493 closed) |
 | **surf_weight (upward)** | FULLY CLOSED at 10 |
@@ -77,14 +77,21 @@ Per-split val: single=33.389, rc=45.420, cruise=17.257, re_rand=35.371.
 | **drop_path (p=0.1)** | CLOSED — clear regression on old stack |
 | **EMA decay** | FULLY CLOSED at 0.997 (confirmed on both old and grad-clip stacks) |
 | **lr** | 6e-4 MERGED (PR #4443); fine sweep {5.5e-4, 6.5e-4} IN FLIGHT (thorfinn #4542); cosine annealing schedule IN FLIGHT (fern #4555). |
-| **n_hidden** | CLOSED — 144/160 compute-bound on both old and new stacks (>56s/epoch) |
+| **n_hidden** | OPEN — was compute-bound on n_layers=5 (>56s/epoch); retesting n_hidden=144 on n_layers=4 (now ~48s/epoch, feasible) (fern #4591) |
 | **grad_clip max_norm** | FULLY CLOSED at 1.0 (confirmed on grad-clip stack) |
 | **β (SmoothL1)** | FULLY CLOSED on grad-clip stack — β and clip compete; uniform β best at 0.25 with clip active |
-| **batch_size** | OPEN — closed on old stack; retesting {4, 12} with grad_clip + lr=6e-4 (askeladd #4517) |
+| **batch_size** | **FULLY CLOSED at 4** — batch=12 catastrophic regression on n_layers=5+lr=6e-4 (askeladd #4517). Mechanism: step count drives convergence under grad-clip, larger batches structurally disadvantaged by wall-clock budget. |
 | GEGLU on attention | FULLY CLOSED — all regressed |
 | Gate-activation axis | CLOSED — GEGLU > ReGLU > SwiGLU |
 | FiLM family | FULLY CLOSED |
 | RMSNorm | FULLY CLOSED |
+
+## Key R36 insights
+
+1. **Triple noise repeat at n_layers=5+lr=6e-4**: 33.353, 33.037, 33.683 — mean 33.36 ± 0.32. Independent confirmation of σ=0.34 calibration.
+2. **The dominant frame is now "useful optimizer steps within budget"**: warmup/batch/cosine closures all confirm this. With grad-clip on 100% of steps, schedule shape matters less than total time at peak LR. The n_layers=4 win mechanism (compute savings) is the model for future axes.
+3. **Cosine annealing on SF AdamW is structurally wrong** (fern's insight): the model is undertrained, needs MORE peak-lr time, not less. SF AdamW already provides large-early/small-late effective steps via internal averaging. Outer cosine is redundant AND harmful (truncates the productive plateau).
+4. **Long warmup + higher peak LR is the next test** (edward's follow-up): if 1500-step warmup unlocks lr=7.5e-4 (previously failed at warmup=200), that confirms the SF moment-calibration mechanism behind warmup matters for peak-LR access.
 
 ## Key R35 insights
 
@@ -114,15 +121,25 @@ Per-split val: single=33.389, rc=45.420, cruise=17.257, re_rand=35.371.
 
 ## Potential next research directions
 
-1. **3-seed of lr=6e-4 + n_layers=5** — IN FLIGHT (frieren #4515). Note: baseline changed to n_layers=4; results will inform σ at old config but not new.
-2. **warmup_steps {100, 300}** — IN FLIGHT (edward #4516). Note: tested on n_layers=5 stack; compare vs new baseline 32.859.
-3. **batch_size {4, 12}** — IN FLIGHT (askeladd #4517). Note: tested on n_layers=5 stack.
-4. **n_head {2, 8} retest on n_layers=4** — IN FLIGHT (nezuko #4519). Note: tested on n_layers=5; with n_layers=4 as new baseline, n_head retest on n_layers=4 may be more valuable.
-5. **n_layers=3 depth probe** — IN FLIGHT (tanjiro #4578). Does compute-savings continue below 4?
-6. **weight_decay {5e-5, 2e-4}** — IN FLIGHT (alphonse #4522). Note: tested on n_layers=5.
-7. **LR fine sweep {5.5e-4, 6.5e-4}** — IN FLIGHT (thorfinn #4542). Note: tested on n_layers=5.
-8. **Cosine annealing LR** — IN FLIGHT (fern #4555). Note: tested on n_layers=5.
-9. **n_hidden=144 retest on n_layers=4** — With n_layers=4 at 40s/epoch, n_hidden=144 brings ~48s/epoch (old baseline rate) but with more params; previously compute-bound on n_layers=5.
+**In flight (8 students)**:
+1. **frieren #4515** — 3-seed calibration at n_layers=5 (results give σ on obsolete config)
+2. **nezuko #4519** — n_head {2, 8} on n_layers=5 (compare vs new baseline)
+3. **alphonse #4522** — weight_decay {5e-5, 2e-4} on n_layers=5
+4. **thorfinn #4542** — lr fine sweep {5.5e-4, 6.5e-4} on n_layers=5
+5. **tanjiro #4578** — n_layers=3 depth probe (R35)
+6. **fern #4591** — n_hidden=144 on n_layers=4 (R36)
+7. **edward #4592** — warmup=1500 + lr=7.5e-4 on n_layers=4 (R36)
+8. **askeladd #4593** — slice_num=16 on n_layers=4 (R36, rc-targeted)
+
+**Backlog (not yet assigned)**:
+- **mlp_ratio=3 retest on n_layers=4** — previously compute-bound at n_layers=5
+- **Per-channel surf_weight {Ux, Uy, p separately}**
+- **DropPath p=0.05 on n_layers=4 + lr=6e-4 + grad-clip stack**
+- **Geometric data augmentation** (rotation/reflection of input geometry) — rc-targeted
+- **Physics-informed auxiliary loss (continuity: div(u)=0)** — orthogonal physics constraint
+- **Test-time augmentation (TTA)** — geometric averaging at inference
+- **slice_num=4 on n_layers=4** — opposite direction from #4593, more compute saving
+- **Variant attention mechanisms** — non-slice attention (full mesh attention, hierarchical)
 10. **Geometric inductive bias for rc-split**: explicit edge/distance features, equivariant coordinates — high-value architectural axis for the chronic rc bottleneck (~45.6, resistant to optimizer/loss knobs)
 11. **Val/test single_in_dist divergence investigation**: structural partition asymmetry confirmed across R33/R34 (dropout, surf_weight both show val regression / test improvement)
 12. **Per-channel surf_weight {Ux, Uy, p separately}** — finer-grained pressure-channel control; may avoid the substitution issue with lr

@@ -2488,3 +2488,59 @@ Is n_layers=4 the true optimal depth, or does the compute-savings mechanism cont
 | PR | Student | Hypothesis | Theme |
 |----|---------|------------|-------|
 | #4578 | tanjiro | n_layers=3 depth probe: does compute-savings trend continue below 4? | architecture |
+
+---
+
+## 2026-05-17 12:10 — R36 batch: 3 closures (warmup, batch_size, cosine) + 3 new assignments
+
+Reviewed three PRs simultaneously — all assigned in R32–R34, all tested on the OLD n_layers=5 stack, all clearly regress against the new n_layers=4 baseline (val=32.859).
+
+### PR #4516 (edward, warmup_steps {100, 300}) — CLOSED
+
+- Arm A (warmup=100): val=33.683, +0.82 = +2.4σ regression vs new baseline
+- Arm B (warmup=300): val=34.155, +1.30 = +3.8σ regression
+- Vs OLD baseline (33.353): A=+0.33 (~1σ), B=+0.80 (~2.4σ)
+- **Key insight (edward's analysis)**: With grad-clip on 100% of steps, warmup primarily shapes the SF AdamW second-moment estimator, not protects against gradients. The 20% LR bump from grad-clip stability does the work, not warmup duration.
+- Verdict: warmup axis closed at 200; longer warmup leaves SF moments uncalibrated, shorter trends marginally better but not enough to win.
+
+### PR #4517 (askeladd, batch_size {4, 12}) — CLOSED
+
+- Arm A (batch=4): val=33.037, +0.18 = +0.5σ (within noise) vs new baseline
+- Arm B (batch=12): val=42.199, +9.34 = catastrophic regression (undertrained)
+- Vs OLD baseline (33.353): A=−0.32 (within noise — clean noise-repeat confirming σ=0.34)
+- **Key mechanism**: batch=12 → 4,375 optimizer steps vs batch=4 → 14,250 (3.3× more). With grad-clip's direction-only updates, **step count drives convergence, not epoch count**. The 30-min budget structurally disadvantages larger batches.
+- This corroborates the n_layers=4 win mechanism (compute savings → more steps → more wins).
+- Verdict: batch_size axis closed at 4; deeper exploration would require step-equalized comparisons, not wall-clock-equalized.
+
+### PR #4555 (fern, cosine annealing LR) — CLOSED
+
+- val=33.746, +0.89 = +2.6σ regression vs new baseline
+- Vs OLD baseline (33.353): +0.39 (~1.15σ, within noise but wrong direction)
+- **Three insights from fern's analysis (excellent)**:
+  1. T_max mismatch — cosine reached only 20% of peak by e38, not the planned 5% — annealing tail truncated
+  2. SF AdamW already has internal interpolation; outer cosine is redundant
+  3. **The model is undertrained, not overtrained** — needs MORE peak-lr exposure, not less. Cosine adds late-epoch decay the model hasn't reached the regime for.
+- Per-split: val_single_in_dist improved (−2.03) but val_rc regressed (+2.93) — same in-dist/rc tradeoff as other capacity-shift experiments. Net negative.
+- Verdict: cosine annealing axis closed; SF AdamW with grad-clip doesn't benefit from outer schedule.
+
+### Cross-PR pattern (R36 takeaway)
+
+All three closures point at the same insight: **with grad-clip + lr=6e-4 active, the limiting factor is total optimizer steps near the peak LR, not schedule shape or batch-size noise**. The n_layers=4 win mechanism (compute savings → more epochs → more steps) is the dominant frame. Future axes should be evaluated against whether they affect total useful steps within budget, not schedule shape.
+
+### Triple noise repeat (incidental σ confirmation)
+
+| Configuration | val_avg | seed/run | comment |
+|---|---|---|---|
+| n_layers=5 + lr=6e-4 (PR #4443, original) | 33.353 | seed 1 | merged baseline |
+| n_layers=5 + lr=6e-4 (PR #4517 Arm A, batch=4) | 33.037 | seed 2 | implicit re-run |
+| n_layers=5 + lr=6e-4 + warmup=100 (PR #4516 Arm A) | 33.683 | seed 3 | warmup=100 |
+
+3 single-seed runs on n_layers=5 + lr=6e-4 (with tiny config differences): 33.353, 33.037, 33.683. Mean=33.36, std=0.32 — very consistent with frieren's σ=0.34 calibration. No surprises.
+
+### R36 New Assignments
+
+| PR | Student | Hypothesis | Theme |
+|----|---------|------------|-------|
+| #4591 | fern | n_hidden=144 retest on n_layers=4 stack — capacity-for-depth trade at new budget | architecture |
+| #4592 | edward | warmup=1500 + lr=7.5e-4 on n_layers=4 — does long warmup unlock higher peak LR? | optim |
+| #4593 | askeladd | slice_num=16 retest on n_layers=4 — break rc-split structural bottleneck | architecture |
