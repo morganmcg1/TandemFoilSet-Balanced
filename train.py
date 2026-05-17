@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import random
 import statistics
@@ -294,12 +295,34 @@ class Lookahead(torch.optim.Optimizer):
     Side effect: ``self.last_sync_diff_norm`` is set to the L2 norm of
     ``θ_fast - θ_slow`` just before each sync (and ``None`` between syncs) for
     optional logging of how far the fast trajectory wanders from the slow one.
+
+    Optionally, ``alpha`` can be scheduled across training. Pass
+    ``alpha_schedule='cosine'`` along with ``alpha_start``, ``alpha_end``, and
+    ``total_steps`` to ramp the slow-weight pull strength from ``alpha_start``
+    at step 0 to ``alpha_end`` at step ``total_steps`` via a half-cosine. After
+    ``total_steps`` the value is held at ``alpha_end``.
     """
 
-    def __init__(self, base_optimizer, k=5, alpha=0.5):
+    def __init__(self, base_optimizer, k=5, alpha=0.5,
+                 alpha_schedule: str | None = None,
+                 alpha_start: float | None = None,
+                 alpha_end: float | None = None,
+                 total_steps: int | None = None):
         self.base = base_optimizer
         self.k = k
         self.alpha = alpha
+        self.alpha_schedule = alpha_schedule
+        self.alpha_start = alpha_start
+        self.alpha_end = alpha_end
+        self.total_steps = total_steps
+        if alpha_schedule is not None:
+            if alpha_schedule != "cosine":
+                raise ValueError(f"Unknown alpha_schedule: {alpha_schedule}")
+            if alpha_start is None or alpha_end is None or total_steps is None:
+                raise ValueError(
+                    "alpha_schedule requires alpha_start, alpha_end, total_steps"
+                )
+        self.current_alpha: float = self._alpha_at_step(0)
         self.step_count = 0
         self.last_sync_diff_norm: float | None = None
         self.slow_state = {}
@@ -310,6 +333,17 @@ class Lookahead(torch.optim.Optimizer):
         self.defaults = base_optimizer.defaults
         self.state = base_optimizer.state
 
+    def _alpha_at_step(self, step: int) -> float:
+        if self.alpha_schedule is None:
+            return self.alpha
+        progress = min(1.0, step / max(1, self.total_steps))
+        return (
+            self.alpha_start
+            + (self.alpha_end - self.alpha_start)
+            * 0.5
+            * (1.0 - math.cos(math.pi * progress))
+        )
+
     def zero_grad(self, set_to_none=True):
         self.base.zero_grad(set_to_none=set_to_none)
 
@@ -318,6 +352,7 @@ class Lookahead(torch.optim.Optimizer):
         loss = self.base.step(closure)
         self.step_count += 1
         self.last_sync_diff_norm = None
+        self.current_alpha = self._alpha_at_step(self.step_count)
         if self.step_count % self.k == 0:
             sq_sum = None
             for group in self.base.param_groups:
@@ -326,7 +361,7 @@ class Lookahead(torch.optim.Optimizer):
                     diff = p.data - slow
                     s = diff.pow(2).sum()
                     sq_sum = s if sq_sum is None else sq_sum + s
-                    slow.add_(diff, alpha=self.alpha)
+                    slow.add_(diff, alpha=self.current_alpha)
                     p.data.copy_(slow)
             if sq_sum is not None:
                 self.last_sync_diff_norm = float(sq_sum.sqrt().item())
@@ -572,6 +607,9 @@ class Config:
     lion_b2: float = 0.99  # Lion beta2; default matches historical baseline
     lookahead_k: int = 5
     lookahead_alpha: float = 0.5
+    lookahead_alpha_schedule: str | None = None  # None or "cosine"
+    lookahead_alpha_start: float = 0.5
+    lookahead_alpha_end: float = 0.7
 
 
 cfg = sp.parse(Config)
@@ -641,7 +679,20 @@ else:
         model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.95)
     )
 if cfg.lookahead_k > 0:
-    optimizer = Lookahead(base_optimizer, k=cfg.lookahead_k, alpha=cfg.lookahead_alpha)
+    # alpha schedule horizon matches the LR cosine T_max=17 epochs so the slow-weight
+    # pull strength reaches alpha_end at the same point the LR reaches 0.
+    _alpha_total_steps = (
+        len(train_loader) * 17 if cfg.lookahead_alpha_schedule is not None else None
+    )
+    optimizer = Lookahead(
+        base_optimizer,
+        k=cfg.lookahead_k,
+        alpha=cfg.lookahead_alpha,
+        alpha_schedule=cfg.lookahead_alpha_schedule,
+        alpha_start=cfg.lookahead_alpha_start,
+        alpha_end=cfg.lookahead_alpha_end,
+        total_steps=_alpha_total_steps,
+    )
 else:
     optimizer = base_optimizer
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(base_optimizer, T_max=17)
@@ -691,8 +742,15 @@ _base_name = "lion" if cfg.use_lion else "adamw"
 _lookahead_on = cfg.lookahead_k > 0
 _optim_name = f"lookahead-{_base_name}" if _lookahead_on else _base_name
 print(f"Base optimizer: {_base_name}  betas={_betas_per_group}  lr={_lr_per_group}  wd={_wd_per_group}")
+_lookahead_sched_desc = ""
+if _lookahead_on and cfg.lookahead_alpha_schedule is not None:
+    _lookahead_sched_desc = (
+        f", alpha_schedule={cfg.lookahead_alpha_schedule}"
+        f"({cfg.lookahead_alpha_start}->{cfg.lookahead_alpha_end}"
+        f", total_steps={optimizer.total_steps})"
+    )
 print(f"Lookahead wrap: {'ON' if _lookahead_on else 'OFF'}"
-      + (f" (k={cfg.lookahead_k}, alpha={cfg.lookahead_alpha})" if _lookahead_on else ""))
+      + (f" (k={cfg.lookahead_k}, alpha={cfg.lookahead_alpha}{_lookahead_sched_desc})" if _lookahead_on else ""))
 run.summary["optim/betas"] = list(_betas_per_group[0])
 run.summary["optim/n_param_groups"] = len(_betas_per_group)
 run.summary["optim/lr_initial"] = _lr_per_group[0]
@@ -704,6 +762,11 @@ run.summary["lion_b2"] = cfg.lion_b2
 run.summary["lookahead_k"] = cfg.lookahead_k
 run.summary["lookahead_alpha"] = cfg.lookahead_alpha
 run.summary["lookahead_on"] = _lookahead_on
+run.summary["lookahead_alpha_schedule"] = cfg.lookahead_alpha_schedule or "static"
+run.summary["lookahead_alpha_start"] = cfg.lookahead_alpha_start
+run.summary["lookahead_alpha_end"] = cfg.lookahead_alpha_end
+if _lookahead_on and cfg.lookahead_alpha_schedule is not None:
+    run.summary["lookahead_alpha_total_steps"] = optimizer.total_steps
 
 # Rolling buffer for per-step train losses to compute volatility (window=100).
 _train_loss_window: deque[float] = deque(maxlen=100)
@@ -755,6 +818,8 @@ for epoch in range(MAX_EPOCHS):
         }
         if _lookahead_on and optimizer.last_sync_diff_norm is not None:
             _log_dict["train/lookahead_sync_diff_norm"] = optimizer.last_sync_diff_norm
+        if _lookahead_on:
+            _log_dict["train/lookahead_alpha"] = optimizer.current_alpha
         wandb.log(_log_dict)
 
         epoch_vol += vol_loss.item()
