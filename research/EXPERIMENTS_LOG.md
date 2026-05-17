@@ -1,5 +1,58 @@
 # SENPAI Research Results
 
+## 2026-05-17 ~04:50 UTC — Round 24: MERGE #4266 (k=3) + Close #4334 (LR warmup) + 2 new assignments (#4369 alphonse k=3+β2, #4370 tanjiro k=2+k=4)
+
+### MERGED: PR #4266 (alphonse) — Lookahead k=3 (β2=0.999) — NEW BASELINE val=51.31/test=51.89
+
+Runs `0aj92l9d` (k=3, winner), `xc3khc3a` (k=10, failed). k=3 val=51.3066 (−5.51% vs k=5 baseline 54.30 AND −3.09% vs compound k=5+β2=0.95 baseline 52.94). **k=3+β2=0.999 BEATS k=5+β2=0.95 — k-axis is a stronger lever than β2-axis at this budget.**
+
+| Arm | k | val | Δ vs old baseline | test_3split |
+|---|---|---|---|---|
+| **k=3 (WINNER)** | 3 | **51.3066** | **−3.09% vs 52.94** | **51.8862** |
+| k=10 (failed) | 10 | 57.5076 | +8.6% | 56.8661 |
+
+Per-split val (k=3 vs k=5+β2=0.95 baseline):
+
+| Split | k=3 | Prior baseline | Δ |
+|---|---|---|---|
+| val_single_in_dist | 57.803 | 63.842 | **−9.59%** |
+| val_geom_camber_rc | 63.854 | 64.635 | −1.21% |
+| val_geom_camber_cruise | 32.409 | 32.632 | −0.68% |
+| val_re_rand | 51.159 | 50.670 | +0.97% |
+| **val_avg** | **51.307** | **52.944** | **−3.09%** |
+
+**Mechanism**: On 30-min/~6300-step budget, k=3 delivers ~2100 slow-weight updates vs k=5's ~1260 (67% more variance-reduction events). Monotone ranking k=3 < k=5 << k=10 confirmed at every epoch checkpoint. val_single_in_dist and val_geom_camber_rc both benefit dramatically (−9.59%, −1.21%). NOTE: k=5+β2=0.95 was previously the baseline; the fact that k=3+β2=0.999 beats it means k is the dominant axis.
+
+**Stack progression update**:
+
+| Merge | val | test | Δ val |
+|---|---|---|---|
+| PR #4062 fern (slice=8) | 56.895 | 55.982 | — |
+| PR #4067 alphonse (β2=0.95, slice=16) | 56.426 | 55.339 | −0.83% |
+| PR #4142 nezuko (Lookahead k=5 α=0.5) | 54.299 | 52.879 | −3.77% |
+| PR #4249 nezuko (Lookahead+β2=0.95) | 52.944 | 52.752 | −2.49% |
+| **PR #4266 alphonse (Lookahead k=3)** | **51.307** | **51.886** | **−3.09%** |
+
+Total improvement since raw seed: **−64.3%** on val.
+
+### Closed: PR #4334 (tanjiro) — LR linear warmup (360 steps) on Lookahead+β2=0.95
+
+Run `hfx8b2b2`: val=53.0459 (+3.40% WORSE vs NEW k=3 baseline 51.31), test=52.0622 (+0.34% WORSE vs NEW k=3 baseline 51.89). Closed because even without the new baseline, the mechanism was falsified:
+- val_geom_camber_rc REGRESSED +4.22% (67.36 vs 64.63) — the OPPOSITE of the hypothesis prediction
+- val_avg marginal regression +0.19% ON THE OLD BASELINE, test improved −1.31%
+
+**Budget-consumption problem identified**: warmup_steps=360 consumes ~1 epoch of the 30-min budget before cosine kicks in; best_epoch=18=final, still improving at timeout → run ended ~1 epoch behind baseline. LR warmup axis closed under this budget constraint.
+
+### New assignment: PR #4369 (alphonse) — k=3 + β2=0.95 compounding (1 arm, no code change)
+
+Test if the two biggest optimizer wins (k=3 and β2=0.95) compound additively. Previously β2=0.95 gave −2.49% on k=5; if fully orthogonal on k=3, could reach val ≈ 50.0.
+
+### New assignment: PR #4370 (tanjiro) — k=2+k=4 fine bracket (2 arms, no code change)
+
+Characterizes the k-axis limit. k=3 was confirmed winner from coarse bracket {3,5,10}. Fine bracket {2,3,4} determines if k=3 is the local optimum or if trend continues toward k=2.
+
+---
+
 ## 2026-05-17 ~04:00 UTC — Round 23: Close #4311 (camber sampler) + 1 new assignment (#4347 fern camber-bridging mixup)
 
 ### Closed: PR #4311 (fern) — Camber-stratified WeightedRandomSampler (3× oversample)
