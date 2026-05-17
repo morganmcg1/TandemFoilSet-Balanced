@@ -1,5 +1,48 @@
 # SENPAI Research Results
 
+## 2026-05-17 01:05 — Triple closure (#4192 #4180 #4173); triple reassignment (#4255 fern, #4256 edward, #4258 thorfinn) all targeting the new BL substrate
+
+### #4192 fern — R11 H61: Huber β at lr=2e-4+T_max=14+clip=1.0 (CLOSED — informative null)
+
+| Arm | β | val | test | Δval vs ctrl 56.89 |
+|-----|------|------|------|----|
+| Ctrl | 0.05 | 56.89 | 49.03 | — |
+| A | 0.03 | 61.12 | 52.70 | +4.23 |
+| B | 0.10 | 60.64 | 52.49 | +3.75 |
+
+Both arms hurt every per-split val and test. **Finding #11 extends**: β=0.05 robust at lr=2e-4+clip=1.0 substrate. Substrate now superseded by val 53.81 BL.
+
+### #4180 edward — R11 H60: Clip ratio at lr=2e-4+T_max=14 (CLOSED — informative null + Finding #25)
+
+| Arm | clip | val | test | Δval vs ctrl 56.89 |
+|-----|------|------|------|----|
+| Ctrl | 1.0 | 56.89 | 49.03 | — |
+| A | 0.7 | 59.35 | 51.03 | +2.46 |
+| B | 1.4 | 62.24 | 53.45 | +5.35 |
+
+**Finding #25**: At lr=2e-4+T_max=14, clip=1.0 sits at intersection of co-located scale + direction optima — asymmetric regression (B hurts 2× more than A). Pure scale and pure direction stories both incomplete. clip=1.0 sharply optimal.
+
+### #4173 thorfinn — R11 H59 extended: lr×T_max scan at clip=1.0 (CLOSED — informative null + Findings #26, #27)
+
+All 4 configs (T14+lr2e-4 BL, T20+lr2e-4 Arm B, T20+lr1.8e-4 Arm D, T18+lr2e-4 Arm E):
+| Arm | T_max | lr | val | test |
+|-----|------|------|------|------|
+| BL | 14 | 2e-4 | 56.89 | 49.03 |
+| B | 20 | 2.0e-4 | 56.98 | 48.34 (only test win) |
+| D | 20 | 1.8e-4 | 58.38 | 50.41 |
+| E | 18 | 2.0e-4 | 57.72 | 49.10 |
+
+**Finding #26**: lr response monotone in [1.5e-4, 2.0e-4] at T_max=20+clip=1.0 (no minimum between).
+**Finding #27**: T_max scan non-monotone at lr=2e-4+clip=1.0 — T_max=18 worse than T_max=14 and T_max=20 due to terminal-LR bimodality at the 14-epoch wall-clock cutoff.
+
+### Reassignments at new BL substrate (T_max=24 + clip=1.0 + lr=1.5e-4)
+
+- **#4255 fern (R11 H67)**: lr sweep {1.3e-4, 1.7e-4, 2.0e-4} at T_max=24+clip=1.0. Tests whether finding #22 (lr=2e-4 optimal at clip=1.0+T_max=14) extends to T_max=24.
+- **#4256 edward (R11 H68)**: fine-grained clip {0.85, 1.15} at T_max=24+lr=1.5e-4. Tests whether asymmetric clip valley persists on new substrate.
+- **#4258 thorfinn (R11 H69)**: Lion β1 sweep {0.85, 0.95} at new substrate. Last untested optimizer-state axis.
+
+---
+
 ## 2026-05-17 00:27 — #4145 alphonse T_max=24+clip MERGED (new best val 53.81 / test 45.49); #4240 alphonse triple-compose assigned
 
 ### #4145 alphonse — R11 H55 (extended): T_max=24 + grad_clip=1.0 (MERGED — **new best val 53.8098 / test 45.4943**)
