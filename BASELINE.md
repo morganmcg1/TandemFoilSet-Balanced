@@ -4,11 +4,11 @@ This is the fresh-track baseline for the Charlie local-metrics arm (research tag
 `charlie-pai2i-48h-r1`, advisor branch `icml-appendix-charlie-pai2i-48h-r1`,
 target base `icml-appendix-charlie`).
 
-## Current best configuration (merged as of 2026-05-17)
+## Current best configuration (merged as of 2026-05-17, PR #4520)
 
 | Group | Value |
 |-------|-------|
-| Model | Transolver, `n_hidden=128`, `n_layers=5`, `n_head=4`, **`slice_num=8` (PR #4107)**, **`mlp_ratio=2` (PR #4282)**, `unified_pos=False`, **FiLM head on [log_Re, AoA0, AoA1]**, **GEGLU FFN (PR #4105)** |
+| Model | Transolver, `n_hidden=128`, **`n_layers=4` (PR #4520)**, `n_head=4`, **`slice_num=8` (PR #4107)**, **`mlp_ratio=2` (PR #4282)**, `unified_pos=False`, **FiLM head on [log_Re, AoA0, AoA1]**, **GEGLU FFN (PR #4105)** |
 | FFN width | **`mlp_ratio=2` effective** (PR #4282 fixed dead-code bug: `GEGLUBlock(hidden_dim, hidden_dim, hidden_dim=int(hidden_dim * mlp_ratio))`) — inner GEGLU projection now 256-d instead of 128-d |
 | Compile | **`torch.compile(model, dynamic=True, mode="default")`** (PR #4069) — fuses FiLM affine + GEGLU gate + QKV projections; `dynamic=True` required for pad_collate variable-length batches |
 | Optim | **Schedule-Free AdamW** `schedulefree.AdamWScheduleFree(lr=5e-4, weight_decay=1e-4, warmup_steps=200)` — PR #4071; NO LR scheduler |
@@ -23,32 +23,34 @@ target base `icml-appendix-charlie`).
 | Caps  | `SENPAI_MAX_EPOCHS=50`, `SENPAI_TIMEOUT_MIN=30.0` (hard per-run wall clock) |
 | Test  | Best-val EMA checkpoint evaluated on 4 test splits at end of run; use `load_target = getattr(model, "_orig_mod", model)` to load state dict after compile |
 
-## Current best metrics (PR #4443, lr=6e-4 on grad-clip stack, single-seed, best epoch 37)
+## Current best metrics (PR #4520, n_layers=4 + lr=6e-4 + grad-clip, single-seed, best epoch 45)
 
 **Beat this to be a winner.**
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` **(primary)** | **33.353** |
-| `test_avg/mae_surf_p` | **28.826** |
-| `test/test_single_in_dist/mae_surf_p` | — |
-| `test/test_geom_camber_rc/mae_surf_p` | — |
-| `test/test_geom_camber_cruise/mae_surf_p` | — |
-| `test/test_re_rand/mae_surf_p` | — |
+| `val_avg/mae_surf_p` **(primary)** | **32.859** |
+| `test_avg/mae_surf_p` | **28.283** |
+| `test/test_single_in_dist/mae_surf_p` | 31.758 |
+| `test/test_geom_camber_rc/mae_surf_p` | 41.450 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 14.056 |
+| `test/test_re_rand/mae_surf_p` | 25.865 |
 
-Per-split val surface-p MAE at best checkpoint (single seed, epoch 37):
+Per-split val surface-p MAE at best checkpoint (single seed, epoch 45):
 
-| Split | mae_surf_p | Δ vs PR #4398 (33.68) |
+| Split | mae_surf_p | Δ vs PR #4443 (33.353) |
 |-------|------------|-----------|
-| `val_single_in_dist`     |  34.25 | +2.39 (in-dist/OOD tradeoff — structural pattern) |
-| `val_geom_camber_rc`     |  45.63 | **-2.62** |
-| `val_geom_camber_cruise` |  17.73 | -0.04 |
-| `val_re_rand`            |  35.80 | **-1.02** |
-| **avg** | **33.353** | **-0.32 (−1.0%)** |
+| `val_single_in_dist`     |  33.389 | **−0.861** |
+| `val_geom_camber_rc`     |  45.420 | **−0.210** |
+| `val_geom_camber_cruise` |  17.257 | **−0.473** |
+| `val_re_rand`            |  35.371 | **−0.429** |
+| **avg** | **32.859** | **−0.494 (−1.5%)** |
 
-Artifact: `models/model-lr-6e-4-grad-clip-20260517-072439/metrics.jsonl`
+Artifact: `models/model-n-layers-4-lr6e4-20260517-094726/metrics.jsonl`
 
-**lr change:** 5e-4 → 6e-4 (+20%). A stable clipped-gradient landscape allows the larger step size to exploit more of the gradient direction signal per step. 7.5e-4 (+50%) overshoots and oscillates — confirming 6e-4 as the local optimum in {5e-4, 6e-4, 7.5e-4}.
+**n_layers=4 mechanism:** Fewer attention layers → shorter per-epoch compute (~40s vs ~48s baseline). Within the 30-min budget, the model trains for 45 epochs vs 37 for n_layers=5. The extra 8 epochs of optimization outweigh the capacity loss from removing one attention block. n_params drops 984k→799k, VRAM 22.6→18.6 GB. All 4 val splits improved; all 4 test splits improved.
+
+**Prior baseline (PR #4443, lr=6e-4):** val=33.353 | test=28.826
 
 **IMPORTANT — 3-seed σ recalibration (PR #4440 frieren, grad-clip stack):**
 
@@ -122,13 +124,13 @@ python train.py --experiment_name grad-clip-1p0-repro --agent <name> --max_grad_
 
 **Updated from 3-seed confirmation (PR #4440 frieren, grad-clip stack):** Single-seed 1σ noise is **≈ 0.34 pts** on `val_avg/mae_surf_p` on the GRAD-CLIP stack (was 0.62 on old no-clip stack — grad-clip halved seed variance). The 2σ clear-regression threshold is ~0.68 pts above baseline.
 
-Decision thresholds for **this** baseline (val=33.353, σ=0.34):
-- **Clear win**: val ≤ **32.67** (≥0.68 pts below baseline — ≥2σ)
-- **Conservative win** (until 3-seed of lr=6e-4 confirmed): val ≤ **33.0** (≥1σ)
-- **Within noise**: val in [32.67, 34.05] — single-seed; 3-seed confirmation recommended
-- **Clear regression**: val ≥ **34.05** (≥0.68 pts above baseline — ≥2σ)
+Decision thresholds for **this** baseline (val=32.859, σ=0.34):
+- **Clear win**: val ≤ **32.18** (≥0.68 pts below baseline — ≥2σ)
+- **Conservative win**: val ≤ **32.52** (≥1σ below baseline)
+- **Within noise**: val in [32.18, 33.54] — single-seed; 3-seed confirmation recommended
+- **Clear regression**: val ≥ **33.54** (≥0.68 pts above baseline — ≥2σ)
 
-**Total improvement from calibration baseline:** 143.52 → 33.68 = **-76.5%**
+**Total improvement from calibration baseline:** 143.52 → 32.859 = **-77.1%**
 
 ### Calibration-only baseline (PR #3107, default config MSE)
 
@@ -184,3 +186,4 @@ After every merged winner, the advisor:
 | 2026-05-17 | #4398 | Gradient clipping max_norm=1.0: pre-clip norms 20–250 every step, ~100% activation rate; single_in_dist −13%, cruise −17%, re_rand −4%; rc unchanged (structural bottleneck confirmed) | **33.68** | **-6.8%** |
 | 2026-05-17 | #4440 | 3-seed baseline confirmation (grad-clip stack): true mean 34.18 ± 0.341; PR #4398's val=33.68 was −1.5σ favorable seed; σ halved vs old stack (0.62→0.34) due to gradient stabilization | N/A (calibration) | N/A |
 | 2026-05-17 | #4443 | lr 5e-4→6e-4 on grad-clip stack: rc −2.62, re_rand −1.02, test −0.83; 6e-4 local optimum in {5e-4, 6e-4, 7.5e-4}; 2.4σ below true mean 34.18 | **33.353** | **-1.0%** |
+| 2026-05-17 | #4520 | n_layers=4 on lr=6e-4 + grad-clip: compute savings → 45 epochs (vs 37); all 4 splits improved; 799k params, 18.6 GB VRAM; conservative 1.5σ win | **32.859** | **-1.5%** |
