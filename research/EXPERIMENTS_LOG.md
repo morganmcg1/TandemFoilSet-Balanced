@@ -1,5 +1,23 @@
 # SENPAI Research Results
 
+## 2026-05-17 11:41 — #4531 CLOSED (Finding #60: basin pairing diagonal closed); thorfinn→#4589 (R13 H97 basin orthogonal LR_end-matched test)
+
+### #4531 thorfinn — R13 H95: T_max×lr pairing basin test {T_max=24,T_max=26} × lr=2.5e-4 (CLOSED — Finding #60)
+
+| Arm | T_max | lr_peak | LR_end (actual) | val_avg | test_avg | Δval vs OLD BL |
+|-----|-------|---------|-----------------|---------|----------|----------------|
+| BL (ctrl) | 22 | 2e-4 | 7.18e-5 | 49.7515 | 42.8929 | — |
+| A (ddsyakzt) | 24 | 2.5e-4 | 1.087e-4 | 50.9024 | 43.9719 | +1.15 |
+| B (inmcgk2z) | 26 | 2.5e-4 | 1.250e-4 | 52.4524 | 44.7250 | +2.70 |
+
+vs NEW BL (46.7952 / 40.4866 — PR #4505): Arm A +4.11 val; Arm B +5.66 val. Clearly worse.
+
+**Finding #60**: basin pairing CLOSED in diagonal direction — (peak_LR=2.5e-4) × (T_max ∈ {24,26}) walks UP the basin floor, not down. No merge candidate. Key: cosine LR_end formula is well-calibrated (student predictions matched W&B summary exactly). Mechanism: at fixed 13-epoch budget, peak_LR=2.5e-4 spends too long at high LR → late-stage refinement degraded. Diagonal increase changes both peak_LR and LR_end simultaneously, preventing isolation. **Student's key insight**: try the orthogonal direction (hold LR_end≈7.2e-5 fixed while varying T_max+lr together) to isolate the load-bearing variable. Per-split: Arm A's only improvement is val_re_rand (−0.64), biggest regression is val_camber_rc (+2.37) vs OLD BL.
+
+New assignment: thorfinn → #4589 (R13 H97 basin orthogonal: matched LR_end across T_max={24,26} at NEW BL substrate).
+
+---
+
 ## 2026-05-17 11:05 — #4507 #4495 #4470 CLOSED (Findings #57-59); fern→#4574, askeladd→#4575, tanjiro→#4577 (new-BL orthogonal re-screens)
 
 ### #4507 fern — R13 H93: spec_norm INPUT {pi=1,pi=3} at T_max=22 (CLOSED — Finding #57)
