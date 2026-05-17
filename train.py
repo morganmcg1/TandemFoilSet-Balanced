@@ -471,6 +471,7 @@ class Config:
     lookahead_k: int = 5           # Lookahead sync period (steps between slow-weight syncs).
     lookahead_alpha: float = 0.5   # Lookahead interpolation weight (slow += alpha*(fast-slow)).
     grad_clip: float = 0.0  # PR #3497: max_norm for clip_grad_norm_; 0 disables (norm still logged)
+    use_bf16: bool = False   # bfloat16 autocast for forward+loss; default off for reproducibility
 
 
 cfg = sp.parse(Config)
@@ -618,21 +619,22 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        if cfg.cauchy_c > 0:
-            c = cfg.cauchy_c
-            r = pred - y_norm
-            sq_err = (c * c / 2) * torch.log1p((r / c) ** 2)
-        else:
-            sq_err = F.smooth_l1_loss(
-                pred, y_norm, reduction="none", beta=cfg.huber_beta
-            )  # Huber in normalized space; beta=cfg.huber_beta transitions at delta
+        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=cfg.use_bf16):
+            pred = model({"x": x_norm})["preds"]
+            if cfg.cauchy_c > 0:
+                c = cfg.cauchy_c
+                r = pred - y_norm
+                sq_err = (c * c / 2) * torch.log1p((r / c) ** 2)
+            else:
+                sq_err = F.smooth_l1_loss(
+                    pred, y_norm, reduction="none", beta=cfg.huber_beta
+                )  # Huber in normalized space; beta=cfg.huber_beta transitions at delta
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+            vol_mask = mask & ~is_surface
+            surf_mask = mask & is_surface
+            vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -658,6 +660,7 @@ for epoch in range(MAX_EPOCHS):
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    train_dt = time.time() - t0  # pure training portion (excludes val)
 
     # --- Validate ---
     # When EMA is active, evaluate the EMA copy instead of the live model.
@@ -679,6 +682,9 @@ for epoch in range(MAX_EPOCHS):
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
+        "train_time_s": train_dt,
+        "train/steps_per_sec": n_batches / max(dt, 1e-6),  # epoch-level (train+val); same definition as Arm 1
+        "train/steps_per_sec_pure": n_batches / max(train_dt, 1e-6),  # pure train portion only
         "global_step": global_step,
     }
     for split_name, m in split_metrics.items():
