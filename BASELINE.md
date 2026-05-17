@@ -1039,3 +1039,65 @@ python train.py \
 # surf_weight=10
 # Note: l1 < l2 (iso-epoch); l2 wins by step-count at 30-min budget
 ```
+
+---
+
+## 2026-05-17 12:10 — PR #4467: lr=5e-3 compound improvement (alphonse lr-retune-n-layers3)
+
+**Measured at n_layers=3 canonical: val=41.328, test_3split=40.938**
+_(Empirical confirmation at n_layers=2 pending — assigned as follow-up)_
+
+### Headline paired Δ
+
+At n_layers=3 (sf_betas=(0.95, 0.99)):
+
+| Arm | lr | val_avg | Δ vs A (paired) |
+|---|---:|---:|---:|
+| A (control) | 3e-3 | 46.100 | — |
+| B | 4e-3 | 43.293 | −3.31% |
+| **C (winner)** | **5e-3** | **41.328** | **−8.21%** |
+| D | 6e-3 | 43.033 | −4.68% |
+
+Sharply peaked optimum at lr=5e-3. Curve falls off on both sides (−3.31% at 4e-3, −4.68% at 6e-3).
+
+### Mechanism
+
+From near epoch 1 (C is −1.6% over A at ep 1, monotonically widening to −8.21% at ep 24). Cross-split dominance: C wins 3 of 4 val splits, wins test 3-split (40.938 vs A's 44.120, −7.21% paired). No divergence at any LR; grad_norm/clip_rate dynamics healthy. Terminal grad_norm/mean is _lower_ at higher LR (A=4.99, C=3.44) — consistent with finding flatter basins. This is a genuine optimizer effect (LR-driven faster convergence), orthogonal to depth.
+
+### Compound merge basis
+
+Same precedent as PR #4317 (SF-betas): from-epoch-1 effect, genuine optimizer mechanism, orthogonal to step-count. Canonical shift from n_layers=3 (measured) to n_layers=2 (current) is 1 canonical, matching the SF-betas merge at the time (measured n_layers=5 → current n_layers=3).
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-alphonse-lr-retune-n-layers3-r1-armC-lr5e3-20260517-103434-20260517-103437/metrics.jsonl`
+
+### Updated canonical config
+
+```python
+# Loss: Huber (smooth_l1_loss, beta=1.0)
+# AMP: --amp_dtype bf16
+# Scheduler: NONE (--use_schedule_free replaces cosine)
+# EMA: --use_ema --ema_decay 0.999
+# FiLM: --film_cond --two_shot_film
+# Optimizer: SF-AdamW lr=5e-3 (NEW), weight_decay=1e-4, warmup_steps=500
+# Optimizer betas: sf_beta1=0.95, sf_beta2=0.99
+# Gradient clip: --grad_clip_norm 1.0
+# Model: n_hidden=128, n_layers=2, n_head=4, slice_num=64, mlp_ratio=2
+# surf_weight=10
+# Note: lr=5e-3 measured at n_layers=3; empirical confirmation at n_layers=2 pending
+```
+
+### Reproduce (best at n_layers=3 with lr=5e-3)
+
+```bash
+cd target/
+python train.py \
+  --amp_dtype bf16 --use_ema --ema_decay 0.999 \
+  --film_cond --two_shot_film --grad_clip_norm 1.0 \
+  --use_schedule_free --lr 5e-3 \
+  --sf_beta1 0.95 --sf_beta2 0.99 \
+  --n_layers 3
+```
+
+Recommended next: lr=5e-3 at n_layers=2 canonical (empirical confirmation TBD).
