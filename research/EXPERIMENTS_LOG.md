@@ -1,5 +1,37 @@
 # SENPAI Research Results
 
+## 2026-05-17 00:27 — #4145 alphonse T_max=24+clip MERGED (new best val 53.81 / test 45.49); #4240 alphonse triple-compose assigned
+
+### #4145 alphonse — R11 H55 (extended): T_max=24 + grad_clip=1.0 (MERGED — **new best val 53.8098 / test 45.4943**)
+
+- Branch: `willowpai2i48h5-alphonse/r11-tmax20-compose-alphonse`
+- W&B group: `round11-tmax20-compose-alphonse`
+
+| Arm | Config | val_avg | test_avg | Δval vs new-BL 54.30 |
+|-----|--------|---------|----------|----------------------|
+| ctrl (fh3jmkd1) | T_max=20, no clip | 57.66 | 49.45 | — |
+| B | T_max=20 + clip=1.0 | 56.71 | 48.52 | +2.41 |
+| C | T_max=24 + no clip | 62.15 | 52.85 | +7.85 |
+| **D (winner)** | **T_max=24 + clip=1.0** | **53.81** | **45.49** | **−0.49** |
+| E | layer_scale=1e-4 + clip + T_max=20 | 54.10 | 46.90 | −0.20 |
+
+Per-split val (Arm D): in_dist 55.45, camber_rc 70.54, camber_cruise 34.18, re_rand 55.07
+Per-split test (Arm D): in_dist 48.08, camber_rc 62.12, camber_cruise 27.84, re_rand 43.93
+
+**Δ vs prior best (PR #4015 layer_scale+T_max=20, val 54.30 / test 47.29): −0.49 val / −1.80 test**
+
+**Key findings:**
+- **(clip × T_max) interaction is super-additive**: T_max=24 alone regresses catastrophically (Arm C +7.85). T_max=24 + clip=1.0 beats T_max=20+clip by 2.90 val. Clip is *essential* at T_max=24 — without it the late-LR amplifies gradient outliers.
+- **Arm E (layer_scale + clip + T_max=20 → val 54.10)** also beats old BL (54.30) but not Arm D (53.81). layer_scale helps specifically camber_rc (67.36 vs D's 70.54).
+- **Split story**: Arm D wins in_dist, camber_cruise, re_rand vs Arm E; Arm E wins camber_rc. Both beat old BL.
+- **Finding #24**: At T_max≥24, clip=1.0 becomes essential (not just helpful). The late-LR endpoint LR ~1.35e-4 with T_max=24 amplifies gradient-magnitude outliers that Lion's sign-update would otherwise mishandle. Clip=1.0 neutralizes this while preserving high-LR basin exploration.
+
+### #4240 alphonse — R11 H66: Triple composition layer_scale=1e-4 + T_max=24 + clip=1.0 (just assigned)
+
+Arm B: layer_scale + T_max=24 + clip (triple composition). Arm C: T_max=28 + clip (schedule extension). Primary prediction: val ~51–53 if layer_scale (camber_rc) and T_max=24 (in_dist/cruise) compose additively on different splits.
+
+---
+
 ## 2026-05-16 23:37 — #4148 tanjiro LR@T_max=20 CLOSED (informative null); #4231 tanjiro LR@new-substrate assigned
 
 ### #4148 tanjiro — R11 H56: LR recalibration at T_max=20 no-clip (CLOSED — informative null, substrate superseded)
