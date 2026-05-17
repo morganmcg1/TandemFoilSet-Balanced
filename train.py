@@ -459,6 +459,7 @@ class Config:
     ema_decay: float = 0.999
     compile_mode: str = ""  # empty = no compile (baseline behavior)
     slice_num: int = 64
+    huber_delta: float = 0.0  # if > 0, use Huber loss with this delta instead of MSE
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -563,9 +564,26 @@ for epoch in range(MAX_EPOCHS):
 
             # asinh loss compression on pressure channel (index 2) only.
             # Compresses heavy-tail z-scores; Ux/Uy channels unchanged.
-            sq_err_uxuy = (pred[..., :2] - y_norm[..., :2]) ** 2
-            sq_err_p = cfg.pressure_weight * (torch.asinh(pred[..., 2:3]) - torch.asinh(y_norm[..., 2:3])) ** 2
-            sq_err = torch.cat([sq_err_uxuy, sq_err_p], dim=-1)
+            if cfg.huber_delta > 0:
+                diff_uxuy = pred[..., :2] - y_norm[..., :2]
+                abs_uxuy = diff_uxuy.abs()
+                err_uxuy = torch.where(
+                    abs_uxuy < cfg.huber_delta,
+                    0.5 * diff_uxuy * diff_uxuy,
+                    cfg.huber_delta * (abs_uxuy - 0.5 * cfg.huber_delta),
+                )
+                diff_p = torch.asinh(pred[..., 2:3]) - torch.asinh(y_norm[..., 2:3])
+                abs_p = diff_p.abs()
+                err_p = cfg.pressure_weight * torch.where(
+                    abs_p < cfg.huber_delta,
+                    0.5 * diff_p * diff_p,
+                    cfg.huber_delta * (abs_p - 0.5 * cfg.huber_delta),
+                )
+                sq_err = torch.cat([err_uxuy, err_p], dim=-1)
+            else:
+                sq_err_uxuy = (pred[..., :2] - y_norm[..., :2]) ** 2
+                sq_err_p = cfg.pressure_weight * (torch.asinh(pred[..., 2:3]) - torch.asinh(y_norm[..., 2:3])) ** 2
+                sq_err = torch.cat([sq_err_uxuy, sq_err_p], dim=-1)
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
