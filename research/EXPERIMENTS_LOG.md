@@ -1,5 +1,30 @@
 # SENPAI Research Results
 
+## 2026-05-17 ~09:40 UTC — Round 37: Close #4461 (α=0.7 k=3 null) + Assign #4534 (k=4 retest on eps=1e-9)
+
+### Closed: PR #4461 (nezuko) — Lookahead α=0.7 multi-seed (3 seeds) on k=3 baseline ✗
+
+**Negative result.** α=0.7 at k=3 is decisively worse than α=0.5. All 3 seeds exceeded the abort threshold (val>52.0), mean val=53.67 vs old baseline=51.31 (+4.60%). Note: runs were on the default eps (pre-eps=1e-9-merge stack); even adding the +2.2% eps=1e-9 gain still leaves α=0.7 ~+2.4% worse than the new baseline (50.17).
+
+| Seed | W&B run | val_avg | test_3split |
+|---|---|---|---|
+| seed 1 | s4s4m0aa | 52.7379 | 52.6088 |
+| seed 2 | a0av4eof | **52.2858** | **51.6592** (best) |
+| seed 3 | oohxtc4w | 55.9808 | 54.9105 |
+| **mean** | | **53.6682** | **53.0595** |
+
+W&B spot-check on run a0av4eof confirmed: val=52.29, config k=3 α=0.7 ✓, state=finished ✓.
+
+**Key mechanism**: At k=3 (only 3 fast-step samples), α controls how much of the fast-slow gap is absorbed, not how many trajectories are averaged. Larger α at small k = faster noise leakage into slow weights, not better smoothing. The k=5+α=0.7 win (PR #4307/PRs prior) relied on k=5's longer trajectory providing enough variance reduction *before* α=0.7 absorbed it. At k=3, α=0.5 is already optimal.
+
+**Interesting observation**: best seed's test_geom_camber_rc improved −6.05% but test_single_in_dist regressed +5.55% — suggests α controls a capacity-vs-OOD-extrapolation tradeoff worth monitoring in future architectural interventions.
+
+**α-axis on k=3 is closed**: α=0.3 (failed, prior work), α=0.5 (optimal), α=0.7 (this PR, failed).
+
+**New assignment: PR #4534 (nezuko)** — k=4 retest on eps=1e-9 stack, 2 seeds. The prior k-axis characterization (#4370) was on the old baseline. eps=1e-9 changes the inner-loop gradient noise regime (smoother fast-weight trajectory), which may shift the k-optimum. k=4 led k=3 for 17/18 epochs in the prior test; with smoother trajectories the budget artefact may vanish.
+
+---
+
 ## 2026-05-17 ~08:32 UTC — Round 32: MERGE #4401 (eps=1e-9 NEW BASELINE) + Close #4370 (k-axis closed) + 2 new assignments
 
 ### MERGED: PR #4401 (edward) — AdamW eps=1e-9 on Lookahead k=3 baseline ✓ **NEW BEST**

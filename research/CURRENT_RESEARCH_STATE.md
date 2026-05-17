@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-17 ~09:35 UTC
+- **Last updated:** 2026-05-17 ~09:40 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
-- **Most recent direction from human researcher team:** None (no open issues at 09:35 UTC)
+- **Most recent direction from human researcher team:** None (no open issues at 09:40 UTC)
 
 ## Current best baseline — AdamW eps=1e-9 (PR #4401 edward, merged ~08:32 UTC)
 
@@ -53,20 +53,26 @@ Total improvement since raw seed: **−64.9%** on val.
 
 | PR | Student | Hypothesis | On baseline | Status |
 |----|---------|-----------|-------------|--------|
-| **#4490** | **edward** | eps fine grid (3e-9, 3e-10, 1e-10) | NEW eps=1e-9 baseline | NEW — follow eps direction toward numerical cliff |
-| **#4491** | **tanjiro** | β1 bracket (0.85, 0.95) on eps=1e-9 baseline | NEW eps=1e-9 baseline | NEW — β1-axis retested with full k=3+eps=1e-9 stack |
-| **#4461** | **nezuko** | Lookahead α=0.7 multi-seed (3 seeds) on k=3 | k=3 baseline (pre-eps) | WIP — now compared against eps=1e-9 bar |
+| **#4490** | **edward** | eps fine grid (3e-9, 3e-10, 1e-10) | eps=1e-9 baseline | WIP — highest priority |
+| **#4491** | **tanjiro** | β1 bracket (0.85, 0.95) on eps=1e-9 baseline | eps=1e-9 baseline | WIP |
+| **#4534** | **nezuko** | Lookahead k=4 retest on eps=1e-9 (2 seeds) | eps=1e-9 baseline | NEW — k-axis retest with smoother trajectory |
 | **#4468** | **askeladd** | FiLM conditioning on camber M channel | k=3 baseline (pre-eps) | WIP — architectural intervention for camber_rc=62.56 |
-| **#4469** | **frieren** | surf_weight bracket (5, 20) on k=3 baseline | k=3 baseline (pre-eps) | WIP — now compared against eps=1e-9 bar |
-| **#4453** | **alphonse** | n_layers depth bracket (3, 7) on k=3 | k=3 baseline (pre-eps) | WIP — now compared against eps=1e-9 bar |
-| **#4404** | **thorfinn** | mlp_ratio bracket (1.0, 1.667) on k=3 | k=3 baseline (pre-eps) | WIP (stale_wip — recovering from API rate-limit) |
-| **#4400** | **fern** | Cosine eta_min floor (5e-5, 1e-5) on k=3 | k=3 baseline (pre-eps) | WIP (stale_wip — recovering from API rate-limit) |
+| **#4469** | **frieren** | surf_weight bracket (5, 20) on k=3 baseline | k=3 baseline (pre-eps) | WIP |
+| **#4453** | **alphonse** | n_layers depth bracket (3, 7) on k=3 | k=3 baseline (pre-eps) | WIP |
+| **#4404** | **thorfinn** | mlp_ratio bracket (1.0, 1.667) on k=3 | k=3 baseline (pre-eps) | WIP |
+| **#4400** | **fern** | Cosine eta_min floor (5e-5, 1e-5) on k=3 | k=3 baseline (pre-eps) | WIP |
 
-**Note on pre-eps PRs**: #4461, #4468, #4469, #4453 were assigned against the old k=3 baseline (51.31). They now need to beat 50.17 to merge. They will still provide axis characterization even if they don't clear the new bar.
+**Note on pre-eps PRs**: #4468, #4469, #4453, #4404, #4400 were assigned against the old k=3 baseline (51.31). They now need to beat 50.17 to merge. They will still provide axis characterization even if they don't clear the new bar.
 
 All 8 GPUs occupied. Zero idle students.
 
-## Recent closures (round 32)
+## Recent closures (round 37)
+
+| PR | Student | Hypothesis | val | Action |
+|----|---------|-----------|-----|--------|
+| ✗ **#4461** | **nezuko** | **Lookahead α=0.7 multi-seed (3 seeds) on k=3** | **53.67 mean (3 seeds)** | ✗ **Closed — α-axis CLOSED at k=3 (α=0.5 is optimal). α=0.7 is +4.60% worse, mechanism doesn't transfer from k=5.** |
+
+## Prior closures (round 32)
 
 | PR | Student | Hypothesis | val | Action |
 |----|---------|-----------|-----|--------|
@@ -78,7 +84,7 @@ All 8 GPUs occupied. Zero idle students.
 - **eps=1e-9 mechanism confirmed**: smaller eps = tighter adaptive step sizes; camber_rc and re_rand most responsive; monotone direction (1e-7 hurts, 1e-9 helps); eps follow-up in flight (#4490)
 - **k=3 sharp val minimum**: per-epoch trajectory shows k=4 leads for 17 epochs but k=3 wins the final epoch sprint — budget/checkpoint-selection artifact; k-axis bracket {2,3,4,5,10} closed
 - **k=2 highly unstable**: 4/5 seeds catastrophically worse — tight sync amplifies slow-weight trajectory noise
-- **α=0.7 mechanism confirmed at k=5**: both seeds beat α=0.5 (2/2 seeds); follow-up on k=3 in flight (#4461)
+- **α-axis on k=3 CLOSED**: α=0.3 (failed prior), α=0.5 (optimal), α=0.7 (PR #4461, failed — 3 seeds, mean +4.60% vs baseline). The k=5+α=0.7 win does NOT transfer to k=3 — at k=3 there are too few fast steps to average before α absorbs the gap.
 - **camber_rc residual now 62.56** (down from 63.85 after eps=1e-9 merge). FiLM experiment (#4468) targets this directly.
 - **Capacity axis closed**: n_hidden≥192 doubles epoch time; n_head=4 at n_hidden=128 below expressive threshold
 - **Data-side axis CLOSED**: frequency reweighting + feature-space mixup both failed; architecture conditioning (#4468) is remaining path
@@ -105,7 +111,8 @@ All 8 GPUs occupied. Zero idle students.
 - weight_decay > 1e-4; LR warmup; n_hidden=192; lr=1e-3
 - LLRD under Lookahead (substitutive on test)
 - slice_num ≠ 8; n_head=4 at n_hidden=128; Lookahead α=0.3
-- k=2 (unstable, high variance); k=4 tied on test but worse on val
+- Lookahead α=0.7 at k=3 (PR #4461, 3 seeds, mean val=53.67, +4.60% worse — α-axis CLOSED at k=3)
+- k=2 (unstable, high variance); k=4 tied on test but worse on val (OLD stack; retesting on eps=1e-9 stack in #4534)
 
 ## Strategic outlook
 
@@ -114,11 +121,12 @@ All 8 GPUs occupied. Zero idle students.
 **Very close to target.** The eps=1e-9 merge puts us within striking distance. Priority focus:
 
 1. **eps fine grid (#4490 edward)** — highest EV given confirmed monotone direction; eps=3e-10 may clear both targets
-2. **α=0.7 on k=3 (#4461 nezuko)** — mechanism confirmed at k=5; k=3's higher sync frequency should amplify
+2. **β1 bracket (#4491 tanjiro)** — β1 axis untested on current optimizer configuration
 3. **FiLM conditioning (#4468 askeladd)** — architectural intervention for remaining camber_rc=62.56 residual
-4. **β1 bracket on eps=1e-9 stack (#4491 tanjiro)** — β1 axis untested on current optimizer configuration
+4. **k=4 retest (#4534 nezuko)** — k-axis retested on eps=1e-9 stack; prior k=4 result was on old stack; smoother trajectory may shift optimum
+5. **surf_weight bracket (#4469 frieren)** / **n_layers (#4453 alphonse)** / **mlp_ratio (#4404 thorfinn)** / **eta_min (#4400 fern)** — axis characterization
 
-**If eps grid and α=0.7 both come back negative** (unlikely given confirmed directions): look for the compound {eps=1e-9 + α=0.7} as the next merge candidate, then FiLM or model-family change.
+**α-axis CLOSED at k=3** (PR #4461): α=0.5 is optimal; α=0.7 fails 3/3 seeds; mechanism doesn't transfer from k=5. Do not revisit α-axis at k=3.
 
 ## Operational notes
 
