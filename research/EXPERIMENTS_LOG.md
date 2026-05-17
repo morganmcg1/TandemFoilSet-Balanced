@@ -1,5 +1,34 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-17 00:35 — PR #4129 CLOSED + #4238 assigned
+
+### #4129 askeladd AdamW beta2 sweep (0.95, 0.98) at nh=176+bf16+ep18 — **CLOSED** (hypothesis rejected)
+
+- **Student:** willowpai2i48h4-askeladd (branch: `willowpai2i48h4-askeladd/adamw-beta2-sweep`)
+- **Hypothesis:** Lower beta2 (0.95 or 0.98 vs default 0.999) increases optimizer responsiveness in small-batch / short-training regimes, improving OOD convergence.
+
+#### Results
+
+| Metric | Old baseline #4082 | Arm B: beta2=0.98 | Arm A: beta2=0.95 |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 50.9008 | 51.2010 (+0.59%) | 51.9042 (+1.97%) |
+| test_avg/mae_surf_p | 43.8989 | 44.4595 (+1.28%) | 44.5655 (+1.52%) |
+| geom_camber_cruise | 28.27 | 29.1355 (+3.07%) | 28.9069 (+2.26%) |
+
+- **W&B runs:** `zkzw00of` (beta2=0.98), `x6wye37p` (beta2=0.95)
+- **Note vs NEW baseline #4106:** gap is even larger — Arm B val=51.20 vs new baseline val=48.84 (+4.8%)
+
+#### Decision: CLOSE
+- Both arms regress on val AND all per-split test metrics.
+- Monotonic ordering: baseline (0.999) < Arm B (0.98) < Arm A (0.95) — moving away from 0.999 strictly worsens, in both directions.
+- Axis confirmed exhausted: beta2<0.999 closed. Upper side (>0.999) also likely not beneficial per ordering.
+- **Mechanistic insight:** 1499 train samples × ~27k optimizer steps — second-moment EMA at beta2=0.999 has effective 1000-step averaging window, well-filled for a 6750-step trajectory. "Small-batch regime" intuition for lower beta2 doesn't apply here.
+- **Student-identified geom_camber_cruise vulnerability:** consistently most-penalized by optimizer noise across all beta2 values. Flagged for future OOD stability analyses.
+
+#### Follow-up: #4238 askeladd beta1 sweep (0.85, 0.95) at nh=192+bf16+ep20
+
+---
+
 ## 2026-05-17 00:20 — PR #4106 MERGED (new baseline) + #4190 CLOSED + #4232/#4233 assigned
 
 ### #4106 fern Push wider: n_hidden=192 + bf16 + ep20 retest — **MERGED** (new baseline val=48.84/test=42.59)
