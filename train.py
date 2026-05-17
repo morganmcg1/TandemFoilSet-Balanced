@@ -574,12 +574,15 @@ class Config:
     optimizer: str = "adamw"   # 'adamw' or 'lion'
     beta1: float = 0.9   # Optimizer momentum coefficient (Adam/Lion)
     beta2: float = 0.999  # Optimizer second-moment coefficient (Adam) / EMA coeff (Lion)
+    compile: bool = False  # Enable torch.compile on the model
+    compile_mode: str = "default"  # torch.compile mode: 'default', 'reduce-overhead', 'max-autotune'
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
     use_bf16: bool = False   # Enable bf16 mixed-precision via torch.autocast (H95)
+    T_max: int = 15  # CosineAnnealingLR period (in epochs). Schedule horizon for cosine decay.
 
 
 cfg = sp.parse(Config)
@@ -634,6 +637,15 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+# Optional torch.compile wrap. Apply BEFORE optimizer so parameter identities
+# remain stable (torch.compile preserves the underlying tensors). Validation
+# and test reuse this same `model` reference — no re-compile per pass.
+if cfg.compile:
+    compile_t0 = time.time()
+    print(f"Compiling model: torch.compile(mode={cfg.compile_mode!r}, dynamic=True)")
+    model = torch.compile(model, mode=cfg.compile_mode, dynamic=True)
+    print(f"  torch.compile setup done in {time.time() - compile_t0:.2f}s (kernels generated lazily on first batch)")
+
 if cfg.optimizer == "lion":
     optimizer = Lion(model.parameters(), lr=cfg.lr, betas=(cfg.beta1, cfg.beta2),
                      weight_decay=cfg.weight_decay)
@@ -646,8 +658,9 @@ elif cfg.optimizer == "adamw":
 else:
     raise ValueError(f"Unknown optimizer: {cfg.optimizer!r} (expected 'adamw' or 'lion')")
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer, T_max=15, eta_min=cfg.eta_min
+    optimizer, T_max=cfg.T_max, eta_min=cfg.eta_min
 )
+print(f"Scheduler: CosineAnnealingLR(T_max={cfg.T_max}, eta_min={cfg.eta_min})")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -751,7 +764,12 @@ for epoch in range(MAX_EPOCHS):
 
     gate_stats = []
     if cfg.ffn_act in ("geglu", "swiglu"):
-        gate_stats = collect_gate_stats(model, val_loaders["val_single_in_dist"], stats, device, use_bf16=cfg.use_bf16)
+        # torch.compile wraps the model in OptimizedModule; submodule forward
+        # hooks won't fire reliably from within the compiled graph. Reach
+        # through `_orig_mod` to run the diagnostic forward uncompiled — the
+        # parameters are shared so the gate stats are identical.
+        hook_model = getattr(model, "_orig_mod", model)
+        gate_stats = collect_gate_stats(hook_model, val_loaders["val_single_in_dist"], stats, device, use_bf16=cfg.use_bf16)
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     append_metrics_jsonl(metrics_jsonl_path, {
@@ -766,6 +784,9 @@ for epoch in range(MAX_EPOCHS):
         "norm_type": cfg.norm_type,
         "ffn_act": cfg.ffn_act,
         "use_bf16": cfg.use_bf16,
+        "compile": cfg.compile,
+        "compile_mode": cfg.compile_mode if cfg.compile else None,
+        "T_max": cfg.T_max,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "gate_stats": gate_stats,
