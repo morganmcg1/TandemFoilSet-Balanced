@@ -310,17 +310,35 @@ def _pointwise_loss(pred, y_norm, loss_type: str):
     raise ValueError(f"Unknown loss_type: {loss_type!r}")
 
 
+def _zonal_surface_masks(x_raw: torch.Tensor, surf_mask: torch.Tensor):
+    """Split surface nodes into LE (x<0.1), body (0.1<=x<=0.6), TE/wake (x>0.6).
+
+    x_raw is the un-normalized node features [B, N, 24]; surface chord coords
+    live at x_raw[..., 0] in [~0, 1] for foil 1 (foil 2 is offset by stagger).
+    Returns three boolean masks ([B, N]) that partition ``surf_mask``.
+    """
+    x_coord = x_raw[..., 0]
+    le_mask = surf_mask & (x_coord < 0.1)
+    te_mask = surf_mask & (x_coord > 0.6)
+    body_mask = surf_mask & ~le_mask & ~te_mask
+    return le_mask, body_mask, te_mask
+
+
 def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_type: str = "l1", use_bf16: bool = False) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
-    ``score.py`` (float64, non-finite samples skipped).
+    ``score.py`` (float64, non-finite samples skipped). Eval surface MAE is
+    always unweighted (zonal weighting only enters the training loss).
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+    # Zone-diagnostic surface-p MAE accumulators (denormalized space, p channel only).
+    mae_p_le = mae_p_body = mae_p_te = 0.0
+    n_p_le = n_p_body = n_p_te = 0
 
     amp_ctx = (
         torch.autocast(device_type="cuda", dtype=torch.bfloat16)
@@ -375,11 +393,33 @@ def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_typ
                 n_surf += ds
                 n_vol += dv
 
+                # Zone-specific surf-p MAE on the same finite subset.
+                le_mask, body_mask, te_mask = _zonal_surface_masks(x[idx], surf_mask[idx])
+                p_abs = (pred_orig[idx, :, 2] - y[idx, :, 2]).abs().to(torch.float64)
+                p_finite = torch.isfinite(p_abs)
+                for zmask, name in [(le_mask, "le"), (body_mask, "body"), (te_mask, "te")]:
+                    zm = zmask & p_finite
+                    nz = int(zm.sum().item())
+                    if nz > 0:
+                        s = (p_abs * zm).sum().item()
+                        if name == "le":
+                            mae_p_le += s; n_p_le += nz
+                        elif name == "body":
+                            mae_p_body += s; n_p_body += nz
+                        else:
+                            mae_p_te += s; n_p_te += nz
+
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
     out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
            "loss": vol_loss + surf_weight * surf_loss}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
+    out["mae_surf_p_zonal_le"] = mae_p_le / max(n_p_le, 1)
+    out["mae_surf_p_zonal_body"] = mae_p_body / max(n_p_body, 1)
+    out["mae_surf_p_zonal_te"] = mae_p_te / max(n_p_te, 1)
+    out["n_surf_zonal_le"] = n_p_le
+    out["n_surf_zonal_body"] = n_p_body
+    out["n_surf_zonal_te"] = n_p_te
     return out
 
 
@@ -566,6 +606,9 @@ class Config:
     lion_lr: float = 1e-4  # Lion lr; canonical: AdamW_lr / 3..10
     lion_wd: float = 1e-3  # Lion wd; canonical: AdamW_wd * 3..10
     use_qk_norm: bool = False  # ViT-22B-style LayerNorm(head_dim) on Q and K before SDPA
+    use_zonal_loss: bool = False  # zonal surface weighting: w=3 if x>0.6 (TE/wake), w=2 if x<0.1 (LE), else w=1
+    zonal_w_te: float = 3.0  # weight for TE/wake region (x>0.6) when use_zonal_loss
+    zonal_w_le: float = 2.0  # weight for LE/stagnation region (x<0.1) when use_zonal_loss
 
 
 cfg = sp.parse(Config)
@@ -721,7 +764,19 @@ for epoch in range(MAX_EPOCHS):
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        if cfg.use_zonal_loss:
+            # Zonal weighting: emphasize TE/wake (x>0.6) and LE/stagnation (x<0.1)
+            # regions on the surface loss. Uses raw chord coord x[..., 0] (~[0,1]
+            # for foil 1; offset by stagger for foil 2). Eval is unweighted —
+            # this only modulates the training gradient signal.
+            x_coord = x[..., 0]  # [B, N]
+            w_zonal = torch.ones_like(x_coord)
+            w_zonal = torch.where(x_coord > 0.6, torch.full_like(w_zonal, cfg.zonal_w_te), w_zonal)
+            w_zonal = torch.where(x_coord < 0.1, torch.full_like(w_zonal, cfg.zonal_w_le), w_zonal)
+            weighted_surf_err = err * (surf_mask * w_zonal).unsqueeze(-1)
+            surf_loss = weighted_surf_err.sum() / surf_mask.sum().clamp(min=1)
+        else:
+            surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
