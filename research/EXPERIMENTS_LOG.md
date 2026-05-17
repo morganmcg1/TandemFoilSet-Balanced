@@ -1667,3 +1667,73 @@ All 3 arms ran on lr=1e-3 (14th-winner canonical). The current canonical is lr=2
 
 - Hypothesis: EMA decay=0.99 optimized on old canonical; T_max=20's aggressive cooldown changes the EMA polishing dynamics.
 - 2 arms: ema_decay ∈ {0.995, 0.999} at T_max=20 canonical.
+
+## 2026-05-17 09:58 — PR #4296 (thorfinn): Transolver slice_num=32 sweep — **MERGED (17th winner, val=31.998, −7.42%)**
+
+- Branch: `willowpai2i48h3-thorfinn/slice-num-sweep`
+- W&B runs: `yt8irybe` (slice_num=32), `ujcohp5a` (slice_num=96)
+- Hypothesis: slice_num=64 over-segments TandemFoilSet; coarser attention grouping (slice_num=32) may concentrate on physically meaningful regions (LE/TE, wake).
+
+**Result (vs canonical val=34.5662, test=35.5786):**
+
+| Arm | slice_num | val_avg/mae_surf_p | Δ val | test_excl_cruise | Δ test | best_epoch | stack |
+|---|---|---|---|---|---|---|---|
+| baseline (T_max=25) | 64 | 35.5322 | — | 37.1052 | — | 17 | T_max=25 |
+| **Arm 1 (W)** | **32** | **31.9978** | **−9.94% vs T_max=25 canonical** | **32.017** | **−13.72%** | **21** | T_max=25 |
+| Arm 2 | 96 | 45.831 | +28.9% | 46.594 | +25.5% | 14 | T_max=25 (old lr=1e-3) |
+
+Per-split test (slice_num=32): test_single_in_dist=32.904, test_geom_camber_rc=39.102, test_re_rand=24.045
+
+vs current canonical at time of merge (T_max=20, val=34.5662): **−7.42% val, −10.0% test**
+
+**Analysis:** Clear massive win. slice_num=32 reduces per-step compute enough to fit **21 epochs in 30-min cap** (vs 17 at slice_num=64) — 4 extra epochs of cosine cooldown. Coarser attention grouping also mechanically better for this small 0.66M model: 64 slices over-segments the physics, 32 lets PhysicsAttention focus on meaningful flow zones. slice_num=96 much worse (val=45.83, best_epoch=14) — consistent with direction: fewer > 64 > more. Note: run used T_max=25 stack; new canonical reverts T_max=25 (at 21 epochs, T_max=20 would over-cool; student recommended T_max≈30, pending investigation).
+
+**New canonical:** val=31.9978, test=32.017. **MERGED as 17th winner.**
+
+---
+
+## 2026-05-17 10:00 — PR #4421 (fern): Warmup retest at lr=2e-3 {warmup=1, warmup=2} — **CLOSED (superseded)**
+
+- Branch: `willowpai2i48h3-fern/warmup-retest-lr2e3`
+- W&B runs: `ppnylnze` (warmup=1), `1xip8hyk` (warmup=2)
+- Stack: lr=2e-3, T_max=25, slice_num=64
+
+| Arm | warmup | val_avg/mae_surf_p | Δ vs T_max=25 canonical | test_excl_cruise |
+|---|---|---|---|---|
+| canonical | 3 | 35.5322 | — | 37.1052 |
+| **Arm 1** | **1** | **34.4020** | **−3.18%** | **35.2326** |
+| Arm 2 | 2 | 35.8013 | +0.76% | 37.1764 |
+
+**Analysis:** warmup=1 is a genuine −3.18% val win vs T_max=25 canonical (34.4020 < 35.5322), with broad test improvements across all 3 splits. Mechanism: 2 extra peak-LR epochs absorbed by grad_clip=1.0 + SOAP direction invariance. Arm 2 (warmup=2) ≈ canonical. **However, PR #4296 (slice_num=32) merged during same tick with new canonical val=31.9978 — warmup=1 result of 34.40 does NOT beat new canonical.** The mechanism is orthogonally valid and highly likely to compound with slice_num=32. Closed and immediately re-assigned as warmup=1+slice_num=32 experiment. **Closed (superseded by architecture win).**
+
+---
+
+## 2026-05-17 10:00 — PR #4234 (askeladd): Batch size sweep {4, 6, 8} — **CLOSED (invalid stack, negative result)**
+
+- Branch: `willowpai2i48h3-askeladd/batch-size-sweep`
+- All arms ran on lr=1e-3 + T_max=25 (arms were in-flight before lr=2e-3 canonical merged)
+
+| bs | val_avg/mae_surf_p | Δ vs T_max=25 lr=1e-3 baseline |
+|---|---|---|
+| 4 (canonical) | 37.9354 | — (exact reproduce) |
+| 6 | 41.3876 | +9.1% |
+| 8 | 49.7236 | +31.2% |
+
+**Analysis:** bs=4 is optimal at lr=1e-3 (matches 14th-winner canonical exactly). Larger batch without proportional LR scaling under-trains due to fewer SGD steps in 30-min cap (bs=8 → 3196 steps vs bs=4 → 6375). Within-PR comparison valid but results not comparable to current canonical. Student's insight: LR linear scaling (bs×2 → lr×2) would be the correct experiment. VRAM headroom is real (bs=8 used 65.9 GB / 96 GB). **Closed (not a winner, wrong stack).**
+
+---
+
+## 2026-05-17 10:00 — PR #3952 (edward): Log-pressure aux loss (logp_weight=0.1) — **CLOSED (negative result)**
+
+- Branch: `willowpai2i48h3-edward/log-pressure-aux-loss`
+- W&B runs: `2vlq2p52` (baseline), `kh2nzxdv` (variant)
+- Stack: full v15 canonical (lr=2e-3, T_max=25, slice_num=64)
+
+| Arm | logp_weight | val_avg/mae_surf_p | Δ vs baseline | test_excl_cruise |
+|---|---|---|---|---|
+| 1 (baseline) | 0.0 | 35.5322 | — (exact reproduce) | 37.1053 |
+| 2 (variant) | 0.1 | 36.3235 | +2.23% regression | 37.0826 |
+
+**Analysis:** Negative result — logp_weight=0.1 regresses val by +2.23% on canonical v15 stack. This reverses the +0.62 intra-PR gain seen on the old Cauchy c=1.0 stack. Root cause: Huber β=0.01 already provides near-L1 relative weighting on small residuals, making the log-pressure aux largely redundant. The residual effect is a regularizer that hurts in-distribution generalization (val_single_in_dist +2.48). Test_excl_cruise barely moves (−0.02). **Closes log-pressure aux loss as currently formulated on the β=0.01 canonical.** A physical-space log(|p_phys|) formulation is a different experiment.
+
+**Decision: CLOSED (negative result).**
