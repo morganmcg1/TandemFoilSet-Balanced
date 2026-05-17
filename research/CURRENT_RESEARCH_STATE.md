@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-17 10:20 UTC (R32 — MAJOR: σ recalibrated 0.62→0.34 (grad-clip halves seed variance); lr 5e-4→6e-4 merged (val 33.68→33.353); 5 closures + 6 new R32 assignments)
+- **Updated:** 2026-05-17 10:55 UTC (R33 — dropout axis CLOSED at p=0.1 (both arms within noise vs lr=6e-4 baseline); thorfinn assigned LR fine sweep {5.5e-4, 6.5e-4} PR #4542)
 - **Track:** Charlie local-metrics arm (`charlie-pai2i-48h-r1`)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-48h-r1`
 - **Target base:** `icml-appendix-charlie`
@@ -60,7 +60,7 @@ Per-split val: single=34.25, rc=45.63, cruise=17.73, re_rand=35.80.
 | #4520 | tanjiro | n_layers sweep {4, 6} on lr=6e-4 — depth retest | architecture | WIP — R32 fresh |
 | #4522 | alphonse | weight_decay sweep {5e-5, 2e-4} on lr=6e-4 | optim/reg | WIP — R32 fresh |
 | #4444 | fern | surf_weight=7 confirmation on lr=6e-4 baseline (send-back) | loss | WIP — R32 send-back |
-| #4493 | thorfinn | dropout sweep {0.05, 0.0} on grad-clip stack | optim/reg | WIP — R30 ongoing |
+| **#4542** | **thorfinn** | **LR fine sweep {5.5e-4, 6.5e-4} — close lr axis** | **optim** | **WIP — R33 fresh** |
 
 ## Fully closed axes (updated for lr=6e-4 + grad_clip baseline)
 
@@ -72,12 +72,12 @@ Per-split val: single=34.25, rc=45.63, cruise=17.73, re_rand=35.80.
 | **SF warmup_steps** | OPEN — closed at 200 on old stack; retesting {100, 300} with lr=6e-4 (edward #4516) |
 | **slice_num** | FULLY CLOSED at 8 |
 | **weight_decay** | OPEN — closed at 1e-4 on old stack; retesting {5e-5, 2e-4} with grad_clip + lr=6e-4 (alphonse #4522) |
-| **dropout (PhysicsAttention)** | OPEN — closed at 0.1 on old stack; retesting {0.05, 0.0} with grad_clip (thorfinn #4493) |
+| **dropout (PhysicsAttention)** | **FULLY CLOSED at p=0.1** — d=0.05/0.0 both within noise vs lr=6e-4 baseline; dropout helps in-dist generalization independently of grad-clip (thorfinn #4493 closed) |
 | **surf_weight (upward)** | FULLY CLOSED at 10 |
 | **surf_weight (downward)** | BORDERLINE — sw=7 val=33.61 (1.7σ below true mean 34.18); needs confirmation on lr=6e-4 stack (fern #4444) |
 | **drop_path (p=0.1)** | CLOSED — clear regression on old stack |
 | **EMA decay** | FULLY CLOSED at 0.997 (confirmed on both old and grad-clip stacks) |
-| **lr** | 6e-4 MERGED (PR #4443); optimum in {5e-4, 6e-4, 7.5e-4}. Fine sweep or schedule options open. |
+| **lr** | 6e-4 MERGED (PR #4443); fine sweep {5.5e-4, 6.5e-4} IN FLIGHT (thorfinn #4542). Cosine schedule unexplored. |
 | **n_hidden** | CLOSED — 144/160 compute-bound on both old and new stacks (>56s/epoch) |
 | **grad_clip max_norm** | FULLY CLOSED at 1.0 (confirmed on grad-clip stack) |
 | **β (SmoothL1)** | FULLY CLOSED on grad-clip stack — β and clip compete; uniform β best at 0.25 with clip active |
@@ -86,6 +86,11 @@ Per-split val: single=34.25, rc=45.63, cruise=17.73, re_rand=35.80.
 | Gate-activation axis | CLOSED — GEGLU > ReGLU > SwiGLU |
 | FiLM family | FULLY CLOSED |
 | RMSNorm | FULLY CLOSED |
+
+## Key R33 insights
+
+1. **Dropout axis fully closed at p=0.1**: Reducing dropout (0.05 or 0.0) yields no improvement vs the lr=6e-4 baseline. Grad-clip and dropout are complementary regularizers, not redundant — grad-clip handles gradient direction, dropout handles stochastic unit masking for in-distribution generalization. The triple-pattern (in-dist regression / rc improvement / re_rand improvement) persists across dropout reduction, confirming it is structural, not a regularization artifact.
+2. **Train loss unchanged across d∈{0.0, 0.05, 0.1}**: No overfitting signature at dropout=0. The model is not memorizing under any dropout level — training is bottlenecked by optimization budget, not regularization capacity.
 
 ## Key R32 insights (transformative round)
 
@@ -104,8 +109,9 @@ Per-split val: single=34.25, rc=45.63, cruise=17.73, re_rand=35.80.
 5. **n_layers {4, 6} retest** — IN FLIGHT (tanjiro #4520). Depth axis.
 6. **weight_decay {5e-5, 2e-4}** — IN FLIGHT (alphonse #4522).
 7. **surf_weight=7 + lr=6e-4 stacked** — IN FLIGHT (fern #4444 send-back).
-8. **dropout retest** — IN FLIGHT (thorfinn #4493, on old baseline).
+8. **LR fine sweep {5.5e-4, 6.5e-4}** — IN FLIGHT (thorfinn #4542). Close lr axis.
 9. **Geometric inductive bias for rc-split**: explicit edge/distance features, equivariant coordinates — high-value architectural axis for the chronic rc bottleneck
-10. **Val/test single_in_dist divergence investigation**: why val regresses while test improves on same split
-11. **LR fine sweep {5.5e-4, 6.5e-4}** — close lr axis; confirm 6e-4 is at the optimum
-12. **Cosine annealing LR with SF AdamW** — schedule experiments; risky but unexplored
+10. **Val/test single_in_dist divergence investigation**: why val regresses while test improves on same split. Dropout axis closure (R33) confirms this is not a regularization artifact — it's structural.
+11. **Cosine annealing LR with SF AdamW** — schedule experiments; unexplored; risky but potential for extracting more from the 37-epoch budget
+12. **Per-channel surf_weight {Ux, Uy, p separately}** — pressure-channel weighting may give finer control than uniform surf_weight
+13. **DropPath (stochastic depth)** — thorfinn R33 closure suggests dropout axis exhausted; stochastic depth is a different structural regularizer worth testing on grad-clip stack

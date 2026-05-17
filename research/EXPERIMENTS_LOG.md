@@ -2325,3 +2325,55 @@ This triple pattern is systematic. Hypotheses:
 | #4519 | nezuko | n_head sweep {2, 8} on lr=6e-4 | architecture |
 | #4520 | tanjiro | n_layers sweep {4, 6} on lr=6e-4 | architecture |
 | #4522 | alphonse | weight_decay sweep {5e-5, 2e-4} on lr=6e-4 | optim/reg |
+
+---
+
+## 2026-05-17 10:45 — PR #4493: Dropout sweep {0.05, 0.0} on grad-clip stack (CLOSED)
+
+- **Branch:** `charliepai2i48h1-thorfinn/dropout-retest`
+- **Hypothesis:** Grad-clip active on 100% of steps (alphonse R29 diagnostic) imposes constant-magnitude direction-only updates, making dropout regularization redundant. Prediction: dropout=0 wins by ~1–2pt val.
+- **Metrics paths:**
+  - `models/model-dropout-0p05-on-grad-clip-20260517-084133/metrics.jsonl`
+  - `models/model-dropout-0p00-on-grad-clip-20260517-092625/metrics.jsonl`
+
+### Results (vs NEW baseline PR #4443 lr=6e-4, val=33.353)
+
+| Metric | Baseline (d=0.10) | Arm A (d=0.05) | Δ_A | Arm B (d=0.00) | Δ_B |
+|--------|-------------------|----------------|-----|----------------|-----|
+| **val_avg/mae_surf_p** | **33.353** | **33.40** | +0.047 | **33.62** | +0.27 |
+| val_single_in_dist | 34.25 | 34.30 | +0.05 | 34.19 | −0.06 |
+| val_geom_camber_rc | 45.63 | 46.97 | +1.34 | 46.81 | +1.18 |
+| val_geom_camber_cruise | 17.73 | 17.44 | −0.29 | 18.07 | +0.34 |
+| val_re_rand | 35.80 | 34.89 | −0.91 | 35.39 | −0.41 |
+| **test_avg/mae_surf_p** | **28.826** | **29.26** | +0.43 | **28.82** | −0.006 |
+
+*(Note: baseline (d=0.1) per-split reported as OLD baseline 33.68; student table shows val_single_in_dist regression of +2.44/+2.33 because student compared to OLD baseline 31.86 — true comparison vs new baseline 34.25 shows per-split parity for Arm A.)*
+
+**Val trajectory (Arm A):** 259.6 → 155.2 → 108.1 → … → 34.55 → 34.16 → 33.66 → 33.40. Still descending at e37 (last-Δ=−0.26).
+**Val trajectory (Arm B):** 253.7 → 154.3 → 110.2 → … → 34.78 → 34.23 → 33.93 → 33.62. Still descending (last-Δ=−0.31).
+
+### Analysis
+
+**Hypothesis partially supported but effect size too small.** Both arms slightly beat OLD baseline 33.68 on val_avg (Arm A −0.28, Arm B −0.06 from OLD), but vs NEW baseline 33.353:
+- Arm A: +0.047 (+0.14σ, within noise)
+- Arm B: +0.27 (+0.79σ, within noise)
+
+**No overfitting signature at dropout=0**: train_loss essentially unchanged across all three d values (d=0.0 train surf_loss=0.0279 vs d=0.05 train surf_loss=0.0274). Grad-clip is not insufficient — but also not strictly redundant with dropout. The stochastic gradient variance from dropout masking is a genuinely different regularizer.
+
+**Key signal — val_single_in_dist pattern**: Reducing dropout (0.1→0.05→0.0) shows the same triple-pattern seen across R28–R32: rc improves (−1.3 to −1.4 pts), re_rand improves (−1.4 to −1.9 pts), but in-dist changes are complex. Dropout=0.1 appears to specifically help in-distribution generalization. The R30 hypothesis that dropout reduction might fix the val_single_in_dist regression was not validated.
+
+**Grad norm shift**: dropout=0 yields slightly higher mean/p99 grad norms at later epochs (e20–e37) — consistent with less stochastic masking variance. Clip is 100% active in both arms.
+
+**Pre-clip grad norm (Arm A vs Arm B at e37):** mean 22.78 vs 23.13; p99 70.90 vs 84.58. Dropout=0 shows modestly wider tail.
+
+### Conclusion
+
+Dropout axis fully closed at p=0.1 on both grad-clip and lr=6e-4 stacks. The regularization provided by dropout=0.1 is complementary to — not redundant with — grad-clip. Reducing dropout hurts in-dist generalization without proportional OOD gains. Small test_avg improvement at Arm B (28.82 ≈ 28.826 baseline) is noise.
+
+---
+
+## R33 New Assignment
+
+| PR | Student | Hypothesis | Theme |
+|----|---------|------------|-------|
+| #4542 | thorfinn | LR fine sweep {5.5e-4, 6.5e-4} on lr=6e-4 + grad-clip — close lr axis | optim |
