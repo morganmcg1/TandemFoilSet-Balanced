@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 11:00
+- **Date:** 2026-05-17 11:35
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
@@ -34,7 +34,7 @@
 
 | Student | PR | Hypothesis | Stack |
 |---|---|---|---|
-| alphonse | #4513 | lr=9e-4+wd=0.001 vs lr=8e-4+wd=0.002 on n=10 stack | n=10+lr=8e-4+wd=0.001+δ=0.10+slice=32 |
+| **alphonse** | **#4581** | **LR warmup {3, 5} epochs on current best stack (with Huber δ fallback)** | n=8+lr=7e-4+wd=0.0001+δ=0.10+slice=32 |
 | tanjiro | #4424 | lr push {8e-4, 9e-4} on n=8 stack | n=8+lr=7e-4+δ=0.10+slice=32 |
 | edward | #4543 | lr=8e-4 cross-lineage transfer (n=8+lr=8e-4 ± wd=0.001) | n=8+δ=0.10+slice=32 |
 | **askeladd** | **#4561** | **slice bracket {40, 48} on current best stack** | n=8+lr=7e-4+wd=0.0001+δ=0.10 |
@@ -59,6 +59,8 @@
 | clip × δ=0.10 | clip ≤ 0.25 only | #4222, #4223 |
 | **clip on n=8+lr=7e-4** | **clip=0.25 (default) — DO NOT tighten** | **#4449 — clip 0.20/0.22 regress; clip_frac re-saturates** |
 | **wd on n=8+lr=7e-4** | **wd=0.0001 (default) — fully characterized (4-point bracket)** | **#4425 + #4479: wd=0.0001<0.002<0.001<0.0015 in val** |
+| **lr ceiling on n=10 stack** | **lr=8e-4** | **#4513 — lr=9e-4 saturates clip_frac=0.980** |
+| **wd at lr=8e-4 on n=10** | **wd=0.001** | **#4513 — wd=0.002 over-regularizes (anti-additive with high lr)** |
 | EMA | dead on current stack | #4288 |
 | bs | 2 | #4147 |
 

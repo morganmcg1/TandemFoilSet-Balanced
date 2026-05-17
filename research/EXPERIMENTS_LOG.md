@@ -5,6 +5,35 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-17 11:30 — PR #4513 (charliepai2i48h5-alphonse): lr=9e-4 vs wd=0.002 bracket on n=10+lr=8e-4 stack — CLOSED (both arms regress; lr ceiling at 8e-4 on n=10; wd-lr inverse coupling confirmed)
+
+- branch: `charliepai2i48h5-alphonse/lr9e4-wd-bracket-n10`
+- hypothesis: (1) lr=9e-4 pushes beyond #4448 winner; (2) wd=0.002 compounds with lr=8e-4
+
+| arm | lr | wd | val_avg | Δ vs current best (54.959) | test_avg | best_ep | clip_frac@best |
+|-----|-----|-----|---------|----------------------------|----------|---------|----------------|
+| arm-1 | 9e-4 | 0.001 | 56.098 | +2.07% ✗ | 48.117 | 22/22 | **0.980 (saturated)** |
+| arm-2 | 8e-4 | 0.002 | 56.212 | +2.28% ✗ | 47.929 | 22/22 | 0.964 |
+| baseline (#4448) | 8e-4 | 0.001 | 55.001 | +0.077% | 47.946 | 20/22 (non-timeout) | 0.957 |
+
+- metric artifacts: `models/model-bf16-layerscale-bs2-n10-d010-slice32-lr9e4-wd001-20260517-094221/metrics.jsonl`, `models/model-bf16-layerscale-bs2-n10-d010-slice32-lr8e4-wd002-20260517-104339/metrics.jsonl`
+
+**Analysis and conclusions:**
+
+**arm-1 (lr=9e-4) confirms lr ceiling at 8e-4 on n=10 stack**: pre-registered decision criterion fired (clip_frac=0.980 > 0.97 AND val=56.098 > 55.250). The larger lr causes early-phase optimization noise — clip_frac stays at 1.000 through ep14 before dropping. Model biased away from baseline's better basin.
+
+**arm-2 (wd=0.002 with lr=8e-4) reveals wd-lr inverse coupling**: wd=0.002 was the LOCAL OPTIMUM at lr=7e-4 default (#4406 finding). At lr=8e-4, it OVER-regularizes (+2.28% val). Mechanism: higher lr provides effective regularization via larger steps; additional wd is anti-additive, not additive. This is a coupling effect specific to the lr-wd interaction, not a generic wd-fails finding.
+
+**Test_avg story**: arm-2 test=47.929 is essentially TIED with baseline test=47.946 — the val regression doesn't translate to test. Suggests val may be noisier than test on this stack (4×100 vs 4×200 samples). Doesn't rescue the arm since checkpoint selection uses val.
+
+**Settled levers for n=10+lr=8e-4 stack:**
+- lr ceiling: 8e-4 (lr=9e-4 saturates)
+- wd at lr=8e-4: 0.001 (wd=0.002 over-regularizes)
+
+**Suggested follow-up direction**: alphonse reassigned to LR warmup on current best stack (n=8+lr=7e-4) — orthogonal untested lever. The wd-lr coupling insight is preserved as architectural knowledge.
+
+---
+
 ## 2026-05-17 10:45 — PR #4396 (charliepai2i48h5-fern): n_freqs={8, 12} on n=10 base — CLOSED (arm-2 competitive but doesn't beat current best; n_freqs response is non-monotone at default lr)
 
 - branch: `charliepai2i48h5-fern/nfreqs-sweep`
