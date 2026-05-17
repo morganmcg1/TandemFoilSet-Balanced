@@ -668,3 +668,64 @@ cd target && python train.py --agent <student> \
 (In-tree default lr=1.7e-4 is now correct — do NOT pass `--lr 2.5e-4`; in-tree defaults: T_max=80, surf_weight=30, pressure_weight=1.0, ema_decay=0.999, compile_mode=none — must pass these four explicitly.)
 
 > **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **39.8345** with a terminal `SENPAI-RESULT` marker.
+
+---
+
+## 2026-05-17 02:45 — PR #4243: slice_num=48 sweep (askeladd) — NEW BEST
+
+**New best: val_avg/mae_surf_p = 38.6750 | test_avg/mae_surf_p = 33.4948**
+
+This is a **strong win**: beats both success-criteria thresholds (val < 39.0 AND test < 33.5). Improves all four val splits and all four test splits over the previous baseline.
+
+| Metric | Previous Baseline (PR #4079, slice=64) | **New Baseline (PR #4243, slice=48)** |
+|--------|----------------------------------------|---------------------------------------|
+| **val_avg/mae_surf_p** | 39.8345 | **38.6750** (−1.159, −2.91%) |
+| **test_avg/mae_surf_p** | 33.8873 | **33.4948** (−0.392, −1.16%) |
+| val_single_in_dist | 43.6797 | **42.1400** (−1.540) |
+| val_geom_camber_rc | 53.1517 | **51.6180** (−1.534) |
+| val_geom_camber_cruise | 22.7101 | **22.4830** (−0.227) |
+| val_re_rand | 39.7965 | **38.4600** (−1.337) |
+| test_single_in_dist | 38.5031 | **37.5170** (−0.986) |
+| test_geom_camber_rc | 45.9308 | **45.6050** (−0.326) |
+| test_geom_camber_cruise | 18.9889 | **18.8310** (−0.158) |
+| test_re_rand | 32.1266 | **32.0260** (−0.101) |
+| Best epoch | 34 (timeout-bound) | 35 (timeout-bound; val still descending) |
+| Per-epoch time | ~54.2s | **51.7s (4.6% faster)** |
+| Peak VRAM | 23.84 GB | **22.60 GB** |
+| n_params | ~662,359 | **659,719** (slightly fewer) |
+
+**What changed:** `slice_num` reduced from 64 to 48. All other 12-mech stack parameters unchanged.
+
+**Why it works:** PhysicsAttention partitions the mesh into `slice_num` learned routing slices before attention. Coarser slicing (64→48) means each slice integrates over more mesh points → lower-variance gradient signal per slice → faster and better generalization on the small TandemFoilSet (~36 training geometries). The finer-slice arm (slice_num=96) regressed substantially (val=42.54, +2.71%), confirming the effect is non-monotone with slice=64 having been past the optimum.
+
+Throughput bonus: fewer attention rows → 51.7s/epoch (vs 54.2 baseline) → 35 epochs in 30 min (vs 34). Val curve still monotonically descending at ep35 (slope ~−0.16/epoch at last few epochs) — optimum not yet reached.
+
+**Model config:** n_hidden=128, n_layers=5, n_head=4, **slice_num=48**, mlp_ratio=2, GELU  
+**Optimizer:** Lion lr=1.7e-4, wd=3e-4, betas=(0.9, 0.99)  
+**Scheduler:** CosineAnnealingLR(T_max=40)  
+**Loss:** vol_loss + 25·surf_loss with asinh(z) on pressure + pressure_weight=2.0  
+**Precision:** bf16 autocast on forward+loss  
+**EMA:** decay=0.995  
+**Gradient clipping:** max_norm=1.0  
+**Compile:** torch.compile(mode='default', dynamic=True)  
+**Batch:** 4  
+**Metric artifacts:**  
+- `models/model-charliepai2i48h2-askeladd-slice-num-sweep-A-20260517-004423/metrics.jsonl` (winner, slice=48)  
+- `models/model-charliepai2i48h2-askeladd-slice-num-sweep-B-20260517-013209/metrics.jsonl` (slice=96, regressed)
+
+**Cumulative improvement from initial baseline:** 135.02 → 38.68 = **−71.3%**
+
+**Reproduce (13-mechanism stack):**
+```bash
+cd target && python train.py --agent <student> \
+    --experiment_name "<student>/your-experiment-name" \
+    --surf_weight 25 \
+    --cosine_t_max_epochs 40 \
+    --pressure_weight 2.0 \
+    --ema_decay 0.995 \
+    --compile_mode default \
+    --slice_num 48
+```
+(All in-tree defaults must still be explicitly overridden: lr=1.7e-4 [in-tree: no explicit needed, already 1.7e-4], T_max=40 [in-tree: 80], surf_weight=25 [in-tree: 30], pressure_weight=2.0 [in-tree: 1.0], ema_decay=0.995 [in-tree: 0.999], compile_mode=default [in-tree: none], **slice_num=48** [in-tree: 64].)
+
+> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **38.6750** with a terminal `SENPAI-RESULT` marker.
