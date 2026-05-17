@@ -5,7 +5,57 @@ Primary metric: `val_avg/mae_surf_p` (lower is better)
 
 ---
 
-## 2026-05-16 23:40 — PR #4123: Lookahead-Lion (Lookahead k=5/α=0.5 wrapping Lion) ← NEW PROGRAMME ALL-TIME BEST
+## 2026-05-17 04:30 — PR #4269: Lookahead-Lion α=0.7 at k=5 ← NEW PROGRAMME ALL-TIME BEST
+
+- **Student:** willowpai2i48h1-askeladd
+- **Branch:** `willowpai2i48h1-askeladd/lookahead-lion-alpha-sweep`
+- **W&B run:** `oftlu9tn` (Arm 2 — α=0.7, canonical winner; Arm 1 α=0.3: `yq4c6lyw`)
+- **Epochs:** 17/17 (best at epoch 17, cosine LR→0)
+- **Config:** Lookahead(k=5, **α=0.7**) wrapping Lion(lr=cfg.lr/3, betas=(0.9, 0.99), wd=1e-4) + GeGLU FFN + T_max=17, seed=0
+
+### Validation metrics (best checkpoint, epoch 17)
+
+| Metric | Value | Δ vs prior best (#4123 α=0.5) |
+|--------|-------|-------------------------------|
+| **val_avg/mae_surf_p** | **47.5894** ← NEW ALL-TIME BEST | −0.3841 |
+
+### Test metrics (best checkpoint)
+
+| Split | mae_surf_p |
+|-------|-----------|
+| test_single_in_dist | 46.5086 |
+| test_geom_camber_rc | 55.9690 |
+| test_geom_camber_cruise | 42.3991 |
+| test_re_rand | 39.1624 |
+| **test_avg/mae_surf_p** | **46.0098** |
+
+- **Surface MAE (test_avg):** Ux=0.6091, Uy=0.3322, p=46.0098
+- **Δ vs prior best (#4123 val=47.97 / test=46.49):** val −0.38, test −0.48
+
+### α-sweep context (k=5, seed=0)
+
+| α | val_avg/mae_surf_p | Δ vs α=0.5 |
+|---|---|---|
+| 0.3 | 51.84 | +3.87 |
+| **0.5 (prior baseline PR #4123)** | **47.97** | — |
+| **0.7 (THIS PR WINNER)** | **47.59** | **−0.38** |
+
+Monotone ordering: α=0.7 < α=0.5 < α=0.3. Basin-averaging benefits from stronger pull at k=5 regardless of base optimizer. α-optimum not yet found (α=0.8 probe assigned next).
+
+### Reproduce
+
+```bash
+cd target/ && python train.py \
+  --agent willowpai2i48h1-askeladd \
+  --wandb_name "willowpai2i48h1-askeladd/lookahead_lion_k5_a07_seed0" \
+  --wandb_group lookahead_lion_alpha_sweep \
+  --use_lion --use_geglu --seed 0 --lookahead_alpha 0.7
+```
+(default lookahead_k=5)
+
+---
+
+## 2026-05-16 23:40 — PR #4123: Lookahead-Lion (Lookahead k=5/α=0.5 wrapping Lion) ← SUPERSEDED BY #4269
 
 - **Student:** willowpai2i48h1-edward
 - **Branch:** `willowpai2i48h1-edward/lion-optimizer-triple-stack`
