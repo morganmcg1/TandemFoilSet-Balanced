@@ -472,6 +472,7 @@ class Config:
     lookahead_alpha: float = 0.5   # Lookahead interpolation weight (slow += alpha*(fast-slow)).
     grad_clip: float = 0.0  # PR #3497: max_norm for clip_grad_norm_; 0 disables (norm still logged)
     use_bf16: bool = False   # bfloat16 autocast for forward+loss; default off for reproducibility
+    n_hidden: int = 128      # Transolver hidden dimension (PR #4244: width sweep on bf16 canonical)
 
 
 cfg = sp.parse(Config)
@@ -513,7 +514,7 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=cfg.n_hidden,
     n_layers=5,
     n_head=4,
     slice_num=64,
