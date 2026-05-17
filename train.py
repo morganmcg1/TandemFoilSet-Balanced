@@ -601,6 +601,10 @@ class Config:
     T_max: int = 15  # CosineAnnealingLR period; default preserves prior behavior
     fourier_pe: bool = False   # Tancik Fourier PE on (x, z) coords (H106)
     fourier_pe_freqs: int = 8  # Number of log-spaced frequencies; adds 4*K features
+    scheduler: str = "cosine"  # 'cosine' (default) or 'wsd' (warmup-stable-decay)
+    warmup_epochs: int = 0     # WSD: linear warmup epochs (start_factor=0.01 -> 1.0)
+    stable_epochs: int = 7     # WSD: constant-LR plateau epochs at peak
+    decay_epochs: int = 14     # WSD: cosine decay epochs from peak to 0
 
 
 cfg = sp.parse(Config)
@@ -669,9 +673,48 @@ elif cfg.optimizer == "adamw":
     print(f"Optimizer: AdamW (lr={cfg.lr}, betas=({cfg.beta1}, {cfg.beta2}), wd={cfg.weight_decay})")
 else:
     raise ValueError(f"Unknown optimizer: {cfg.optimizer!r} (expected 'adamw' or 'lion')")
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer, T_max=cfg.T_max, eta_min=cfg.eta_min
-)
+if cfg.scheduler == "wsd":
+    # Warmup-Stable-Decay: linear warmup -> constant peak -> cosine decay to 0.
+    # Total schedule length = warmup_epochs + stable_epochs + decay_epochs; wall
+    # clock or --epochs may stop training earlier.
+    from torch.optim.lr_scheduler import (
+        ConstantLR,
+        CosineAnnealingLR,
+        LinearLR,
+        SequentialLR,
+    )
+    _stable = ConstantLR(optimizer, factor=1.0, total_iters=cfg.stable_epochs)
+    _decay = CosineAnnealingLR(optimizer, T_max=cfg.decay_epochs, eta_min=0.0)
+    if cfg.warmup_epochs == 0:
+        # No warmup: stable -> decay. Skip LinearLR entirely so the optimizer's
+        # initial LR is the peak (LinearLR(total_iters=0) would otherwise pin
+        # epoch-0 LR to start_factor * peak).
+        scheduler = SequentialLR(
+            optimizer,
+            schedulers=[_stable, _decay],
+            milestones=[cfg.stable_epochs],
+        )
+    else:
+        _warmup = LinearLR(
+            optimizer, start_factor=0.01, end_factor=1.0,
+            total_iters=cfg.warmup_epochs,
+        )
+        scheduler = SequentialLR(
+            optimizer,
+            schedulers=[_warmup, _stable, _decay],
+            milestones=[cfg.warmup_epochs, cfg.warmup_epochs + cfg.stable_epochs],
+        )
+    print(
+        f"Scheduler: WSD (warmup={cfg.warmup_epochs}, stable={cfg.stable_epochs}, "
+        f"decay={cfg.decay_epochs}; total={cfg.warmup_epochs + cfg.stable_epochs + cfg.decay_epochs} epochs)"
+    )
+elif cfg.scheduler == "cosine":
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=cfg.T_max, eta_min=cfg.eta_min
+    )
+    print(f"Scheduler: CosineAnnealingLR (T_max={cfg.T_max}, eta_min={cfg.eta_min})")
+else:
+    raise ValueError(f"Unknown scheduler: {cfg.scheduler!r} (expected 'cosine' or 'wsd')")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -778,6 +821,7 @@ for epoch in range(MAX_EPOCHS):
         gate_stats = collect_gate_stats(model, val_loaders["val_single_in_dist"], stats, device, use_bf16=cfg.use_bf16)
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    epoch_lr = optimizer.param_groups[0]["lr"]
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -793,6 +837,11 @@ for epoch in range(MAX_EPOCHS):
         "T_max": cfg.T_max,
         "fourier_pe": cfg.fourier_pe,
         "fourier_pe_freqs": fourier_pe_freqs,
+        "scheduler": cfg.scheduler,
+        "warmup_epochs": cfg.warmup_epochs,
+        "stable_epochs": cfg.stable_epochs,
+        "decay_epochs": cfg.decay_epochs,
+        "lr_post_step": epoch_lr,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "gate_stats": gate_stats,
