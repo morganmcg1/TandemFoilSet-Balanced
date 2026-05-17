@@ -345,6 +345,7 @@ def write_experiment_summary(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "pressure_weight": cfg.pressure_weight,
+        "surf_p_weight_mult": cfg.surf_p_weight_mult,
         "epochs_configured": cfg.epochs,
     }
 
@@ -454,6 +455,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 30.0
     pressure_weight: float = 1.0
+    surf_p_weight_mult: float = 1.0   # extra multiplier on pressure error at surface points
     epochs: int = 80
     cosine_t_max_epochs: int = 80  # default unchanged from current behavior
     ema_decay: float = 0.999
@@ -472,6 +474,10 @@ MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+print(
+    f"surf_p_weight_mult={cfg.surf_p_weight_mult}, "
+    f"effective surface p loss weight={cfg.pressure_weight * cfg.surf_p_weight_mult}"
+)
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -570,7 +576,14 @@ for epoch in range(MAX_EPOCHS):
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            # Apply surf_p_weight_mult to pressure channel ONLY at surface points.
+            # Denominator is surf_mask.sum() (not ×3) to match the original
+            # surf_loss = sum(sq_err * mask) / sum(mask) convention.
+            surf_denom = surf_mask.sum().clamp(min=1)
+            surf_mask_e = surf_mask.unsqueeze(-1)
+            surf_loss_uxuy = (sq_err[..., :2] * surf_mask_e).sum() / surf_denom
+            surf_loss_p = (sq_err[..., 2:3] * surf_mask_e).sum() / surf_denom
+            surf_loss = surf_loss_uxuy + cfg.surf_p_weight_mult * surf_loss_p
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
