@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- 2026-05-17 09:50Z — round 15 of `icml-appendix-charlie-pai2i-48h-r2`
+- 2026-05-17 11:05Z — round 15 of `icml-appendix-charlie-pai2i-48h-r2`
 - No active research directives from the human research team
-- **NEW BASELINE: val=36.5616** (PR #4358 alphonse SwiGLU Arm A merged, −5.47% from 38.675) — 14-experiment plateau broken
+- **NEW BASELINE: val=35.5046** (PR #4477 alphonse GeGLU Arm A merged, −2.89% from 36.5616). Gate-activation sweep: GeGLU > SwiGLU > BilinearGLU > GELU MLP. Cumulative: 135.02 → 35.50 = **-73.7%**
 
 ## Baseline progression
 
@@ -24,8 +24,9 @@
 | **#4079 (edward, T_max=40)** | **39.8345** | **−9.97%** | **T_max: 30→40; lr=1.7e-4 unchanged — T_max alone drives full gain** |
 | **#4243 (askeladd, slice_num=48)** | **38.6750** | **−2.91%** | **slice_num: 64→48; coarser slicing → lower-variance gradient signal per step** |
 | **#4358 (alphonse, SwiGLU param-matched)** | **36.5616** | **−5.47%** | **SwiGLU hidden_mult=0.6667: multiplicative SiLU gate × value branch; 14-exp plateau broken** |
+| **#4477 (alphonse, GeGLU param-matched)** | **35.5046** | **−2.89%** | **GeGLU (GELU gate): gating structure dominant; gate activation secondary; ablation confirms both smooth gates beat bilinear** |
 
-**Current HEAD (14 mechanisms):** Lion lr=**1.7e-4** + surf_weight=25 + asinh pressure-loss + EMA(0.995) + grad_clip(max_norm=1.0) + bf16 autocast + cosine **T_max=40** + pressure_weight=2.0 + torch.compile(mode=default, dynamic=True) + **slice_num=48** + **SwiGLU(hidden_mult=0.6667)**. val=36.5616 at epoch 33 (**converged**, not timeout-bound).
+**Current HEAD (15 mechanisms):** Lion lr=**1.7e-4** + surf_weight=25 + asinh pressure-loss + EMA(0.995) + grad_clip(max_norm=1.0) + bf16 autocast + cosine **T_max=40** + pressure_weight=2.0 + torch.compile(mode=default, dynamic=True) + **slice_num=48** + **GeGLU(hidden_mult=0.6667, glu_act_type=geglu)**. val=35.5046 at epoch 32 (timeout, still descending).
 
 **Reproduce baseline:**
 ```bash
@@ -48,18 +49,18 @@ cd target && python train.py --agent <student> \
 
 | PR | Student | Theme | Status | Baseline context |
 |----|---------|-------|--------|-----------------|
-| #4487 | askeladd | Gradient noise injection σ=0.01 (A) / σ=0.03 (B): parameter-space exploration regularization | WIP | #4306 closed (slice U-shape confirmed: 48 is optimum); parameter-space noise orthogonal to all active experiments; targets flat-minima / OOD generalization |
+| #4556 | askeladd | Grad-clip max_norm loosening: 2.0 (A) / 3.0 (B) — clip_frac=1.000 diagnostic | WIP — NEW | #4487 CLOSED (grad-noise catastrophic; clip_frac=1.000 revealed max_norm=1.0 clips every step); loosening may allow higher-confidence updates |
 | #4501 | fern | Input channel-level dropout p=0.10 (A) / p=0.20 (B): stochastic feature masking for OOD robustness | WIP — NEW | #4414 closed (surf-p-weight-mult regresses monotonically, loss-weighting axis closed); channel absence robustness orthogonal to continuous noise (#4454) |
 | #4458 | nezuko | Attention temperature: frozen τ=0.25 (A) vs τ=0.125 (B) on SwiGLU baseline | WIP — RERUNNING | Original arms beat OLD baseline (38.675) but regress vs SwiGLU baseline (36.5616); sent back with sharpened arms + `--use_swiglu` |
-| #4499 | tanjiro | Y-mirror v2: post-norm bias correction `x_norm[k]=-x_norm[k]-2·mean/std`; Arm A full flip, Arm B geom-only | WIP — NEW | #4433 closed (normalization bug — disjoint distributions in normalized space); hypothesis physically valid; v2 fixes the bug |
-| #4477 | alphonse | GeGLU / BilinearGLU: ablate SwiGLU gate mechanism (GELU gate A, bilinear B) | WIP | #4358 MERGED (SwiGLU wins); ablate whether SiLU gate or gating structure drives gain |
+| #4558 | tanjiro | Y-mirror v3: geometry-only flip (pos_y+saf_1) at p=0.15 (A) / p=0.30 (B) on GeGLU baseline | WIP — NEW | #4499 CLOSED (p=0.5 in-dist tax +3-5% > OOD benefit +0.8% on camber_rc; geometry-only confirmed correct; lower p should flip sign) |
+| #4553 | alphonse | ReGLU (ReLU gate): completes gate-activation sweep + SwiGLU calibration arm | WIP — NEW | #4477 MERGED (GeGLU wins val=35.5046); gate sweep: GeGLU>SwiGLU>BilinearGLU; ReGLU is the remaining activation to test |
 | #4435 | thorfinn | LayerScale (CaiT): per-channel learnable residual gating γ_init=1e-4 (A) / 1e-2 (B) | WIP — REBASING (rebase onto SwiGLU baseline) | #4362 closed (Lookahead triple-smoothing failure); architecture axis — how much each block contributes |
 | #4528 | edward | Slice-routing noise: Gaussian σ=0.10 (A) / σ=0.30 (B) on PhysicsAttention logits before softmax | WIP — NEW | #4454 CLOSED (feature-noise point-wise, routing absorbs it); direct attack on routing logit space per student's own diagnosis |
 | #4514 | frieren | Re-jitter: physics-meaningful Gaussian noise on log(Re) ch13, σ=0.05 (A) / σ=0.15 (B) | WIP — NEW | #4405 CLOSED (4th regularization-family failure confirms stack NOT reg-limited); physics pivot: Re-dimension augmentation targets val_re_rand directly |
 
 ## Key open questions (round 15 — NEW baseline 36.5616 after SwiGLU win)
 
-**Status: Plateau broken!** SwiGLU #4358 wins (-5.47%). val_geom_camber_rc (52.26) remains the OOD bottleneck — SwiGLU helped single_in_dist/cruise/re_rand strongly but NOT camber_rc (flat). Two critical closed-loop findings: (1) **y-mirror bug identified+fixed** (#4433→#4499: normalization asymmetry causes disjoint distributions in normalized space; v2 applies post-norm bias correction); (2) **loss-weighting axis exhausted** (#4414 closed, monotone regression; surf-p-weight-mult joins pressure_weight, surf_weight, vel_surf_weight as all explored). Active pivot: (a) **GLU ablation** (#4477); (b) **data aug fixed** (#4499 y-mirror-v2 bias-corrected); (c) **token-space** (#4454 feature-noise, #4458 attn-temp, #4501 channel-dropout); (d) **structural reg** (#4405 droppath); (e) **architecture** (#4435 layerscale rebasing); (f) **parameter-space** (#4487 grad-noise). All 8 students active.
+**Plateau broken twice!** SwiGLU #4358 (-5.47%) then GeGLU #4477 (-2.89%) = consecutive wins from gate-activation sweep. val_geom_camber_rc (50.40) is the binding OOD constraint — GeGLU helped camber_rc 3.6% (first real improvement on this split from GLU family). Active pivot: (a) **gate sweep completion** (#4553 ReGLU); (b) **grad-clip diagnostic** (#4556 askeladd — clip_frac=1.000 demands investigation); (c) **y-mirror at lower p** (#4558 tanjiro geom-only p=0.15/0.30); (d) **augmentation** (#4501 channel-dropout, #4514 re-jitter); (e) **routing noise** (#4528 edward slice-routing-noise); (f) **architecture rebasing** (#4435 thorfinn layerscale, #4458 nezuko attn-temp). Key insight: clip_frac=1.000 means max_norm=1.0 was clipping every gradient update — may be too tight on the 15-mech GeGLU stack.
 
 **Closed axes:** optimizer tuning, loss reshaping, LR-schedule disruption, normalization form (LayerNorm locked), element-level reg, structural regularization (DropPath — 4th reg failure; stack NOT reg-limited), input-representation (Fourier — convergence budget hit), point-level data aug (slice routing invariant to point perturbation). **Critical diagnostic from #4377:** PhysicsAttention slice routing is permutation-equivariant — augmentation must operate in *token space*, not point space. **Key insight from 4 reg failures:** remaining val gap (≈36.5) is capacity/data limitation at OOD splits, not overfitting — pivot to data augmentation + capacity.
 
@@ -178,7 +179,8 @@ cd target && python train.py --agent <student> \
 - **Attention temperature (slice-routing softmax)** — IN PROGRESS as #4458 (nezuko); frozen τ=0.25/1.0 vs current learnable init=0.5
 
 **Not yet tried (candidates for next round):**
-- GeGLU / BilinearGLU — IN PROGRESS as #4477 (alphonse); SwiGLU ablation GELU gate vs identity gate
+- GeGLU / BilinearGLU — MERGED as #4477 (alphonse); GELU gate beats SwiGLU (−2.89% val); bilinear regresses → #4553 ReGLU
+- ReGLU (ReLU gate) — IN PROGRESS as #4553 (alphonse); completing gate-activation sweep; hard sparsity may help OOD camber_rc
 - Pre-norm vs post-norm positioning (current model uses pre-norm; post-norm may require warmup)
 - SAM (Sharpness-Aware Minimization) — optimizer meta-algorithm; 2× compute cost; only if clean failing
 - Mixup of geometries — interpolate two training samples in loss space (input-level too complex)

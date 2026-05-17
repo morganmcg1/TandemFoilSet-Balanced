@@ -1487,3 +1487,60 @@ Stop condition triggered (val > 41.0 threshold); Arm B (warmup=3) correctly not 
 - **Two arms:** Arm A σ=0.10 (mild logit perturbation); Arm B σ=0.30 (stronger routing diversity).
 - **Primary target split:** `val_geom_camber_rc` (OOD bottleneck; novel geometries should benefit from routing robustness).
 - **Implementation:** ~10 lines: Config field, modify PhysicsAttention.forward logits computation, set `module.slice_noise_std` attribute post model creation.
+
+---
+
+## 2026-05-17 10:45 — PR #4477: GeGLU/BilinearGLU ablation ✅ MERGED — NEW BEST
+
+- **Branch:** charliepai2i48h2-alphonse/geglu
+- **Hypothesis:** Ablate SwiGLU gate activation: GELU gate (Arm A) vs no gate/bilinear (Arm B) — does the SiLU gate matter or is multiplicative gating structure the key driver?
+- **Metric artifacts:** `models/model-charliepai2i48h2-alphonse-geglu-A-20260517-083308/metrics.jsonl`, `models/model-charliepai2i48h2-alphonse-geglu-B-20260517-092534/metrics.jsonl`
+
+| Metric | Baseline (SwiGLU, #4358) | Arm A (GeGLU) — **WINNER** | Arm B (BilinearGLU) |
+|--------|--------------------------|---------------------------|---------------------|
+| **val_avg/mae_surf_p** | **36.5616** | **35.5046 (-2.89%) ✅** | 37.3064 (+2.04%) |
+| **test_avg/mae_surf_p** | **30.9654** | **30.9204 (-0.15%) ✅** | 31.3489 (+1.24%) |
+| val_single_in_dist | 37.4836 | **36.0334** | 40.9605 |
+| val_geom_camber_rc | 52.2589 | **50.4000 (-3.6%)** | 50.3946 (-3.6%) |
+| val_geom_camber_cruise | 20.0733 | 20.4577 | 20.1361 |
+| val_re_rand | 36.4308 | **35.1272** | 37.7343 |
+| Best epoch | 33 | 32 (timeout, descending) | 34 (timeout, descending) |
+| Per-epoch time | 53.7 s | 57.3 s | 53.9 s |
+| n_params | 656,519 | 656,519 | 656,519 |
+
+- **Confirmation run (Arm A):** second independent run at val=35.3411, test=30.7569 — reproducible with low variance.
+- **Analysis:**
+  1. Gating structure is dominant: both GeGLU and BilinearGLU improve val_geom_camber_rc vs SwiGLU by ~3.6% — the gating form matters more for OOD than the gate activation.
+  2. Gate activation matters for in-dist: BilinearGLU collapses on single_in_dist (40.96 vs 36.03) and re_rand (37.73 vs 35.13) — activation nonlinearity prevents linear-branch collapse.
+  3. GeGLU (GELU gate) ≈ SwiGLU (SiLU gate) + small edge: consistent with Shazeer 2020. Both smooth gates tie at this scale/dataset within training noise.
+- **Decision:** MERGED. New baseline val=35.5046, test=30.9204. **Cumulative improvement:** 135.02 → 35.50 = **-73.7%**.
+- **Gate-activation sweep so far:** GELU MLP (38.68) < BilinearGLU (37.31) < SwiGLU (36.56) < **GeGLU (35.50)** — GeGLU leading.
+
+---
+
+## 2026-05-17 10:50 — PR #4487: Gradient noise injection — CLOSED (hypothesis falsified)
+
+- **Branch:** charliepai2i48h2-askeladd/grad-noise
+- **Result:** Both arms catastrophically regress. Arm A (σ=0.01) val=46.16 (+9.60), Arm B (σ=0.03) val=44.03 (+7.47) vs new baseline 35.5046.
+- **Root cause:** Noise L2 ≈ √(656519)·σ ≈ 8.1 (Arm A) and 24.3 (Arm B) — comparable to clean gradient L2 (18-35 in steady state). Post-clip update direction meaningfully randomized. clip_frac=1.000 every epoch amplifies the effect. Lion sign-update + random direction noise = catastrophic.
+- **Key diagnostic:** clip_frac=1.000 at EVERY epoch. Pre-clip grad norms 18-183. max_norm=1.0 clips all steps. → next experiment: grad-clip loosening (#4556).
+- **Decision:** CLOSED — hypothesis falsified.
+
+---
+
+## 2026-05-17 10:50 — PR #4499: Y-mirror v2 (post-norm bias correction) — CLOSED (no_improvement)
+
+- **Branch:** charliepai2i48h2-tanjiro/y-mirror-v2
+- **Result:** Arm A (full flip, p=0.5) val=42.92 (+17.4%); Arm B (geom-only, p=0.5) val=37.65 (+3.0%). Neither beats new baseline (35.5046).
+- **Confirmed physics-correct:** bias corrections pos_y=0.737, saf_1=0.197 — implementation verified correct.
+- **OOD signal still present:** val_geom_camber_rc least-harmed split: Arm B +0.8% vs +3-5% on others. Direction correct; p=0.5 in-dist tax exceeds OOD benefit.
+- **Key finding:** Full flip of globals (Arm A) much worse — AoA/stagger bias corrections are large (AoA0=-1.14σ, stagger=+2.79σ). Geometry-only is correct.
+- **Decision:** CLOSED. → tanjiro reassigned to y-mirror-v3 (#4558): geometry-only flip at lower p (0.15/0.30).
+
+---
+
+## 2026-05-17 11:00 — New assignments: alphonse #4553 reglu, askeladd #4556 grad-clip-sweep, tanjiro #4558 y-mirror-v3
+
+- **#4553 (alphonse reglu):** ReGLU (ReLU gate) completing gate-activation sweep + SwiGLU calibration arm. Shazeer 2020 predicts ReGLU ≈ GeGLU ≈ SwiGLU; hard sparsity may help OOD.
+- **#4556 (askeladd grad-clip-sweep):** max_norm=2.0 (A) / 3.0 (B). Motivated by clip_frac=1.000 diagnostic from #4487 — every gradient update is being rescaled; loosening preserves large-gradient signal.
+- **#4558 (tanjiro y-mirror-v3):** geometry-only y-mirror at p=0.15 (A) / 0.30 (B) on GeGLU baseline. Lower p should reduce in-dist tax while retaining OOD broadening on val_geom_camber_rc.
