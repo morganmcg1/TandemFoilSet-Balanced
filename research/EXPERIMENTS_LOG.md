@@ -2492,3 +2492,56 @@ Arm B (n_layers=6) was wall-cut at ep15, still descending (41.78→41.26→39.74
 | #4337 | askeladd | **H107: log(Re) auxiliary head (λ=0.1, λ=0.01)** | MED |
 
 **Cycle summary:** Major win merged (H99 Δ-3.24 pts). 8 WIP, 0 idle. Active capacity probes H102/H103 now running against new baseline 37.26 — results will determine if any capacity axis improves further with schedule fix.
+
+---
+
+## 2026-05-17 — PR #4335: H106 Fourier PE K=4 (alphonse) — MERGED, NEW BEST
+
+- Branch: `charliepai2i48h3-alphonse/h106-fourier-pe`
+- Hypothesis: Fourier positional encoding of mesh (x,z) coordinates at K frequencies.
+
+| Arm | K | val_avg | Δ vs H99 | test 3-split |
+|-----|---|---------|-----------|--------------|
+| A | 8 | 36.9061 | -0.36 | 34.8193 |
+| **B (winner)** | **4** | **35.9159** | **-1.35** | **35.1221** |
+
+Per-split Arm B: val_single_in_dist Δ-4.86 (strong signal — Fourier features help in-dist geometry discrimination). val_geom_camber_rc +0.57 (neutral). val_geom_camber_cruise -1.33. val_re_rand +0.24. The K=4 < K=8 result suggests fewer frequencies is better at this model size/budget — K=8 over-parameterizes the input representation.
+
+**Status: MERGED. New baseline val=35.9159 / test=35.1221. Cumulative R5 gain: −30.19 pts vs H37b.**
+
+---
+
+## 2026-05-17 — PR #4332: H114 WSD 0/7/14 + 0/3/18 (nezuko) — CLOSED, beat H99 not H106
+
+| Arm | Schedule | val_avg | Δ vs H99 | test 3-split |
+|-----|---------|---------|-----------|--------------|
+| A | WSD 0/7/14 | 36.5186 | -0.74 | 34.7609 |
+| B | WSD 0/3/18 | 36.2888 | -0.97 | 35.0710 |
+
+WSD long-decay-tail mechanism confirmed at T_max=21 scale. Arm B WSD 0/3/18 has best val; Arm A WSD 0/7/14 has best test (34.76 vs H99 35.86). However NEITHER arm beats the new H106 Fourier baseline (val=35.92). Closed. The compound (WSD + Fourier) is assigned as H119.
+
+---
+
+## 2026-05-17 — PR #4333: H113 n_layers=6 + bf16 + T_max=21 (frieren) — CLOSED, negative
+
+Arm A: val=40.2690 (+3.01 vs H99 37.26, real negative). Two seeds: 40.27 and 43.34, mean 41.81. n_layers=6 is definitively worse at this compute budget — +47% params causes undertraining in 15 available epochs. Schedule confound was NOT the limiting factor; the wall-cut is the same regardless of T_max. n_layers lever closed.
+
+---
+
+## 2026-05-17 — PR #4337: H107 log(Re) aux head (askeladd) — CLOSED, tie
+
+Arm B (λ=0.01): val=37.1878 (Δ-0.07 within noise). Arm A (λ=0.1): val=39.07 (regression). The trunk already encodes Re via FiLM — aux head learns log10(Re) in <5 epochs, then provides no sustained regularization. log(Re) aux head lever closed.
+
+---
+
+## 2026-05-17 — Cycle 41 Assignments
+
+| PR | Student | Hypothesis | Priority |
+|----|---------|-----------|---------|
+| #4389 | nezuko | **H119: WSD 0/3/18 + Fourier K=4 compound** | TOP |
+| #4390 | thorfinn | **H118: compile + Fourier K=4 + bf16 + T_max=21 (correct labels)** | HIGH |
+| #4392 | alphonse | **H104: per-sample pressure std normalization** | MED |
+| #4394 | askeladd | **H120: Fourier freq sweep K=2, K=1** | MED |
+| #4395 | frieren | **H121: SWA (start ep18, ep15) on H106 stack** | MED |
+
+**Cycle summary:** H106 Fourier K=4 merged (new best val=35.92). H113/H114/H107 closed. H118 label bug fixed. 8 WIP, 0 idle.
