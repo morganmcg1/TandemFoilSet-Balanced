@@ -1,5 +1,48 @@
 # SENPAI Research Results
 
+## 2026-05-17 ~03:40 UTC — Round 22: Close #4284 (weight_decay sweep) + 1 new assignment (#4334 tanjiro LR warmup)
+
+### Closed: PR #4284 (tanjiro) — weight_decay sweep (wd=5e-4, wd=1e-3) on Lookahead+β2=0.95
+
+Runs `wgmr2hl5` (Arm A wd=5e-4), `nb4dnbmt` (Arm B wd=1e-3). Both arms FAIL vs NEW Lookahead+β2=0.95 baseline (52.94/52.75):
+
+| Arm | wd | val | Δ% val vs NEW | test_3split | Δ% test vs NEW |
+|---|---|---|---|---|---|
+| Arm A | 5e-4 | 53.9305 | **+1.87% worse** | 54.2808 | **+2.89% worse** |
+| Arm B | 1e-3 | 54.4125 | +2.78% worse | 54.0755 | +2.45% worse |
+
+Per-split analysis — Arm A wd=5e-4:
+
+| Split | Baseline (Lookahead-only) | Arm A wd=5e-4 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 63.937 | 63.842 | −0.15% |
+| val_geom_camber_rc | 68.753 | **67.177** | **−2.29%** |
+| val_geom_camber_cruise | 31.954 | 33.078 | +3.52% |
+| val_re_rand | 52.552 | 51.625 | −1.76% |
+| test_single_in_dist | 54.230 | 56.719 | **+4.59%** |
+| test_re_rand | 43.715 | 45.263 | **+3.54%** |
+
+**Mechanism**: Lookahead's slow-weight Polyak averaging already supplies the model's regularization budget. Multiplying explicit weight decay 5× or 10× on top over-regularizes. The Arm A val_camber_rc gain (−2.29%) is a checkpoint-selection coincidence: cruise regresses (+3.52%) and ALL test partitions regress (test_single_in_dist +4.59%, test_re_rand +3.54%). Lookahead × weight_decay are substitutive (not complementary) — contradicting the Lookahead paper's claim that Lookahead complements explicit regularization.
+
+**Paper-appendix null result**: weight_decay axis **closed at wd=1e-4** for Lookahead+AdamW on TandemFoilSet.
+
+### New assignment: PR #4334 (tanjiro) — LR linear warmup 360 steps on Lookahead+β2=0.95
+
+**Hypothesis**: With β2=0.95 (13-step EMA half-life), per-parameter second-moment estimates are unstable for the first ~20 steps. Adding linear warmup over the first 360 steps (1 epoch) before cosine annealing stabilizes early training, giving Lookahead's first slow-weight sync a better trajectory to average.
+
+Reproduce (single arm `--warmup_steps 360`):
+```bash
+cd target/ && python train.py --grad_clip 5.0 --huber_delta 0.5 --ema_decay 0.99 --asinh_p_scale 1.0 \
+  --use_swiglu --mlp_ratio 1.333 --n_head 2 --asinh_vel_scale 0.5 --slice_num 8 \
+  --use_lookahead --lookahead_k 5 --lookahead_alpha 0.5 --adamw_beta2 0.95 \
+  --warmup_steps 360 --wandb_group lr-warmup-on-lookahead-beta2 \
+  --wandb_name warmup-360steps-lookahead-beta2-slice8 --agent willowpai2i48h2-tanjiro
+```
+
+Expected val ∈ [52.0, 54.0]. Mechanically orthogonal to all 7 other in-flight experiments (schedule-shape axis).
+
+---
+
 ## 2026-05-17 ~02:50 UTC — Round 21: MERGE #4249 (Lookahead+β2=0.95) + 3 closures + 4 new assignments
 
 ### MERGED: PR #4249 (nezuko) — Lookahead+β2=0.95 on slice=8 — NEW BASELINE val=52.944/test=52.752

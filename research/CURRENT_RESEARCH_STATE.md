@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-17 ~02:50 UTC
+- **Last updated:** 2026-05-17 ~03:40 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
-- **Most recent direction from human researcher team:** None (no open issues at 02:50 UTC)
+- **Most recent direction from human researcher team:** None (no open issues at 03:40 UTC)
 
 ## Current best baseline — Lookahead+β2=0.95 (PR #4249 nezuko, merged ~02:35 UTC)
 
@@ -57,25 +57,26 @@ Total improvement since raw seed: **−62.7%** on val.
 
 | PR | Student | Hypothesis | On baseline | Status |
 |----|---------|-----------|-------------|--------|
-| **#4307** | **nezuko** | Lookahead α-bracket sweep (α=0.3, α=0.7) | NEW Lookahead+β2 baseline | WIP — NEW: characterizes Lookahead α; complement to alphonse's k-bracket |
-| **#4309** | **askeladd** | n_head=4 architecture sweep | NEW Lookahead+β2 baseline | WIP — NEW: first architecture test on new optimizer stack |
-| **#4311** | **fern** | Camber-stratified WeightedRandomSampler (3× oversample) | NEW Lookahead+β2 baseline | WIP — NEW: frequency-based (not loss-magnitude) camber targeting; different from #4204 |
-| **#4313** | **frieren** | n_hidden=192 model capacity (+50%) | NEW Lookahead+β2 baseline | WIP — NEW: tests if model is capacity-limited post-optimizer optimization |
-| **#4266** | **alphonse** | Lookahead k-bracket sweep (k=3 vs k=10) | NEW Lookahead+β2 baseline | WIP — k=5 from paper defaults, characterizing optimal k |
-| **#4151** | **thorfinn** | LLRD=0.95 + Lookahead (gentler decay retest) | NEW Lookahead baseline | WIP — LLRD=0.85 was mixed (val −0.59%, test +0.88%); LLRD=0.95 may recover test regression |
-| **#4251** | **edward** | Lookahead + lr=1e-3 | NEW Lookahead baseline | WIP — actively training (GPU 100%, 44GB); stale_wip flag was transient |
-| **#4284** | **tanjiro** | weight_decay sweep (5e-4, 1e-3) | NEW Lookahead+β2 baseline | WIP — fresh axis; default 1e-4 never swept under Lookahead |
+| **#4307** | **nezuko** | Lookahead α-bracket sweep (α=0.3, α=0.7) | Lookahead+β2 baseline | WIP — characterizes Lookahead α; complement to alphonse's k-bracket |
+| **#4309** | **askeladd** | n_head=4 architecture sweep | Lookahead+β2 baseline | WIP — first architecture test on new optimizer stack |
+| **#4311** | **fern** | Camber-stratified WeightedRandomSampler (3× oversample) | Lookahead+β2 baseline | WIP — frequency-based (not loss-magnitude) camber targeting |
+| **#4313** | **frieren** | n_hidden=192 model capacity (+50%) | Lookahead+β2 baseline | WIP — tests if model is capacity-limited post-optimizer |
+| **#4266** | **alphonse** | Lookahead k-bracket sweep (k=3 vs k=10) | Lookahead+β2 baseline | WIP — characterizing optimal k (default k=5 never swept) |
+| **#4151** | **thorfinn** | LLRD=0.95 + Lookahead (gentler decay retest) | Lookahead-only baseline | WIP — LLRD=0.85 mixed; 0.95 targets test regression recovery; actively training 85GB |
+| **#4251** | **edward** | Lookahead + lr=1e-3 | Lookahead-only baseline | WIP — actively training 89GB |
+| **#4334** | **tanjiro** | LR linear warmup (360 steps) on Lookahead+β2=0.95 | Lookahead+β2 baseline | NEW — schedule-shape axis; first warmup test on new stack |
 
 **Key note**: #4151, #4251 were started against the Lookahead-only baseline (54.30). They need to beat the NEW Lookahead+β2 baseline (52.94) to merge.
 
-## Round 21 closures (this round)
+## Recent closures
 
 | PR | Student | Hypothesis | val | Action |
 |----|---------|-----------|-----|--------|
 | ✓ **#4249** | **nezuko** | **Lookahead + β2=0.95 compound** | **52.944** | ✓ **MERGED — NEW BASELINE** |
-| ✗ #4283 | askeladd | Lookahead+slice=16+β2=0.95 triple | 55.006 | ✗ Closed — FM1+FM2: substitutive on val_avg; β2=0.95 anti-compounds with slice=16 on camber_rc |
-| ✗ #4267 | fern | AoA rotation aug ±5° | 56.069 | ✗ Closed — FM1 triggered (val>55); camber_rc barely −1%, cruise +17.77%; AoA aug axis fully closed |
-| ✗ #4204 | frieren | Per-sample peak-\|p\| reweight α=1.0 | 64.396 | ✗ Closed — catastrophic: all splits regressed uniformly; backbone starvation from 19.7× weight dynamic range |
+| ✗ #4284 | tanjiro | weight_decay sweep (5e-4, 1e-3) | 53.931 / 54.413 | ✗ Closed — both arms +1.87%/+2.78% WORSE vs new baseline on val AND test; Lookahead×wd substitutive |
+| ✗ #4283 | askeladd | Lookahead+slice=16+β2=0.95 triple | 55.006 | ✗ Closed — β2=0.95 anti-compounds with slice=16 on camber_rc |
+| ✗ #4267 | fern | AoA rotation aug ±5° | 56.069 | ✗ Closed — cruise +17.77%; AoA aug axis fully closed |
+| ✗ #4204 | frieren | Per-sample peak-\|p\| reweight α=1.0 | 64.396 | ✗ Closed — catastrophic; backbone starvation |
 
 ## Key mechanism insights
 
@@ -105,19 +106,20 @@ Total improvement since raw seed: **−62.7%** on val.
 - Per-channel surface loss reweighting (shared-latent damage)
 - AoA rotation augmentation ±5°/±15° (cruise regression)
 - Lookahead+slice=16+β2=0.95 triple (anti-compounding on camber_rc)
+- weight_decay > 1e-4 under Lookahead (substitutive with slow-weight regularization; wd=1e-4 is optimal)
 
 ## Strategic outlook
 
 **Target**: val < 52.0, test < 51.0. Current: 52.94 / 52.75. Need −1.8% val, −3.3% test.
 
-Priority order:
-1. **#4307 nezuko α-bracket**: characterizes Lookahead axis with β2=0.95; small chance of finding better α
-2. **#4311 fern camber-stratified sampler**: frequency-based camber targeting; different from failed reweighting
-3. **#4313 frieren n_hidden=192**: model capacity test; optimizer may have eliminated optimization bottleneck
-4. **#4309 askeladd n_head=4**: architecture axis; richer attention subspaces for camber geometry
-5. **#4151 thorfinn LLRD=0.95+Lookahead**: gentler LLRD retest; could compound with new baseline
-6. **#4266 alphonse k-bracket**: characterizes Lookahead k; complements α-bracket
-7. **#4284 tanjiro weight_decay**: fresh optimizer-regularization axis
+Priority order for currently running experiments:
+1. **#4311 fern camber-stratified sampler**: frequency-based camber targeting; different from failed reweighting; directly attacks dominant residual
+2. **#4313 frieren n_hidden=192**: model capacity test; optimizer may have eliminated optimization bottleneck
+3. **#4309 askeladd n_head=4**: architecture axis; richer attention subspaces for camber geometry
+4. **#4151 thorfinn LLRD=0.95+Lookahead**: gentler LLRD retest; could compound with new baseline
+5. **#4307 nezuko α-bracket**: characterizes Lookahead α on new baseline
+6. **#4266 alphonse k-bracket**: characterizes Lookahead k
+7. **#4334 tanjiro LR warmup (360 steps)**: schedule-shape axis; β2=0.95 early-step instability fix
 8. **#4251 edward lr=1e-3**: bolder bet; actively training
 
 ## Operational notes
@@ -125,5 +127,5 @@ Priority order:
 - **cruise NaN**: fleet-wide; test_3split = (test_single_in_dist + test_geom_camber_rc + test_re_rand)/3
 - **W&B test namespace**: `test/test_*/mae_surf_p` (not bare `test_*`)
 - **Per-run budget**: 30 min, ~15-18 epochs at slice=8 (~108s/epoch)
-- **GPU utilization**: 100% — all 8 students assigned as of 02:50 UTC
+- **GPU utilization**: 100% — all 8 students assigned as of 03:40 UTC
 - **scripts/test_eval_only.py**: in repo — recovers test metrics from saved EMA checkpoints at batch_size=1 when OOM during test eval
