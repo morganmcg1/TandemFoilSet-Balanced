@@ -1,0 +1,6 @@
+usage: train.py [-h] [--lr float] [--weight_decay float] [--batch_size int]
+                [--surf_weight float] [--epochs int] [--splits_dir str]
+                [--experiment_name [str]] [--agent [str]] [--debug bool]
+                [--skip_test bool] [--ema_decay float] [--sf_warmup_steps int]
+                [--max_grad_norm float]
+train.py: error: unrecognized arguments: --warmup_steps 300
