@@ -1,5 +1,37 @@
 # SENPAI Research Results
 
+## 2026-05-17 12:30 — #4391 #4372 CLOSED (Findings #46-47); tanjiro→#4470 (R13 H88 bs@T_max=22), thorfinn→#4471 (R13 H89 lr-down@T_max=22)
+
+### #4391 tanjiro — R13 H80: LR {2.3e-4, 2.5e-4} at T_max=22 (CLOSED — Finding #46)
+
+| Arm | lr | run | val_avg | test_avg | Δ val vs BL (49.75) |
+|-----|----|-----|---------|----------|---|
+| BL | 2e-4 | 1neonugr | 49.75 | 42.89 | — |
+| A | 2.3e-4 | — | 51.66 | 44.14 | **+1.91** ✗ |
+| B | 2.5e-4 | — | 49.87 | 42.75 | **+0.12** (within σ) |
+
+**Finding #46**: lr=2.3e-4's T_max=20 directional win (Finding #39: −0.41 val, camber_cruise −2.45) **inverts** at T_max=22. The cruise gain at T_max=20 was conditional on T_max=20 substrate: at T_max=22, lr=2.3e-4 pushes the epoch-13 LR above the resonance point (see Finding #47). lr=2.5e-4 marginal test edge (−0.14), but val flat within σ — not a win. lr axis upward direction exhausted at T_max=22. Directional signals: Arm B lr=2.5e-4 had camber_rc test −1.90 (only split that improved), possibly a high-noise single-seed artifact.
+
+New assignment: tanjiro → #4470 (R13 H88 batch_size {2, 8} at T_max=22 — fresh axis, never swept).
+
+---
+
+### #4372 thorfinn — R12 H79: T_max fine grid {21, 23} around T_max=22 optimum (CLOSED — Finding #47)
+
+| Arm | T_max | run | val_avg | test_avg | Δ val vs BL | LR@epoch13 |
+|-----|-------|-----|---------|----------|-------------|------------|
+| BL | 22 | 1neonugr | 49.75 | 42.89 | — | 7.18e-5 |
+| A | 23 | eiyxv9mo | 53.67 | 46.39 | **+3.92** ✗ | 7.97e-5 |
+| B | 21 | 0340tvyo | 55.53 | 46.99 | **+5.77** ✗ | 6.35e-5 |
+
+Per-split Arm A (T_max=23) vs BL: in_dist +4.53, camber_rc +3.61, camber_cruise +3.78, re_rand +3.73 — uniform regression across all splits. Per-split Arm B (T_max=21): in_dist +8.02, camber_rc +8.25, camber_cruise +3.06, re_rand +3.77.
+
+**Finding #47**: T_max=22 is a **sharp local optimum** under SENPAI_TIMEOUT_MINUTES=30 (13-epoch effective horizon). ±1 step costs ≥3.9 val on both val and test. Excellent mechanistic insight from student: the 'win' at T_max=22 is a **resonance between cosine LR schedule and the 13-epoch effective training horizon** — at epoch 13, T_max=22 delivers exactly LR 7.18e-5 (optimal), T_max=23 → 7.97e-5 (too slow-decaying), T_max=21 → 6.35e-5 (too fast-decaying). Safe T_max range: [21, 23] (no divergence found). T_max axis closed at the new BL substrate. Follow-up: lr downward probe (#4471) tests whether the resonance can shift.
+
+New assignment: thorfinn → #4471 (R13 H89 lr {1.5e-4, 1.7e-4} at T_max=22 — completes 5-point lr × T_max=22 grid).
+
+---
+
 ## 2026-05-17 11:00 — #4326 #4329 #4346 CLOSED (Findings #43-45); alphonse→#4434 (R13 H85 Huber β@T_max=22), edward→#4436 (R13 H86 wd@T_max=22), fern→#4437 (R13 H87 σ-calib@T_max=22)
 
 ### #4326 alphonse — R12 H75: Huber β sweep at new BL substrate (CLOSED — Finding #43)

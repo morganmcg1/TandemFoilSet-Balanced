@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-17 (~11:00 UTC) — #4326 #4329 #4346 CLOSED (Findings #43-45: Huber β=0.10 cruise signal, β1 axis closed, σ_T20 established). alphonse→#4434 (R13 H85 Huber@T_max=22), edward→#4436 (R13 H86 wd@T_max=22), fern→#4437 (R13 H87 σ-calib@T_max=22). All 8 students at T_max=22 substrate. 8/8 staffed.
+- **Date:** 2026-05-17 (~12:30 UTC) — #4391 #4372 CLOSED (Findings #46-47: lr composition inverts at T_max=22, T_max=22 sharp resonance optimum). tanjiro→#4470 (R13 H88 bs@T_max=22), thorfinn→#4471 (R13 H89 lr-down@T_max=22). All 8 students staffed.
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
@@ -51,16 +51,16 @@ Key mechanism: Lower cosine-endpoint LR at T_max=22 (~1.24e-4 within 14 epochs v
 
 | PR | Student | Hypothesis | Status | Substrate |
 |----|---------|------------|--------|-----------|
-| **#4434** | **alphonse** | **R13 H85: Huber β {0.10, 0.15} at T_max=22 (compose #4326 cruise signal)** | **Just assigned** | T_max=22 — loss-function axis |
-| **#4436** | **edward** | **R13 H86: wd {2e-3, 3e-3} at T_max=22 (transfer Finding #42 cruise/re_rand signal)** | **Just assigned** | T_max=22 — regularization axis |
-| **#4437** | **fern** | **R13 H87: Multi-seed BL replication at T_max=22 (σ calibration)** | **Just assigned** | T_max=22 — σ calibration (CRITICAL) |
+| **#4470** | **tanjiro** | **R13 H88: batch_size {2, 8} at T_max=22 (fresh axis, never swept)** | **Just assigned** | T_max=22 — batch-size axis |
+| **#4471** | **thorfinn** | **R13 H89: lr {1.5e-4, 1.7e-4} at T_max=22 (downward probe, completes 5-pt lr grid)** | **Just assigned** | T_max=22 — lr axis |
+| **#4434** | **alphonse** | **R13 H85: Huber β {0.10, 0.15} at T_max=22 (compose #4326 cruise signal)** | In flight | T_max=22 — loss-function axis |
+| **#4436** | **edward** | **R13 H86: wd {2e-3, 3e-3} at T_max=22 (transfer Finding #42 cruise/re_rand signal)** | In flight | T_max=22 — regularization axis |
+| **#4437** | **fern** | **R13 H87: Multi-seed BL replication at T_max=22 (σ calibration — CRITICAL)** | In flight | T_max=22 — σ calibration |
 | **#4419** | **askeladd** | **R13 H83: ls {5e-5, 1e-5} at T_max=22** | In flight | T_max=22 — ls axis |
 | **#4420** | **nezuko** | **R13 H84: surf_weight {15, 20} at T_max=22** | In flight | T_max=22 — loss-weighting axis |
 | **#4408** | **frieren** | **R13 H82: Lion β2 {0.95, 0.995} at T_max=22** | In flight | T_max=22 — optimizer-state axis |
-| **#4391** | **tanjiro** | **R13 H80: LR {2.3e-4, 2.5e-4} at T_max=22** | In flight (lr=2.3e-4 val 52.67, lr=2.5e-4 running) | T_max=22 — lr axis |
-| #4372 | thorfinn | R12 H79: T_max {21, 23} fine grid | T_max=23 DONE (val 53.67), T_max=21 running | T_max=22 probe — cliff |
 
-**All 8 students now at T_max=22 substrate.** R12 closed. R13 in full swing.
+**All 8 students at T_max=22 substrate.** R13 in full swing.
 
 **σ_T20 established** (PR #4346 fern, Finding #45): 5-seed σ_val = 1.70, σ_test = 1.40. Merge thresholds: <1 val = noise, 1-2 val = weak signal, ≥2 val = robust. camber_rc has σ ~3.4 (extra caution for rc-only improvements).
 
@@ -69,7 +69,8 @@ Key mechanism: Lower cosine-endpoint LR at T_max=22 (~1.24e-4 within 14 epochs v
 **Key directional signals for active R13 probes**:
 - Huber β=0.10: cruise −2.96 val at T_max=20 (Finding #43) — may compose at T_max=22 (#4434)
 - wd=2e-3: cruise −3.73 val / re_rand −0.86 val at T_max=20 (Finding #42) — may compose at T_max=22 (#4436)
-- lr=2.3e-4: in flight at T_max=22 (#4391), val 52.67 so far (arm A done, arm B running)
+- **lr axis at T_max=22 — 5-point grid**: {1.5e-4, 1.7e-4} (#4471, just assigned) + BL 2e-4 + {2.3e-4, 2.5e-4} (closed #4391 — both regress). Upward lr direction exhausted. Downward in flight.
+- **batch_size**: never swept in this launch. bs={2, 8} vs BL bs=4 in flight (#4470 tanjiro).
 - ls=5e-5: directional at T_max=20, testing transfer to T_max=22 (#4419)
 - surf_weight=15/20: never tested at T_max=22 (#4420)
 
@@ -77,6 +78,8 @@ Key mechanism: Lower cosine-endpoint LR at T_max=22 (~1.24e-4 within 14 epochs v
 
 | PR | Student | Result | Note |
 |----|---------|--------|------|
+| #4391 | tanjiro | lr {2.3e-4, 2.5e-4} at T_max=22: both regress (+1.91/+0.12 val). **Finding #46**: lr composition inverts at T_max=22 — T_max=20 cruise gain does not transfer. lr upward direction closed. | CLOSED |
+| #4372 | thorfinn | T_max {21, 23} at BL: T_max=23 +3.92 val, T_max=21 +5.77 val. **Finding #47**: T_max=22 is sharp resonance optimum under 13-epoch timeout (LR 7.18e-5 @ epoch 13 is the sweet spot). T_max axis closed. | CLOSED |
 | #4346 | fern | 5-seed replication at T_max=20: σ_val=1.70, σ_test=1.40, σ_camber_rc=3.43. **Finding #45**: T_max=20 noise floor established — <1 val gain = noise, ≥2 = robust. T_max=22 σ in flight (#4437). | CLOSED |
 | #4329 | edward | Lion β1 {0.85, 0.95} at T_max=20+clip: β1=0.85 unstable (2/4 diverge), β1=0.95 +3.83 vs new BL. **Finding #44**: β1=0.9 robustly optimal, axis closed at all substrates. | CLOSED |
 | #4326 | alphonse | Huber β {0.03, 0.10} at T_max=20+clip: β=0.10 wins −1.15 val with **camber_cruise −2.96 val**. **Finding #43**: β=0.10 directional cruise signal; R13 follow-up at T_max=22 (#4434). | CLOSED |
@@ -93,7 +96,7 @@ Key mechanism: Lower cosine-endpoint LR at T_max=22 (~1.24e-4 within 14 epochs v
 | #4231 | tanjiro | LR recalibration: lr=1.7e-4 directional winner at old substrate. Test regresses vs new BL. **Finding #32**: LR finding for follow-up at new BL → #4315. | CLOSED |
 | #4214 | frieren | EMA@layer_scale+T_max=20: timeout-truncated. **Finding #28**: layer_scale stabilises ema=0.999 but slow. | CLOSED |
 
-## Key findings (cumulative, 45)
+## Key findings (cumulative, 47)
 
 1. **FiLM on log(Re)** contributes −4.35 val / −4.56 test under n_fourier=0.
 2. **EMA(0.997)** contributes +4.4 val on top of Lion.
@@ -133,6 +136,8 @@ Key mechanism: Lower cosine-endpoint LR at T_max=22 (~1.24e-4 within 14 epochs v
 36. **lr=1.5e-4 is a SHARP local minimum at T_max=24+clip+no-ls**: all wider LR arms ({1.3, 1.7, 2.0}×1e-4) regress ≥2.2 val. Finding #22 (clip shifts lr optimum to 2e-4 at T_max=14) does NOT generalize to T_max=24; elevated late-schedule LR at T_max=24 already provides effective high-LR. LR axis fully closed at old substrate.
 37. **T_max=22 is the new optimum — first sub-50 val, camber_cruise regression fixed**: lower cosine-endpoint LR (~1.24e-4 at epoch 14) vs T_max=20 (~1.34e-4) gives the small-gradient cruise domain better convergence. Win is broad-based (all 4 val splits, 3 of 4 test). T_max=16 regresses (+1.97 val) confirming the mechanism: higher time-averaged LR (more T_max) is beneficial IF the endpoint LR is simultaneously lower. Safe range with ls: T_max ∈ [20, 22]; T_max=24 diverges (Finding #33). Follow-up: T_max=23 cliff-edge probe (#4372).
 38. **EMA axis closed at new BL substrate** (T_max=20+ls+clip+lr=2e-4): ema=0.995 regresses +1.48 val, ema=0.999 catastrophically bad +6.46 val (worst on ALL 4 splits). Root cause: 13-epoch wall-clock budget means ema=0.999's long averaging window is dominated by early-training weights — starvation-bottlenecked, not stability-bottlenecked. Layer_scale does NOT allow ema=0.999 to compete within this budget. EMA axis robustly closed across all 3 substrates (Findings #28+#34+#38): ema=0.997 is the optimum everywhere.
+47. **T_max=22 is sharp resonance optimum under 13-epoch timeout** (Finding #47, thorfinn #4372): ±1 step costs ≥3.9 val. Root cause: cosine LR schedule delivers LR=7.18e-5 @ epoch 13 at T_max=22 — T_max=23 overshoots (7.97e-5), T_max=21 undershoots (6.35e-5). T_max axis fully closed. Follow-up: lr downward probe (#4471) tests whether the resonance point shifts.
+46. **lr composition inverts at T_max=22** (Finding #46, tanjiro #4391): lr=2.3e-4 val 51.66 (+1.91 regression), lr=2.5e-4 val 49.87 (+0.12). The T_max=20 directional cruise win (Finding #39) does not transfer at T_max=22. LR upward direction exhausted at the new BL substrate. Downward lr probe in flight (#4471).
 45. **σ_val ≈ 1.7 / σ_test ≈ 1.4 at T_max=20 substrate** (Finding #45, fern #4346 5-seed): per-split σ highest on camber_rc (3.4 val). Merge thresholds: <1 val = noise, ≥2 val = robust. T_max=22 σ TBD (fern #4437 in flight).
 44. **Lion β1 axis closed at T_max=20+clip substrate** (Finding #44, edward #4329): β1=0.85 diverges/crashes (2/4 launches) — too-fast momentum at clip=1.0+ls+lr=2e-4. β1=0.95 marginal (+0.50 val vs old BL, +3.83 vs new). β1=0.9 robustly optimal. Axis closed across all substrates (Findings #30+#44).
 43. **Huber β=0.10 wins at T_max=20 substrate** (Finding #43, alphonse #4326): beats old BL by −1.15 val / −0.45 test. **camber_cruise −2.96 val / −2.29 test** — largest cruise gain across all R12 sweeps. in_dist −1.42 val, re_rand −0.52 val (improvements). Only camber_rc hurt (+0.32 val test +1.40). Does NOT beat new BL (+2.18 val) as run at T_max=20. Strong R13 candidate → #4434.
@@ -141,27 +146,27 @@ Key mechanism: Lower cosine-endpoint LR at T_max=22 (~1.24e-4 within 14 epochs v
 40. **Effective warmup_epochs=0 throughout programme** (Finding #40): train.py:799 constructs plain `CosineAnnealingLR` — no LambdaLR/SequentialLR wrapper, no warmup flag. Every BL run has used zero linear warmup; LR starts at peak on epoch 0. Zero warmup is stable at the new BL substrate (lr=2e-4 + clip=1.0 + ls=1e-4). If implemented, warmup would be a novel untested positive axis, not a correction of broken status quo.
 39. **lr=2.3e-4 directional winner at T_max=20+ls+clip substrate**: val −0.41 / test −0.48 vs lr=2e-4 BL (old BL, doesn't reach new BL). Key per-split finding: camber_cruise improves strongly (−2.45 val / −2.11 test) while camber_rc regresses (+1.83 val / +1.95 test). The endpoint LR mechanism is consistent with Finding #37: higher lr at T_max=20 → slightly lower noise at convergence for the small-gradient regime. Lead for R13: lr=2.3e-4 at T_max=22 may compose additively (#4391 tanjiro).
 
-## R12 focus: T_max=22 established as new BL — fine-grid probe ongoing
+## R13 focus: Sweeping T_max=22 substrate hyperparameter axes
 
-**Immediate priority**: #4372 thorfinn T_max={21, 23} probe.
-- T_max=23 is the cliff-edge test: does improvement continue toward T_max=24 divergence point?
-- T_max=21 completes the 1-step grid (20→21→22→23) for a clean paper-facing comparison.
+**T_max axis CLOSED** (Finding #47). T_max=22 is the sharp resonance optimum — no further T_max sweeps.
 
-**R12 hyperparameter sweeps in flight at T_max=20**: All 6 axis sweeps (#4315–#4346 minus thorfinn) are testing at T_max=20 (the now-superseded substrate). They will yield directional findings but are unlikely to beat the new BL (49.75 at T_max=22). Plan:
-- Let them complete — GPU time already committed
-- Close as informative findings with directional notes for R13
-- R13 will re-test the most promising axis winners at T_max=22
+**Open axes at T_max=22** (in flight or just assigned):
+- **batch_size**: never swept — bs={2, 8} vs BL bs=4 (#4470 tanjiro)
+- **lr downward**: 5-point grid {1.5, 1.7, 2.0, 2.3, 2.5}×1e-4 — downward probe in flight (#4471 thorfinn)
+- **Huber β**: β={0.10, 0.15} composition (#4434 alphonse)
+- **wd**: wd={2e-3, 3e-3} composition (#4436 edward)
+- **ls**: ls={5e-5, 1e-5} transfer (#4419 askeladd)
+- **surf_weight**: {15, 20} (#4420 nezuko)
+- **Lion β2**: {0.95, 0.995} (#4408 frieren)
+- **σ_T22 calibration**: 3-seed replication (#4437 fern — CRITICAL)
 
-**T_max axis summary**:
+**T_max axis summary** (CLOSED):
 - T_max=14: old start (BL chain)
-- T_max=16: regresses (Finding in PR #4320 — more sustained high LR hurts camber_rc)  
-- T_max=20: current BL chain intermediate (val 53.08)
-- **T_max=22: CURRENT BEST (val 49.75, −3.32)**
-- T_max=23: next probe (cliff edge)
+- T_max=16: regresses
+- T_max=20: BL chain intermediate (val 53.08)
+- **T_max=22: CURRENT BEST (val 49.75) — sharp resonance under 13-epoch timeout**
+- T_max=21: +5.77 val regression (LR too fast-decaying at epoch 13)
+- T_max=23: +3.92 val regression (LR too slow-decaying at epoch 13)
 - T_max=24: DIVERGES at ls substrate (Finding #33)
-
-T_max=24 EXCLUDED from all future ls experiments.
-
-Old BL substrate (T_max=24+clip, no-ls) now fully closed — all students reassigned to new BL substrate axes.
 
 **Note on guard parser issue**: Advisor template comments containing `SENPAI-RESULT: {...}` (literal brace placeholder) trip the merge guard parser. Future advisor comments should use "SENPAI-RESULT JSON marker" or similar instead of the literal template.
