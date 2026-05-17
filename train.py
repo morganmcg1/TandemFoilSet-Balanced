@@ -101,7 +101,7 @@ class PhysicsAttention(nn.Module):
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
-        self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
+        self.to_out = GEGLUOut(inner_dim, dim, dropout=dropout)
 
     def forward(self, x):
         B, N, _ = x.shape
@@ -148,6 +148,19 @@ class GEGLUBlock(nn.Module):
     def forward(self, x):
         gate, val = self.w1(x).chunk(2, dim=-1)
         return self.w2(F.gelu(gate) * val)
+
+
+class GEGLUOut(nn.Module):
+    """GEGLU output projection for attention: Linear(in, 2*out) -> GELU-gate -> Linear(out, out) -> Dropout."""
+    def __init__(self, in_dim, out_dim, dropout=0.0):
+        super().__init__()
+        self.gate_proj = nn.Linear(in_dim, out_dim * 2)
+        self.out_proj = nn.Linear(out_dim, out_dim)
+        self.drop = nn.Dropout(dropout)
+
+    def forward(self, x):
+        gate, val = self.gate_proj(x).chunk(2, dim=-1)
+        return self.drop(self.out_proj(F.gelu(gate) * val))
 
 
 class TransolverBlock(nn.Module):
