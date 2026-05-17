@@ -266,6 +266,65 @@ class Transolver(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# AdaBelief optimizer (Zhuang et al., NeurIPS 2020, arXiv:2010.07468)
+# ---------------------------------------------------------------------------
+
+class AdaBelief(torch.optim.Optimizer):
+    """AdaBelief: AdamW-style step with second moment as EMA of (g - m)^2.
+
+    The "belief" intuition: when grads point consistently in one direction
+    (g ≈ m) the deviation `(g - m)^2` shrinks and step size grows; when grads
+    are erratic the deviation expands and step size shrinks. Decoupled weight
+    decay (AdamW form) is applied as `p *= (1 - lr * wd)` before the gradient
+    update. `eps=1e-16` is canonical — much smaller than Adam's 1e-8 because
+    the variance-deviation term should not be eps-saturated.
+    """
+
+    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-16, weight_decay=0.0):
+        defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+        for group in self.param_groups:
+            lr = group['lr']
+            beta1, beta2 = group['betas']
+            eps = group['eps']
+            wd = group['weight_decay']
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+                grad = p.grad
+                state = self.state[p]
+                if len(state) == 0:
+                    state['step'] = 0
+                    state['exp_avg'] = torch.zeros_like(p)
+                    state['exp_avg_var'] = torch.zeros_like(p)
+                state['step'] += 1
+                step = state['step']
+                m = state['exp_avg']
+                s = state['exp_avg_var']
+                # AdaBelief: EMA of (g - m)^2 instead of g^2
+                m.mul_(beta1).add_(grad, alpha=1 - beta1)
+                diff = grad - m
+                s.mul_(beta2).addcmul_(diff, diff, value=1 - beta2).add_(eps)
+                bias1 = 1 - beta1 ** step
+                bias2 = 1 - beta2 ** step
+                m_hat = m / bias1
+                s_hat = s / bias2
+                denom = s_hat.sqrt().add_(eps)
+                # Decoupled weight decay (AdamW style)
+                if wd != 0:
+                    p.mul_(1 - lr * wd)
+                p.addcdiv_(m_hat, denom, value=-lr)
+        return loss
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
@@ -478,6 +537,7 @@ class Config:
     mlp_ratio: int = 2  # FFN expansion ratio; SwiGLU inner = round_to_mult(hidden*mlp_ratio*2/3, 8)
     use_bf16: bool = False  # bf16 autocast (activations only; params/optimizer stay fp32)
     n_hidden: int = 160  # Transolver hidden dim (embedding/attention/FFN base width)
+    optimizer: str = "adamw"  # adamw | adabelief — second-moment EMA(g^2) vs EMA((g-m)^2)
 
 
 cfg = sp.parse(Config)
@@ -525,7 +585,16 @@ n_params = sum(p.numel() for p in model.parameters())
 ffn_inner = next(m.inner for m in model.modules() if isinstance(m, SwiGLUFFN))
 print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN=SwiGLU inner={ffn_inner})")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+if cfg.optimizer == "adabelief":
+    optimizer = AdaBelief(
+        model.parameters(), lr=cfg.lr, betas=(0.9, 0.999), eps=1e-16,
+        weight_decay=cfg.weight_decay,
+    )
+elif cfg.optimizer == "adamw":
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+else:
+    raise ValueError(f"Unknown optimizer: {cfg.optimizer!r}")
+print(f"Optimizer: {cfg.optimizer}")
 
 def train_amp_ctx():
     """bf16 autocast for the forward pass when --use_bf16 (no GradScaler needed)."""
