@@ -456,6 +456,8 @@ class Config:
     pressure_weight: float = 1.0
     epochs: int = 80
     cosine_t_max_epochs: int = 80  # default unchanged from current behavior
+    sgdr_t0: int = 0       # if > 0, use CosineAnnealingWarmRestarts instead of CosineAnnealingLR
+    sgdr_t_mult: int = 2   # T_mult for SGDR (each cycle length = sgdr_t_mult × previous)
     ema_decay: float = 0.999
     compile_mode: str = ""  # empty = no compile (baseline behavior)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -513,7 +515,14 @@ if cfg.compile_mode:
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = Lion(model.parameters(), lr=cfg.lr, betas=(0.9, 0.99), weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.cosine_t_max_epochs)
+if cfg.sgdr_t0 > 0:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer, T_0=cfg.sgdr_t0, T_mult=cfg.sgdr_t_mult, eta_min=1e-8
+    )
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=cfg.cosine_t_max_epochs, eta_min=1e-8
+    )
 ema = EMA(model, decay=cfg.ema_decay)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
