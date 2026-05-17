@@ -1,5 +1,43 @@
 # SENPAI Research Results
 
+## 2026-05-17 ~07:30 UTC — Round 29: Close #4369 (k=3+β2=0.95 compound null) + assign #4453 alphonse (n_layers depth bracket)
+
+### Closed: PR #4369 (alphonse) — Lookahead k=3 + β2=0.95 compound
+
+**Terminal result (2 seeds):**
+
+| Seed | Run | val_avg | test_3split | Δ val vs baseline | Δ test vs baseline |
+|---|---|---|---|---|---|
+| Seed 1 (best) | `6xn8oe1v` | **51.181** | **51.778** | −0.25% | −0.21% |
+| Seed 2 | `hs3j836a` | 52.653 | 52.974 | +2.62% REGRESS | +2.10% REGRESS |
+
+Two-seed spread: val=1.47, test=1.20. **Both values are 11× the seed-1 win margin (0.13 val / 0.11 test).** Seed-luck dominates.
+
+**Per-split signature (the decisive diagnostic):**
+
+| Split | seed-1 val Δ | seed-2 val Δ | seed-1 test Δ | seed-2 test Δ |
+|---|---|---|---|---|
+| **single_in_dist** | **+3.41%** | **+4.86%** | **+3.47%** | **+5.27%** |
+| geom_camber_rc | +0.24% | +3.75% | −3.32% | −0.58% |
+| geom_camber_cruise | −1.62% | +1.21% | — | — |
+| re_rand | **−4.11%** | −0.41% | −0.36% | +1.95% |
+
+**Both seeds show consistent +3.4–5.3% single_in_dist regression on val AND test** = mechanism signature, not noise. The marginal seed-1 val win is driven entirely by a lucky re_rand draw (−4.11%) that rebalances the average.
+
+**Mechanistic interpretation (alphonse's analysis confirmed):** At k=3, the fast-weight excursion window is only 3 inner steps — insufficient excursion budget for β2=0.95's faster step-size adaptation to pay back its noise cost on in-distribution data. The previously observed β2=0.95 benefit (#4249 at k=5) required 5-step excursion windows to amortize. At k=3, β2=0.95 introduces noise on smooth loss surfaces (in-distribution) while showing neutral-to-mildly-positive effect on rougher OOD loss surfaces (camber_rc, cruise, re_rand) — but the trade is not net-positive.
+
+**Axis closed: k=3+β2=0.95 compound.** This is a **paper-appendix-quality null result with sharp mechanistic boundary**: the β2-axis interacts with k in a k-dependent manner; the β2=0.95 gain at k=5 is k-window-size-dependent and does not transfer to k=3.
+
+**Diagnostic rule for future optimizer-internal compounds at k=3**: +3–5% single_in_dist regression = per-split substitutive mechanism signature; not noise.
+
+### New assignment: PR #4453 (alphonse) — n_layers depth bracket on k=3 baseline
+
+**Hypothesis**: n_layers=5 has been fixed throughout the campaign. At k=3, shallower depth (n_layers=3) saves ~40% epoch time → ~27 epochs in budget vs ~17 at baseline → +60% Lookahead slow-weight syncs per wall-clock second. Same mechanism as k=3 beating k=5. n_layers=7 tests the deeper/fewer-epochs direction.
+
+**Expected result**: n_layers=3 potentially competes with baseline via more optimizer iterations; n_layers=7 likely regresses like n_hidden=192 (budget regression). Bracket characterizes depth axis.
+
+---
+
 ## 2026-05-17 ~05:55 UTC — Round 26: Close #4347 (mixup null) + #4251 (lr=1e-3) + #4151 (LLRD) + 3 new assignments
 
 ### Closed: PR #4347 (fern) — Camber-bridging feature-space mixup (Beta(0.4,0.4), prob=0.5)

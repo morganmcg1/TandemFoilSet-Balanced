@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-17 ~05:55 UTC
+- **Last updated:** 2026-05-17 ~07:30 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
-- **Most recent direction from human researcher team:** None (no open issues at 05:55 UTC)
+- **Most recent direction from human researcher team:** None (no open issues at 07:30 UTC)
 
 ## Current best baseline — Lookahead k=3 (PR #4266 alphonse, merged ~04:50 UTC)
 
@@ -47,21 +47,22 @@ Total improvement since raw seed: **−64.3%** on val.
 
 | PR | Student | Hypothesis | On baseline | Status |
 |----|---------|-----------|-------------|--------|
-| **#4369** | **alphonse** | k=3 + β2=0.95 compound | NEW k=3 baseline | WIP — highest expected value; could reach val≈50.0 if fully additive |
-| **#4370** | **tanjiro** | k=2+k=4 fine bracket | NEW k=3 baseline | WIP — characterizes k-axis limit |
-| **#4387** | **frieren** | slice_num bracket (4, 12) on k=3 | NEW k=3 baseline | WIP — geometry-resolution axis untested under k=3 |
-| **#4400** | **fern** | Cosine eta_min floor (5e-5, 1e-5) | NEW k=3 baseline | NEW — prevent near-zero LR at timeout |
-| **#4401** | **edward** | AdamW eps bracket (1e-7, 1e-9) | NEW k=3 baseline | NEW — numerical stability denominator, never tested under Lookahead |
-| **#4404** | **thorfinn** | mlp_ratio bracket (1.0, 1.667) | NEW k=3 baseline | NEW — smaller FFN = more epochs in 30-min budget |
+| **#4453** | **alphonse** | n_layers depth bracket (3, 7) | NEW k=3 baseline | NEW — characterizes depth axis; shallower = more Lookahead syncs per budget |
+| **#4370** | **tanjiro** | k=2+k=4 fine bracket | NEW k=3 baseline | WIP — k=4 arm still pending; k=2 trials showed 52.87 (regression) |
+| **#4387** | **frieren** | slice_num bracket (4, 12) on k=3 | NEW k=3 baseline | WIP — geometry-resolution axis |
+| **#4400** | **fern** | Cosine eta_min floor (5e-5, 1e-5) | NEW k=3 baseline | WIP — prevent near-zero LR at timeout |
+| **#4401** | **edward** | AdamW eps bracket (1e-7, 1e-9) | NEW k=3 baseline | WIP — numerical stability denominator |
+| **#4404** | **thorfinn** | mlp_ratio bracket (1.0, 1.667) | NEW k=3 baseline | WIP — FFN width vs epochs tradeoff |
 | **#4309** | **askeladd** | n_head=4 architecture sweep | k=5+β2=0.95 baseline | WIP — needs to beat 51.31 |
 | **#4307** | **nezuko** | Lookahead α-bracket sweep (α=0.3, α=0.7) | k=5+β2=0.95 baseline | WIP — needs to beat 51.31 |
 
 All 8 GPUs occupied. Zero idle students.
 
-## Recent closures (this round)
+## Recent closures (rounds 25–29)
 
 | PR | Student | Hypothesis | val | Action |
 |----|---------|-----------|-----|--------|
+| ✗ **#4369** | **alphonse** | **k=3+β2=0.95 compound** | **51.18 seed-1 / 52.65 seed-2** | ✗ **Closed — 2-seed spread 11× win margin; single_in_dist regression +3.4–5.3% on BOTH seeds = mechanism. β2=0.95 substitutive at k=3 short excursion window. Optimizer-internal compound axis CLOSED at k=3.** |
 | ✗ **#4347** | **fern** | **Camber-bridging feature-space mixup Beta(0.4,0.4)** | **58.05** | ✗ **Closed — paper-quality null result. Data-side axis FULLY CLOSED. Only 16.5% of mixes hit held-out range; all splits regress.** |
 | ✗ **#4251** | **edward** | **Lookahead+lr=1e-3** | **55.15** (best) | ✗ **Closed — 7× variance, converges to worse minimum. lr-axis closed under Lookahead.** |
 | ✗ **#4151** | **thorfinn** | **LLRD=0.85/0.95 + Lookahead** | **53.98** (on old baseline) | ✗ **Closed — substitutive with Lookahead on test; new baseline jumped beyond reach.** |
@@ -71,7 +72,8 @@ All 8 GPUs occupied. Zero idle students.
 ## Key mechanism insights
 
 - **k-axis dominant lever**: k=3 delivers −3.09% val by maximizing slow-weight update frequency (2100 updates vs 1260 at k=5)
-- **β2=0.95 × Lookahead orthogonal at k=5** (PR #4249); untested at k=3 — alphonse testing now
+- **β2=0.95 × Lookahead interaction is k-dependent**: works at k=5 (long excursion window) but substitutive at k=3 (short excursion window = insufficient budget for β2=0.95's noise cost). Per-split single_in_dist regression (+3.4–5.3%) is the mechanism signature.
+- **β2-axis effectively closed at k=3**: k=3+β2=0.999 is optimal
 - **slice=16 × β2=0.95 anti-compound under Lookahead** (PR #4283 closed)
 - **camber_rc residual (63.85) is the dominant residual** — 10% above val_single_in_dist=57.8
 - **DATA-SIDE AXIS CLOSED for camber_rc** (PRs #4311, #4347): frequency reweighting AND feature-space mixup BOTH fail to bridge held-out M∈{6,7,8} gap. Architecture-level conditioning is the remaining path.
@@ -80,6 +82,7 @@ All 8 GPUs occupied. Zero idle students.
 - **lr-axis closed under Lookahead**: lr=1e-3 (7× variance, worse minimum); lr=5e-4 is optimal
 - **LR warmup axis closed** (PR #4334): consumes budget, camber_rc regression
 - **weight_decay axis closed** (PR #4284): Lookahead×wd substitutive at wd>1e-4
+- **5 consecutive closures since last merge** (plateau signal): shifting toward architectural experiments
 
 ## What works on the full stack
 
@@ -92,6 +95,7 @@ All 8 GPUs occupied. Zero idle students.
 ## What does NOT work
 
 - β1 axis: β1=0.85 or β1=0.95 (default 0.9 is local optimum)
+- β2=0.95 under Lookahead k=3 (substitutive on single_in_dist; k-window-size-dependent)
 - EMA=0.995 (substitutes with Lookahead)
 - AGC, grad_clip=1.0 (wrong instrument)
 - bs=8, DropPath, dropout, SWA
@@ -112,24 +116,29 @@ All 8 GPUs occupied. Zero idle students.
 
 **Target**: val < 50.0, test < 50.0. Current: 51.31 / 51.89. Need −2.5% val, −3.5% test.
 
-All simple single-axis levers have been explored. Remaining open axes:
+**Plateau signal**: 5 consecutive closures since last merge (#4266). Shifting from optimizer-internal tuning toward architectural axes and larger swings.
 
-1. **Optimizer compound (alphonse #4369, k=3+β2=0.95)** — highest expected value. If fully additive at k=3 (as it was at k=5), val ≈ 50.0 or below. Defines the current-stack optimizer optimum.
-2. **k-axis limit (tanjiro #4370, k=2+k=4)** — k=2 could push below 51.0 if trend continues
-3. **Geometry resolution (frieren #4387, slice=4/12)** — architectural but zero-code-change test; camber_rc floor depends on slice granularity
-4. **Scheduler tail (fern #4400, eta_min floor)** — recover late-epoch training that's wasted at near-zero LR
-5. **Optimizer stability (edward #4401, eps bracket)** — never tested; interaction with Lookahead k=3's faster trajectory
-6. **FFN width vs epochs (thorfinn #4404, mlp_ratio=1.0)** — counterintuitive: smaller model → more epochs in budget
-7. **Architecture attention (askeladd #4309, n_head=4)** — still in flight on old baseline; interesting if it clears new bar
-8. **Lookahead α-axis (nezuko #4307, α=0.3/0.7)** — still in flight on old baseline; probably won't clear 51.31
+Active axes being characterized now:
+1. **Depth axis (alphonse #4453, n_layers=3/7)** — shallower = more Lookahead syncs per wall-clock; could compound with k=3 mechanism
+2. **k-axis limit (tanjiro #4370, k=2+k=4)** — k=4 arm pending; k=2 trials showed 52.87 (regression so far)
+3. **Geometry resolution (frieren #4387, slice=4/12)** — slice-resolution vs train-efficiency axis
+4. **Scheduler tail (fern #4400, eta_min floor)** — recover late-epoch training wasted at near-zero LR
+5. **Optimizer stability (edward #4401, eps bracket)** — numerical stability denominator under k=3 trajectory
+6. **FFN width (thorfinn #4404, mlp_ratio=1.0/1.667)** — FFN width vs more-epochs tradeoff
+7. **Architecture attention (askeladd #4309, n_head=4)** — still in flight on old baseline; needs to clear 51.31
+8. **Lookahead α-axis (nezuko #4307, α=0.3/0.7)** — in flight on old baseline; likely won't clear 51.31
 
-**Next plateau protocol**: if k=3+β2=0.95 compound and k=2 both come back negative (or minimal), the optimizer axis is exhausted. At that point, shift to: (a) architectural conditioning on camber M (FiLM/cross-attention), (b) different model family (e.g. PointNet++, FNO), or (c) loss reformulation with geometric priors.
+**Next plateau escalation (if all 8 in-flight PRs come back negative)**:
+- (a) Architectural conditioning on camber M: FiLM/cross-attention injection of M scalar per Transolver block — targeted fix for camber_rc=63.85 residual (dominant error). Paper-quality, data-side axis fully exhausted.
+- (b) Different model family: PointNet++, FNO, or GNO — philosophical shift; requires substantial code change
+- (c) Multi-task loss restructuring: auxiliary Ux/Uy task with weighted loss to regularize latent toward physics-complete representation
 
 ## Operational notes
 
 - **cruise NaN**: fleet-wide; test_3split = (test_single_in_dist + test_geom_camber_rc + test_re_rand)/3
 - **W&B test namespace**: `test/test_*/mae_surf_p` (not bare `test_*`)
 - **Per-run budget**: 30 min, ~15-18 epochs at slice=8 (~108s/epoch)
-- **GPU utilization**: 100% — all 8 students assigned as of 05:55 UTC
+- **GPU utilization**: 100% — all 8 students assigned as of 07:30 UTC
 - **scripts/test_eval_only.py**: in repo — recovers test metrics from saved EMA checkpoints at batch_size=1 when OOM during test eval
 - **Capacity constraint**: n_hidden≥192 doubles epoch time — do NOT assign capacity-increase experiments without budget extension
+- **β2-axis diagnostic**: +3–5% single_in_dist regression across both seeds = per-split substitutive mechanism signature for any future optimizer-internal compound at k=3
