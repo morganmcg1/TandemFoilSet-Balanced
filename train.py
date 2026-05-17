@@ -21,6 +21,7 @@ import copy
 import os
 import subprocess
 import time
+from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -281,6 +282,92 @@ def invert_asinh_vel(pred, scale):
 
 
 # ---------------------------------------------------------------------------
+# Adaptive Gradient Clipping (Brock et al. 2021, "High-Performance Large-Scale
+# Image Recognition Without Normalization", https://arxiv.org/abs/2102.06171)
+# ---------------------------------------------------------------------------
+
+# Layer-group taxonomy for per-group diagnostics. Matches the per-layer
+# grad-norm table introduced in PR #4194 (preprocess, blocks.0-4, head).
+def _agc_group(name: str) -> str:
+    if name == "placeholder":
+        return "placeholder"
+    if name.startswith("preprocess"):
+        return "preprocess"
+    if name.startswith("blocks."):
+        parts = name.split(".")
+        block_idx = parts[1]
+        if "mlp2" in name or "ln_3" in name:
+            return "head"
+        return f"blocks.{block_idx}"
+    return "other"
+
+
+def adaptive_gradient_clip(
+    named_params,
+    clip_factor: float = 0.01,
+    eps: float = 1e-3,
+    apply_clip: bool = True,
+) -> dict[str, dict[str, float]]:
+    """Per-parameter AGC. Call after ``.backward()`` and before ``optimizer.step()``.
+
+    For each Parameter ``p``, clips ``p.grad`` when ``||p.grad|| > clip_factor * ||p||``.
+    Returns per-group diagnostics keyed by ``_agc_group(name)``:
+      ``grad_norm_preclip``  — sqrt(sum of squared grad norms, pre-AGC)
+      ``grad_norm_postclip`` — sqrt(sum of squared grad norms, post-AGC)
+      ``binding_rate``        — fraction of params in group whose grad was clipped this step
+      ``mean_ratio``          — mean of ``||grad|| / ||param||`` across params in group
+      ``max_ratio``           — max of ``||grad|| / ||param||`` across params in group
+      ``n_total``             — number of params with grads in the group
+
+    If ``apply_clip=False`` no clipping is performed (diagnostics only). The
+    ``binding_rate`` is then a hypothetical "would-have-been clipped at this λ".
+    """
+    stats: dict[str, dict[str, float]] = defaultdict(
+        lambda: {
+            "sq_pre": 0.0, "sq_post": 0.0,
+            "n_clipped": 0, "n_total": 0,
+            "ratio_sum": 0.0, "ratio_max": 0.0,
+        }
+    )
+
+    for name, p in named_params:
+        if p.grad is None:
+            continue
+        param_norm = torch.norm(p.detach(), p=2).clamp(min=eps)
+        grad_norm = torch.norm(p.grad.detach(), p=2)
+        max_norm = clip_factor * param_norm
+        was_clipped = bool((grad_norm > max_norm).item())
+        if apply_clip and was_clipped:
+            p.grad.detach().mul_(max_norm / grad_norm.clamp(min=eps))
+        post_norm = torch.norm(p.grad.detach(), p=2)
+        ratio = (grad_norm / param_norm).item()
+
+        g = _agc_group(name)
+        s = stats[g]
+        s["sq_pre"] += grad_norm.item() ** 2
+        s["sq_post"] += post_norm.item() ** 2
+        s["n_clipped"] += int(was_clipped)
+        s["n_total"] += 1
+        s["ratio_sum"] += ratio
+        if ratio > s["ratio_max"]:
+            s["ratio_max"] = ratio
+
+    out: dict[str, dict[str, float]] = {}
+    for g, s in stats.items():
+        n = max(s["n_total"], 1)
+        out[g] = {
+            "grad_norm_preclip": s["sq_pre"] ** 0.5,
+            "grad_norm_postclip": s["sq_post"] ** 0.5,
+            "binding_rate": s["n_clipped"] / n,
+            "mean_ratio": s["ratio_sum"] / n,
+            "max_ratio": s["ratio_max"],
+            "n_clipped": s["n_clipped"],
+            "n_total": s["n_total"],
+        }
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
@@ -475,6 +562,8 @@ class Config:
     sgdr_t0: int = 0  # CosineAnnealingWarmRestarts cycle length; 0 disables (use plain cosine)
     slice_num: int = 64  # physics-attention slice count (node partitioning granularity)
     adamw_beta2: float = 0.999  # AdamW second-moment EMA decay; default 0.999
+    use_agc: bool = False  # enable Adaptive Gradient Clipping (Brock et al. 2021); per-Parameter unit-free clip
+    agc_clip_factor: float = 0.01  # AGC λ: clip when ||grad|| > λ · ||param||. Brock's vision default is 0.01.
 
 
 cfg = sp.parse(Config)
@@ -560,6 +649,7 @@ run = wandb.init(
 wandb.define_metric("global_step")
 wandb.define_metric("train/*", step_metric="global_step")
 wandb.define_metric("val/*", step_metric="global_step")
+wandb.define_metric("agc/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
@@ -624,6 +714,14 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        agc_group_stats: dict[str, dict[str, float]] | None = None
+        if cfg.use_agc:
+            # AGC first (per-Parameter, unit-free); then global clip as safety net.
+            agc_group_stats = adaptive_gradient_clip(
+                model.named_parameters(),
+                clip_factor=cfg.agc_clip_factor,
+                apply_clip=True,
+            )
         grad_norm_preclip: float | None = None
         if cfg.grad_clip > 0:
             grad_norm_preclip = torch.nn.utils.clip_grad_norm_(
@@ -637,6 +735,24 @@ for epoch in range(MAX_EPOCHS):
         step_log = {"train/loss": loss.item(), "global_step": global_step}
         if grad_norm_preclip is not None:
             step_log["train/grad_norm_preclip"] = grad_norm_preclip
+        if agc_group_stats is not None:
+            agc_total_pre_sq = 0.0
+            agc_total_post_sq = 0.0
+            agc_n_clipped = 0
+            agc_n_total = 0
+            for g, s in agc_group_stats.items():
+                step_log[f"agc/group/{g}/grad_norm_preclip"] = s["grad_norm_preclip"]
+                step_log[f"agc/group/{g}/grad_norm_postclip"] = s["grad_norm_postclip"]
+                step_log[f"agc/group/{g}/binding_rate"] = s["binding_rate"]
+                step_log[f"agc/group/{g}/mean_ratio"] = s["mean_ratio"]
+                step_log[f"agc/group/{g}/max_ratio"] = s["max_ratio"]
+                agc_total_pre_sq += s["grad_norm_preclip"] ** 2
+                agc_total_post_sq += s["grad_norm_postclip"] ** 2
+                agc_n_clipped += s["n_clipped"]
+                agc_n_total += s["n_total"]
+            step_log["train/grad_norm_pre_agc"] = agc_total_pre_sq ** 0.5
+            step_log["train/grad_norm_post_agc"] = agc_total_post_sq ** 0.5
+            step_log["agc/global_binding_rate"] = agc_n_clipped / max(agc_n_total, 1)
         wandb.log(step_log)
 
         epoch_vol += vol_loss.item()
