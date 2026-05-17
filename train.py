@@ -147,7 +147,7 @@ class GEGLUBlock(nn.Module):
 
     def forward(self, x):
         gate, val = self.w1(x).chunk(2, dim=-1)
-        return self.w2(F.gelu(gate) * val)
+        return self.w2(F.relu(gate) * val)
 
 
 class TransolverBlock(nn.Module):
