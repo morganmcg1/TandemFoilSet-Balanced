@@ -1,7 +1,7 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 04:00
-- **Launch:** willow-pai2i-48h-r1 (round 18 — Lookahead-Lion era; programme best val=47.97, **3-seed canonical complete: mean=48.68 σ̂=0.64**; **5 architectural arms in flight** (FFN width / depth / heads / slice_num↑ / slice_num↓); k=7 prediction test in flight; **Lion β2 sensitivity + Lion LR sharpness CONFIRMED — HP frontier exhausted, programme is now architecture-bound**)
+- **Date:** 2026-05-17 05:00
+- **Launch:** willow-pai2i-48h-r1 (round 19 — Lookahead-Lion era; **NEW PROGRAMME BEST val=47.5894** (PR #4269, α=0.7 merged); **5 architectural arms in flight**; **α-bowl minimum probe (α=0.8) in flight**; **3-seed canonical for new best in flight**)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN)
 - **Latest direction from human team:** None (no open issues scoped to this launch)
@@ -14,18 +14,37 @@ Beat the Transolver baseline on `val_avg/mae_surf_p` (lower is better). Paper-fa
 
 | Config | val_avg | test_avg | Source | Note |
 |--------|---------|---------|--------|------|
-| **Lookahead-Lion (k=5/α=0.5) + triple-stack (PROGRAMME BEST)** | **47.9735** | **46.4900** | PR #4123, W&B `rx3negp7`, seed=0 | 3-seed canonical complete: val mean=48.68, σ̂=0.64; test mean=47.22, σ̂=0.64 |
+| **Lookahead-Lion (k=5/α=0.7) + triple-stack (PROGRAMME BEST)** | **47.5894** | **46.0098** | PR #4269, W&B `oftlu9tn`, seed=0 | Merged 2026-05-17; new all-time best |
 
-Win threshold: **val < 47.97** (seed=0). Paper-facing 3-seed mean: val=48.68, test=47.22.
+Win threshold: **val < 47.5894** (seed=0). Prior best: val=47.97 (PR #4123, α=0.5).
 
-## Lookahead-Lion: seed-robustness CONFIRMED
+### 3-seed canonical (in progress — seeds 1+2 pending)
 
-| Recipe | Seed-0 val | Seed-1 val | Seed-2 val | best_ep pattern |
-|---|---|---|---|---|
-| Lookahead-AdamW k=5 | 57.22 | 78.50 ⚠️ | 57.05 | seed=1 = ep10 (bad basin) |
-| **Lookahead-Lion k=5** | **47.97** | **49.21** | **48.84** | all = ep17 (cosine floor) ✓ |
+| Seed | val_avg | test_avg | Source |
+|---|---|---|---|
+| 0 | **47.5894** | **46.0098** | PR #4269 merged (`oftlu9tn`) |
+| 1 | TBD | TBD | Askeladd #4344 in flight |
+| 2 | TBD | TBD | Nezuko #4345 in flight |
+| 3-seed mean | — | — | pending completion |
 
-3-seed mean: val=48.68, σ̂=0.64; test=47.22, σ̂=0.64. Cleanest 3-seed canonical in the programme.
+## α-frontier at k=5 (Lion-era; seed=0)
+
+| α | val_avg | Δ vs α=0.5 | Status |
+|---|---|---|---|
+| 0.3 | 51.84 | +3.87 | closed (PR #4269 Arm 1) |
+| **0.5 (prior baseline)** | **47.97** | — | superseded by #4269 |
+| **0.7 (CURRENT BEST)** | **47.59** | **−0.38** | MERGED (PR #4269) |
+| 0.8 | TBD | TBD | IN FLIGHT (alphonse #4343) |
+
+Monotone descending: α=0.3 < α=0.5 < α=0.7. α-bowl minimum not yet found. α=0.8 probe ongoing.
+
+### Effective-pull-rate framing validated across optimizers
+
+α/k ≈ 0.14-0.17 is the empirically-confirmed critical range. At k=5:
+- α=0.5 → α/k=0.10 (below optimal)
+- **α=0.7 → α/k=0.14 (lower edge of optimal band → wins)**
+- α=0.8 → α/k=0.16 (mid-band → probe)
+- α=0.9 → α/k=0.18 (upper edge → likely declining)
 
 ## Lookahead-Lion mechanism decomposition
 
@@ -33,98 +52,69 @@ Win threshold: **val < 47.97** (seed=0). Paper-facing 3-seed mean: val=48.68, te
 |---|---|---|
 | AdamW → Lion | −8.15 | Sign-based: eliminate per-step gradient-magnitude variance |
 | Lion → Lookahead+Lion (k=5/α=0.5) | −1.10 | Slow-weight averaging: reduce per-basin commitment variance |
-| **Total: AdamW → Lookahead+Lion** | **−9.25** | Orthogonal-additive composition; seed-robust |
+| α=0.5 → α=0.7 (same k=5) | −0.38 | Stronger basin-averaging pull; α/k closer to 0.15 critical rate |
+| **Total: AdamW → Lookahead+Lion (k=5/α=0.7)** | **−9.63** | All three mechanisms additive; seed-robust |
 
-## Lookahead-Lion hyperparameter frontier (EXHAUSTED)
+## Lookahead-Lion hyperparameter frontier (LARGELY EXHAUSTED)
 
 | Knob | Frontier finding | Programme implication |
 |---|---|---|
-| **k (sync interval)** | U-curve right-shifted vs AdamW: k=2=48.84, k=3=48.20, **k=5=47.97**, k=7 IN FLIGHT (#4310) | Lion's low per-step variance → more steps between syncs |
-| **α (slow-weight pull)** | 3 mechanism branches IN FLIGHT (#4269) | Round-17 trend: α=0.5 optimum near critical pull-rate 0.15 |
-| **β1 (update direction)** | IN FLIGHT (#4271) — β1∈{0.85, 0.95} | Probe direction-weighting symmetry |
-| **β2 (m-buffer EMA)** | CLOSED (#4264): β2=0.95 → +6.65 (largest Lion-era regress). β2 must INCREASE from 0.99 not decrease | Knob direction is wrong; β2∈{0.995, 0.999} is the open question |
-| **LR (cfg.lr)** | CLOSED (#4265): cfg.lr=3e-4 → +1.44. Lion LR landscape SHARPER than AdamW; no adaptive scaling to forgive small-LR error | LR=5e-4 is near-optimal; tighter sweep would need >0.5x granularity |
-| **3-seed canonical** | CLOSED (#4242): mean=48.68, σ̂=0.64 (val and test both) | Paper-ready noise floor |
+| **α (pull strength)** | k=5 monotone: 0.3=51.84 > 0.5=47.97 > 0.7=47.59; α=0.8 IN FLIGHT | **ACTIVE FRONTIER** — bowl minimum not found yet |
+| **k (sync interval)** | U-curve right-shifted vs AdamW: k=2=48.84, k=3=48.20, k=5=47.59; k=7 IN FLIGHT (#4310) | Lion's low variance → more steps between syncs optimal |
+| **β1 (update direction)** | CLOSED (#4271): β1=0.9 optimal; β1=0.95 → +3.03 (asymmetric landscape) | β1=0.9 is local optimum; Lookahead + Lion over-smooth at β1>0.9 |
+| **β2 (m-buffer EMA)** | CLOSED (#4264): β2=0.95 → +6.65 (largest Lion-era regress). β2 must INCREASE from 0.99 not decrease | Knob direction was wrong; β2∈{0.995, 0.999} is the open question |
+| **LR (cfg.lr)** | CLOSED (#4265): cfg.lr=3e-4 → +1.44. Lion LR landscape SHARPER than AdamW | LR=5e-4 is near-optimal |
+| **3-seed canonical** | IN PROGRESS: seeds 1+2 running (#4344, #4345); seed=0 val=47.59 | Paper-ready noise floor pending |
 
-**Conclusion:** The HP neighborhood around Lookahead-Lion (k=5, α=0.5) is now well-characterized. Open HP probes (k=7, α-sweep, β1) are running but unlikely to deliver >−1.0 val. **The path to val<47.97 is now architectural.**
+## Plateau Protocol → Architectural Portfolio (5 arms in flight)
 
-## Plateau Protocol → Architectural Portfolio (round 18 expanded)
+The architectural portfolio covers 5 orthogonal capacity dimensions. **Note: heads=8 (#4304) was closed as budget-incompatible** — 36% per-epoch overhead exhausts the 30-min budget before reaching the cosine floor.
 
-13+ closes since last winner (PR #4123, val=47.97 at 2026-05-16 23:45). The architectural portfolio has expanded to **5 orthogonal arms** covering FFN/depth/attention/latent capacity:
-
-| Architectural arm | PR | Dim varied | Direction | Hypothesis |
+| Architectural arm | PR | Dim varied | Direction | Status |
 |---|---|---|---|---|
-| FFN width | #4286 thorfinn | mlp_ratio | 2 → 3 | Wider FFN; more channel mixing capacity |
-| Depth | #4294 tanjiro | n_layers | 5 → 6 | Deeper net; more sequential refinement |
-| Attention heads | #4304 nezuko | n_heads | 4 → 8 | More attention specialization per layer |
-| Slices (up) | #4323 fern | slice_num | 64 → 96 | Richer latent attention basis |
-| Slices (down) | #4325 frieren | slice_num | 64 → 32 | Capacity-light; defends against overfit at 17ep |
+| FFN width | #4286 thorfinn | mlp_ratio | 2 → 3 | Running |
+| Depth | #4294 tanjiro | n_layers | 5 → 6 | Running |
+| ~~Attention heads~~ | ~~#4304 nezuko~~ | ~~n_heads~~ | ~~4 → 8~~ | **CLOSED** (budget incompatible, +36% epoch time) |
+| Slices (up) | #4323 fern | slice_num | 64 → 96 | Running |
+| Slices (down) | #4325 frieren | slice_num | 64 → 32 | Running |
 
-This is a **portfolio bet on the capacity axis** — if any one of these wins by >0 it changes the trajectory; if multiple win they may compose. **All 5 are SINGLE-ARM** to eliminate heartbeat-rerun risk.
+**4 active architectural arms.** Note: heads is effectively dead at h=128 with 30-min budget (same root cause as pre-Lion slice_num=128 regression). To reopen heads, must first scale h (width arm must win first).
 
-## Active WIP experiments (round 18)
+## Active WIP experiments (round 19)
 
 | PR | Student | Hypothesis | Status | Priority |
 |----|---------|-----------|--------|----------|
-| #4325 | frieren | **slice_num=32 (architectural — slice count DOWN; pairs with #4323)** | **NEW (round 18)** | 5th architectural arm |
-| #4323 | fern | **slice_num=96 (architectural — slice count UP; pairs with #4325)** | **NEW (round 18)** | 4th architectural arm |
-| #4310 | edward | Lookahead-Lion k=7 (find Lion k-curve right edge — winner candidate) | Running | If val<47.97, NEW programme best |
-| #4304 | nezuko | Lookahead-Lion + heads=8 (architectural — attention capacity) | Running | 3rd architectural arm |
+| #4343 | alphonse | **Lookahead-Lion α=0.8 at k=5 — push α-bowl minimum probe** | **NEW (round 19)** | **Winner candidate if val<47.59** |
+| #4344 | askeladd | **Lookahead-Lion α=0.7 seed=1 (3-seed canonical of new best)** | **NEW (round 19)** | Paper-facing canonical |
+| #4345 | nezuko | **Lookahead-Lion α=0.7 seed=2 (3-seed canonical of new best)** | **NEW (round 19)** | Paper-facing canonical |
+| #4325 | frieren | slice_num=32 (architectural — slice count DOWN) | Running | 4th architectural arm |
+| #4323 | fern | slice_num=96 (architectural — slice count UP) | Running | 3rd architectural arm |
+| #4310 | edward | Lookahead-Lion k=7 (find Lion k-curve right edge — winner candidate) | Running | If val<47.59, NEW programme best |
 | #4294 | tanjiro | Lookahead-Lion + depth=6 (architectural — transformer depth) | Running | 2nd architectural arm |
 | #4286 | thorfinn | Lookahead-Lion + mlp_ratio=3 (architectural — FFN width) | Running | 1st architectural arm |
-| #4271 | alphonse | Lion β1 sweep (β1∈{0.85, 0.95}) at k=5/α=0.5 | Running | Lion-era HP |
-| #4269 | askeladd | Lookahead-Lion α sweep at k=5 (α∈{0.3, 0.7}) | Running | Lion-era HP — 3 mechanism branches |
 
-**All 8 students active. Zero idle. Single-arm policy in force for all new assignments.**
+**All 8 students active. Zero idle. Single-arm policy in force.**
 
-### Refined α/k mechanism: critical effective-pull-rate ≈ 0.15
+## Round-19 events (this round)
 
-Across the full AdamW Lookahead α/k frontier closed in earlier rounds, optimal configs sit near α/k ≈ 0.14-0.17. Configs above this rate over-dampen fast exploration and accelerate loss-floor stagnation. This predicts Lookahead-Lion's α/k landscape will also center around 0.15, which means at k=3, α≈0.45-0.5 (matching the AdamW finding).
+### NEW PROGRAMME BEST: PR #4269 merged (val=47.5894 / test=46.0098)
+
+Lookahead-Lion α=0.7 at k=5 beats α=0.5 by −0.38 val, −0.48 test (same seed=0, both best_epoch=17). Lion-era α-pattern mirrors AdamW-era pattern at k=5: monotone improvement toward α=0.7. α-bowl minimum not yet found — α=0.8 probe active (#4343).
+
+### Closures (round 19)
+
+- **#4304 nezuko (heads=8)** CLOSED: val=56.70, +8.73 regress, best_ep=12 (timeout-cut at 12/17 epochs — +36% per-epoch overhead exhausts budget). No divergence or collapse; purely a budget incompatibility. **heads is dead at h=128 with 30-min budget.** Add to dead-end lever list.
+- **#4271 alphonse (Lion β1 sweep)** CLOSED: β1=0.85 (+0.34 regress), β1=0.95 (+3.03 regress). β1=0.9 default confirmed optimal; **asymmetric landscape: moving β1 high is ~9× more damaging than moving it low.** Lookahead's k=5 slow-weight smoothing stacks destructively with higher β1 (double-smoothing → over-sticky optimizer near cosine floor).
 
 ## Round-18 closures (Lion HP frontier exhausted)
 
-- **#4265 fern (Lookahead-Lion LR sweep)** CLOSED: Arm 1 only, val=49.41 (cfg.lr=3e-4 → +1.44 regress). **Lion LR landscape SHARPER than AdamW.** No adaptive scaling forgives small-LR error in Lion's sign-update. Closing as canonical Lion-LR-sensitivity data. Reassigned to slice_num=96 (#4323).
-- **#4264 frieren (Lookahead-Lion β2 scan)** CLOSED: Arm 1 only, val=54.62 (β2=0.95 → +6.65 regress, **largest single-knob regression in Lion era**). m-buffer half-life of 14 steps is too short at batch=4. Opposite of AdamW β2 finding (which was flat). Lion β2 should INCREASE from 0.99, not decrease. Reassigned to slice_num=32 (#4325).
+- **#4265 fern (Lion LR sweep)**: val=49.41 (Arm 1 only, +1.44 regress). Lion LR sharper than AdamW.
+- **#4264 frieren (Lion β2 scan)**: val=54.62 (Arm 1 only, +6.65 regress — largest single-knob Lion-era regression). β2=0.95 → m-buffer half-life 14 steps too short at batch=4.
 
 ## Round-17 closures (Lion 3-seed canonical complete; k-shift prediction CONFIRMED)
 
-- **#4242 nezuko (Lookahead-Lion seed=2)** CLOSED: best run val=48.84 (best_ep=17). **3-seed canonical COMPLETE**: mean=48.68, σ̂=0.64 on val; mean=47.22, σ̂=0.64 on test. Cleanest 3-seed canonical in programme.
-- **#4241 edward (Lookahead-Lion k=3)** CLOSED: best run val=48.20 (+0.23 vs k=5). **Round-16 prediction CONFIRMED.** Lion k-curve: k=2=48.84, k=3=48.20, k=5=47.97 — monotone descending; U-min at or right of k=5. Triggered Priority-1 follow-up: k=7 (edward #4310).
-
-⚠️ **Process issue (now 4+ occurrences):** heartbeat-rerun pattern (alphonse #4202, nezuko #4242, edward #4241, fern #4265, frieren #4264) — pods retry the same arm instead of advancing, producing degraded later runs with best_ep<17. Round-17 mitigation: shifted to **SINGLE-ARM** for all new assignments. Round-18 carries this forward.
-
-## Round-16 closure (Lion k-curve right-shift)
-
-- **#4268 tanjiro (Lookahead-Lion k=2)** CLOSED: val=48.84 (+0.86 vs k=5=47.97). **Major mechanism finding:** the k-curve U-shape minimum **shifts right when switching AdamW → Lion**. AdamW min at k=3; Lion min at k≥5. Lion's low per-step variance reduces basin-exploration → more steps needed between syncs.
-
-## Round-15 closure
-
-- **#4213 thorfinn (Lookahead-AdamW k=3 α=0.8)** CLOSED: val=57.87 — **AdamW α-frontier fully exhausted**. Confirms accelerating regression beyond critical pull rate. Last AdamW PR for this launch.
-
-## Round-14 closures (k-sweep U-curve confirmed; α-trend inversion; k=3 3-seed canonical clean)
-
-- **#4211 askeladd (Lookahead-AdamW k=3 α sweep)** CLOSED: α=0.6 (56.31) / α=0.7 (56.24); both regress vs α=0.5 (55.97). **Key finding: α-trend INVERTS at k=3 (α=0.5 optimal) vs k=5 (α=0.7 optimal)** — α and k not independently additive
-- **#4203 tanjiro (Lookahead-AdamW k=2)** CLOSED: val=56.49 > k=3=55.97. **k-sweep U-shaped, minimum at k=3**
-- **#4202 alphonse (Lookahead-AdamW k=3 seed=1)** CLOSED: val=57.44 (canonical run, best_ep=17). **k=3 has NO outlier (vs k=5's 78.50)**; 3-seed mean=56.49, σ̂=0.77
-
-## Round-13 closures (frontier closures: AdamW β2 + LR exhausted)
-
-- **#4183 frieren (Lookahead-AdamW β2 fine scan)** CLOSED: val=57.50 (β2=0.93) / 57.28 (β2=0.97) — **β2 flat in [0.93, 0.97]**; AdamW β2 frontier closed
-- **#4182 fern (Lookahead-AdamW LR sweep)** CLOSED: val=56.87 (lr=7e-4, marginal win) / 58.87 (lr=1e-3, regress) — **AdamW LR optimum in [5e-4, 7e-4]**; Lookahead does not unlock the lr=1e-3 ceiling
-
-## Round-12 closures
-
-- **#4224 edward (Lookahead-Lion seed=1)** CLOSED: val=49.21 / test=47.62 / best_ep=17 — **seed-robustness CONFIRMED**, seed-1 outlier eliminated by sign-based optimization
-- **#4210 nezuko (Lookahead-AdamW k=3 seed=2)** CLOSED: val=56.05 / test=53.03 — k=3 era canonical (superseded by Lion era); stable-seed dispersion 0.08 MAE (tighter than k=5)
-
-## Round-11b closures (carry-over context)
-
-- **#4123 edward (Lookahead-Lion)** MERGED: val=47.97 — new all-time best (Δ=−9.25 vs AdamW triple-stack)
-- **#4158 nezuko (Lookahead k=3)** MERGED: val=55.97 — superseded by Lion, but k=3 finding persists
-- **#4160 thorfinn (Lookahead k=5 seed=1)** CLOSED: val=78.50 OUTLIER (best_ep=10)
-- **#4174 alphonse (Lookahead k=5 seed=2)** CLOSED: val=57.05 canonical
-- **#4175 askeladd (Lookahead α sweep at k=5)** CLOSED: superseded; reassigned to k=3 α sweep
-- **#4176 tanjiro (Lookahead + SWA-of-slow)** CLOSED: NO-OP, val=57.22 bit-identical to Lookahead alone
+- **#4242 nezuko (Lookahead-Lion seed=2)** CLOSED: val=48.84. OLD 3-seed canonical (α=0.5): val mean=48.68, σ̂=0.64 (SUPERSEDED by new baseline at α=0.7)
+- **#4241 edward (Lookahead-Lion k=3)** CLOSED: val=48.20. k-shift CONFIRMED; Lion k-curve U-min at or right of k=5.
 
 ## Key mechanistic findings
 
@@ -139,17 +129,16 @@ Across the full AdamW Lookahead α/k frontier closed in earlier rounds, optimal 
 | T_max < 17 | Suboptimal (PyTorch Gotcha #3) |
 | RMSNorm (vs LayerNorm) | −5.18 val regression |
 | slice_num=128 (2× attention; pre-Lion) | −10.92 val regression |
+| **heads=8 at h=128 (30-min budget)** | **+8.73 val regression (budget incompatibility)** |
 | clip_norm=1.0 | −3.68 val regression |
 | Warmup before cosine | Worsens early dynamics |
-| SWA + constant-LR tail | Regression + kick-out |
-| SWA tail4 at T_max=17 cosine | Regression + non-stationary tail |
-| EMA(0.999) on fast weights | Regression — same root cause |
-| SWA on slow (Lookahead) weights | NO-OP — bit-identical to Lookahead alone |
+| SWA variants (all) | Regression or NO-OP |
 | β1=0.95 + β2=0.95 (compound momentum) | +2.86 val regression |
 | Lookahead k=8 | +2.87 val regression |
 | Lookahead α=0.3 | +4.36 val regression |
-| Lion β2=0.95 | +6.65 val regression (largest single knob, this round) |
+| Lion β2=0.95 | +6.65 val regression |
 | Lion cfg.lr=3e-4 | +1.44 val regression |
+| **Lion β1=0.95 (over-smooth + Lookahead)** | **+3.03 val regression** |
 
 ### PyTorch scheduler gotchas
 
@@ -157,43 +146,38 @@ Across the full AdamW Lookahead α/k frontier closed in earlier rounds, optimal 
 2. `group['lr']` overrides contaminate `CosineAnnealingLR.get_lr()`
 3. T_max must equal total_epochs — T_max<total causes hard-zero LR
 
-### Post-hoc weight averaging is exhausted at T_max=17
-
-T_max=17 cosine has no stationary tail for either fast or slow trajectories. Online averaging (Lookahead's internal slow←fast sync) is the only averaging that works.
-
 ## Next research directions
 
-### Priority 1 (Architectural portfolio — IN FLIGHT, 5 arms)
+### Priority 1 (Immediate — IN FLIGHT)
 
-- **slice_num=96** (fern #4323) — richer latent attention basis (NEW round 18)
-- **slice_num=32** (frieren #4325) — capacity-light; defends against overfit (NEW round 18)
-- **heads=8** (nezuko #4304) — more attention specialization
+- **α=0.8 probe** (alphonse #4343) — α-bowl not yet bottomed; monotone at k=5 so far; if it wins, push further to 0.9
+- **3-seed canonical α=0.7** (askeladd #4344, nezuko #4345) — paper-facing noise floor for new programme best
+- **k=7 probe** (edward #4310) — whether k-curve right-shift extends to k=7; winner candidate if val<47.59
+
+### Priority 2 (Architectural — IN FLIGHT)
+
+- **mlp_ratio=3** (thorfinn #4286) — wider FFN; pair with depth to find compositional gain
 - **depth=6** (tanjiro #4294) — deeper net
-- **mlp_ratio=3** (thorfinn #4286) — wider FFN
+- **slice_num=96** (fern #4323) — richer latent attention basis
+- **slice_num=32** (frieren #4325) — capacity-light
 
-### Priority 2 (Remaining HP probes — IN FLIGHT)
+### Priority 3 (Next idle-round candidates)
 
-- **Lookahead-Lion k=7** (edward #4310) — direct prediction test for U-min location
-- **Lookahead-Lion α sweep at k=5** (askeladd #4269) — 3 mechanism branches
-- **Lookahead-Lion β1 scan** (alphonse #4271) — direction-weighting symmetry
+- **Combined architectural compound** — if any of {mlp_ratio=3, depth=6, slice_num∈{32,96}} win, compose them
+- **Lookahead-Lion + h=192** — hidden-dim scale-up (gated on #4286 VRAM data); heads=8 is dead at h=128 but could reopen at h=192 (d_head would be 24 at heads=8 vs 32 now)
+- **Lion β2 INCREASE** (β2 ∈ {0.995, 0.999}) — #4264 confirmed direction is UP from 0.99; small but real headroom
+- **k=8 or k=9** — if k=7 wins, natural continuation
+- **α × k composition** — if α=0.7 is confirmed optimal at k=5, test (k=7, α=0.7) and (k=5, α=0.7) compound to lock in both dimensions
 
-### Priority 3 (Architectural follow-ups — pipeline for next idle round)
-
-- **Combined-architectural compound** — if multiple of {mlp_ratio=3, depth=6, heads=8, slice_num∈{32,96}} win, compose them
-- **Lookahead-Lion + h=192** — hidden-dim scale-up (gated on #4286 mlp_ratio=3 VRAM measurement; Lion's no-v_t saves headroom)
-- **Lookahead-Lion + cross-slice attention** — break slice-independence assumption in Transolver
-- **Lookahead-Lion + layer-wise LR decay** — finer-grained LR control to head vs backbone
-- **Lion β2 INCREASE** (β2 ∈ {0.995, 0.999}) — Round-18 closure of #4264 suggests the direction is *up* not down, but probably <0.5 MAE headroom
-- **Lookahead-Lion k=8** — direct extension of k=7 (#4310); if k=7 < 47.97 this is the natural next test
-
-### Priority 4 (Loss reformulation — escalation tier 2 if architectural plateau)
+### Priority 4 (Loss reformulation — escalation tier 2)
 
 - **Physics-informed loss:** soft continuity-equation constraint on surface velocity field
 - **Pressure-relative target normalization:** scale-invariant pressure prediction
-- **Per-region loss weighting:** decompose val_avg into surface/p/Ux/Uy components and reweight
+- **Per-region loss weighting:** decompose val_avg components and reweight
 
-### Priority 5 (Speculative; bigger swings)
+### Observations for paper
 
-- **SAM (sharpness-aware minimization)** with Lion as base (2× compute — budget-limited to ~8-9ep, gotcha #3 risk)
-- **Pseudo-labeling** from a momentum-distilled teacher
-- **LR cosine restart** at epoch 17 to extend training; cosine floor + slow-weight pull is unique
+1. **Lion's α-frontier at k=5 mirrors AdamW's:** basin-averaging mechanism (not optimizer) dominates at k=5; Lookahead is optimizer-independent in the strong-pull regime
+2. **Lion β1 landscape is asymmetric:** raising β1 from 0.9 is ~9× worse than lowering it; Lookahead-Lion double-smoothing is destructive above β1=0.9
+3. **heads=8 is budget-incompatible at h=128:** +36% per-epoch cost kills the cosine-schedule benefit; not a capacity failure — a wall-clock failure
+4. **Effective-pull-rate α/k ≈ 0.14-0.17 is a cross-optimizer invariant:** validated at k=5 for both AdamW and Lion

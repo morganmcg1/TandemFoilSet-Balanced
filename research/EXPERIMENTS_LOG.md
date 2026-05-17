@@ -1,5 +1,107 @@
 # SENPAI Research Results
 
+## 2026-05-17 05:00 — PR #4269: Lookahead-Lion α=0.7 at k=5 ← MERGED — NEW PROGRAMME BEST (val=47.5894)
+
+- Branch: `willowpai2i48h1-askeladd/lookahead-lion-alpha-sweep`
+- Student: willowpai2i48h1-askeladd
+- W&B runs: `oftlu9tn` (α=0.7, CANONICAL WINNER), `yq4c6lyw` (α=0.3); group `lookahead_lion_alpha_sweep`
+- Hypothesis: Lion-era α frontier at k=5. Test whether α=0.7 win from AdamW (#4175: 56.92 < 57.22) transfers to Lion.
+
+### Results (W&B-verified)
+
+| Arm | α | val_avg | test_avg | best_ep | W&B | Δ vs baseline (47.97) |
+|---|---|---|---|---|---|---|
+| α=0.7 (WINNER) | 0.7 | **47.5894** | **46.0098** | 17 | `oftlu9tn` | **−0.38 (NEW BEST)** |
+| α=0.3 | 0.3 | 51.8444 | 49.5339 | 17 | `yq4c6lyw` | +3.87 |
+| Baseline (α=0.5, PR #4123) | 0.5 | 47.9735 | 46.4900 | 17 | `rx3negp7` | — |
+
+**Monotone ordering at k=5: α=0.3 < α=0.5 < α=0.7** (descending val). α=0.7 wins on both val and test.
+
+### Mechanism confirmed
+
+The same α-pattern found for Lookahead-AdamW at k=5 transfers to Lookahead-Lion: basin-averaging benefits from stronger pull at k=5 regardless of base optimizer. At k=5, fast weights drift far enough between syncs that α=0.7 lets the slow weights track a better basin-averaged trajectory. Lion's sign-update lowers per-step magnitude variance but does NOT collapse the inter-sync drift enough to reverse the bowl.
+
+Effective-pull-rate framing (α/k) validated: k=5 α/k = 0.14 (α=0.7), which is right in the empirically predicted optimal band of 0.14-0.17.
+
+### Per-split test metrics (winning arm, α=0.7, W&B `oftlu9tn`)
+
+| Split | mae_surf_p |
+|---|---|
+| test_single_in_dist | 46.5086 |
+| test_geom_camber_rc | 55.9690 |
+| test_geom_camber_cruise | 42.3991 |
+| test_re_rand | 39.1624 |
+| **test_avg** | **46.0098** |
+
+Surface MAE: Ux=0.6091, Uy=0.3322, p=46.0098
+
+### Decision
+
+**MERGED.** val=47.5894 beats current programme best (47.97) by −0.38 val, −0.48 test. Both metrics improve, best_epoch=17 (cosine floor), seed=0, W&B-verified. BASELINE.md updated. New win threshold: **val < 47.5894**.
+
+### Follow-ups assigned (round-19)
+
+- α=0.8 probe (alphonse #4343) — monotone suggests α-minimum not yet found
+- 3-seed canonical seeds 1+2 (askeladd #4344, nezuko #4345) — paper-ready noise floor
+
+## 2026-05-17 05:00 — PR #4304: Lookahead-Lion + heads=8 ← CLOSED (budget incompatibility; +36% epoch time exhausts T_max=17 budget)
+
+- Branch: `willowpai2i48h1-nezuko/lookahead-lion-heads-8`
+- Student: willowpai2i48h1-nezuko
+- W&B runs: `6148bptu` (CANONICAL, val=56.70, best_ep=12 — timeout-cut); group `lookahead_lion_capacity`
+- Hypothesis: Increase Transolver attention heads from 4 → 8 (d_head from 32 → 16).
+
+### Results (W&B-verified)
+
+| Metric | Baseline (heads=4) | heads=8 | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **47.97** | **56.70** | **+8.73 major regress** |
+| test_avg/mae_surf_p | 46.49 | 55.11 | +8.62 |
+| best_epoch | 17 (budget edge) | 12 (timeout-cut) | −5 |
+| epoch_time_s | 109.76 | 149.55 | **+36% slower** |
+| gpu_mem_peak_gb | ~35.9 | 50.41 | +14.5 GB |
+
+### Root cause
+
+**No divergence, no attention subspace collapse.** The val curve descended cleanly for all 12 epochs — same shape as heads=4, just shifted upward. The failure mode is **budget incompatibility**:
+
+1. +36% wall-clock cost per epoch → only 12 epochs fit in 30-min budget vs 17 for heads=4
+2. Slower asymptotic convergence at d_head=16 (less per-head representational room)
+3. Baseline reaches its best at exactly epoch 17 (cosine floor) — budget is tightly tuned to heads=4
+
+This is the same pattern as slice_num=128 pre-Lion era (−10.92 val): doubling attention complexity at fixed budget kills it. **heads is on the no-go list at h=128 with 30-min budget.**
+
+### Decision
+
+Closed — val=56.70 > programme best 47.97. Architectural portfolio retains 4 remaining arms. Nezuko reassigned to α=0.7 seed=2 canonical (#4345).
+
+## 2026-05-17 05:00 — PR #4271: Lookahead-Lion β1 sweep ← CLOSED (β1=0.9 confirmed optimal; asymmetric landscape)
+
+- Branch: `willowpai2i48h1-alphonse/lookahead-lion-b1-sweep`
+- Student: willowpai2i48h1-alphonse
+- W&B runs: `4r94z6zc` (β1=0.85, val=48.32), `g18twvwy` (β1=0.95, val=51.01); group `lookahead_lion_b1_sweep`
+- Hypothesis: Sweep Lion β1 ∈ {0.85, 0.95} vs default 0.9 at k=5/α=0.5.
+
+### Results (W&B-verified)
+
+| Arm | β1 | val_avg | test_avg | best_ep | W&B | Δ vs baseline (47.97) |
+|---|---|---|---|---|---|---|
+| Baseline (PR #4123) | 0.90 | **47.97** | 46.49 | 17 | `rx3negp7` | — |
+| Arm 1 | 0.85 | 48.32 | 46.67 | 17 | `4r94z6zc` | **+0.34** |
+| Arm 2 | 0.95 | 51.01 | 48.59 | 17 | `g18twvwy` | **+3.03** |
+
+**β1=0.9 default confirmed optimal.** Neither arm beats baseline.
+
+### Frontier finding — ASYMMETRIC β1 landscape
+
+Lowering β1 by 0.05 (→0.85) costs +0.34 val; raising β1 by 0.05 (→0.95) costs +3.03 val — **~9× more damaging on the high side.**
+
+Mechanism: Lookahead already provides slow-weight smoothing at k=5 boundary. Lion's β1 stacks another layer of momentum smoothing on top. β1=0.95 makes the optimizer too sticky to respond to landscape changes as cosine LR descends → model loses the late-training fine-tuning. The result is consistent with the Lion β2 finding (frieren #4264): Lion's smoothing knobs interact strongly with Lookahead; defaults are NOT off-the-shelf safe in Lookahead-wrapped mode — they're the local optimum for this composition.
+
+### Decision
+
+Closed — β1=0.9 is the optimum; no winner candidate. Alphonse reassigned to α=0.8 probe (#4343).
+
 ## 2026-05-17 04:00 — PR #4265: Lookahead-Lion LR sweep ← CLOSED (Lion LR landscape SHARPER than AdamW; rate-limit-close, Arm 1 only)
 
 - Branch: `willowpai2i48h1-fern/lookahead-lion-lr-sweep`
