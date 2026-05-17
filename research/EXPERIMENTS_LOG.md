@@ -1374,3 +1374,50 @@ Stop condition triggered (val > 41.0 threshold); Arm B (warmup=3) correctly not 
 - **Analysis:** U-shape confirmed. slice_num landscape: 96=42.54, 64=39.83, **48=38.68 [optimum]**, 40=41.27, 32=38.94. Both arms clearly worse than the new SwiGLU baseline (36.5616). Arm B is near-neutral vs the old baseline (38.675) but loses on test_geom_camber_rc — the hardest OOD split dominates. Arm A still descending at ep36 (−0.35/ep) but trajectory suggests landing ~39.5, still above old baseline. Per-student analysis: coarser than 48 loses spatial resolution for tandem-foil interaction routing; finer than 48 adds attention-matrix noise. The spatial routing optimum is genuinely at 48.
 - **Key insight:** Note assigned against old baseline (38.675) but evaluated against new SwiGLU baseline (36.5616) — both arms clearly fail either way.
 - **Decision:** CLOSED — no_improvement. Slice_num axis fully closed: U-shape confirms 48 is the local optimum. → askeladd reassigned to #4487 gradient noise injection (parameter-space regularization, unexplored axis).
+
+---
+
+## 2026-05-17 08:55 — PR #4414: Surface-only pressure-weight multiplier (1.5×, 2.0×)
+
+- **Branch:** charliepai2i48h2-fern/surf-p-weight-mult
+- **Hypothesis:** Redirecting more loss budget to surface pressure specifically (asymmetric mult on the primary metric's channel) would improve `val_avg/mae_surf_p`.
+- **Metric artifacts:** `models/model-charliepai2i48h2-fern-surf-p-weight-mult-A-20260517-063105/metrics.jsonl`, `models/model-charliepai2i48h2-fern-surf-p-weight-mult-B-20260517-074221/metrics.jsonl`
+
+| Metric | Baseline (PR #4243) | Arm A (mult=1.5, eff. w=3.0) | Arm B (mult=2.0, eff. w=4.0) |
+|--------|---------------------|------------------------------|-------------------------------|
+| **val_avg/mae_surf_p** | **38.6750** (old) / **36.5616** (new) | 40.5421 (+4.83% vs old; +10.9% vs new) | 40.6781 (+5.18% vs old; +11.3% vs new) |
+| **test_avg/mae_surf_p** | **33.4948** (old) | 35.0959 (+4.78%) | 35.3648 (+5.58%) |
+| val_geom_camber_rc | 51.62 | 51.42 (−0.4%) | 55.23 (+7.0%) |
+| val_geom_camber_cruise | 22.48 | 24.88 (+10.7%) | 24.06 (+7.0%) |
+| Best epoch | 35 | 35 (timeout, still descending) | 35 (timeout, still descending) |
+| Per-epoch time | 51.7 s | ~51.5 s | ~51.6 s |
+
+- **Analysis:** Monotone regression: mult=1.0 (baseline best) → mult=1.5 → mult=2.0 all worse. Up-weighting surface pressure hurts cruise (+10.7%/+7.0%) and re-rand, while camber_rc barely moves (−0.4% in Arm A). Student's root-cause: (a) surface points are ~1-5% of mesh → noisy gradient under tight grad-clip; (b) cross-channel coupling (p ↔ Ux/Uy via Bernoulli) means optimizing p at expense of velocities removes shared structure; (c) model is already well-allocated by `pressure_weight=2.0` uniform; extra mult delivers small effective emphasis given asinh compression. Even volume_p degraded (54→58 vol_p Arm A→B).
+- **Decision:** CLOSED — no_improvement. Loss-weighting axis comprehensively closed: pressure_weight, surf_weight, vel_surf_weight, surf_p_weight_mult all explored. → fern reassigned to #4501 channel-dropout (input feature robustness, new axis).
+
+---
+
+## 2026-05-17 08:55 — PR #4433: Y-mirror geometric augmentation: physics-exact data doubling
+
+- **Branch:** charliepai2i48h2-tanjiro/y-mirror
+- **Hypothesis:** Navier-Stokes y-mirror symmetry is exact for 2D flow → applying random y-mirror at training doubles effective training data, specifically targeting `val_geom_camber_rc` OOD generalization (reversed-camber geometries are mirror images of in-distribution).
+
+| Metric | Baseline (PR #4243) | Arm A (p=0.5) | Arm B (p=1.0) |
+|--------|---------------------|---------------|----------------|
+| **val_avg/mae_surf_p** | **38.6750** (old) / **36.5616** (new) | 45.7942 (+18.4% vs old) | **976.45 (DIVERGED)** |
+| **test_avg/mae_surf_p** | **33.4948** | 39.7021 (+18.5%) | n/a |
+| val_geom_camber_rc | 51.62 | 58.01 (+12.4%) | 1673.24 |
+| val_geom_camber_cruise | 22.48 | 29.21 (+29.9%) | 337.37 |
+| Arm B status | | | stopped ep28, monotonically diverging |
+| Metric artifacts | | `models/model-charliepai2i48h2-tanjiro-y-mirror-A-20260517-065754/metrics.jsonl` | `models/model-charliepai2i48h2-tanjiro-y-mirror-B-20260517-080115/metrics.jsonl` |
+
+- **Key OOD signal from Arm A:** `val_geom_camber_rc` was the *least* regressed split (+12.4% vs +18-30% others). Direction is correct; execution broke in normalization.
+- **Root cause (student's excellent diagnosis):** `stats.json` computed on unmirrored data → `x_norm_mirrored = -x_norm - 2·mean/std` (shifted reflection, NOT symmetric pair). pos_y original: `[-0.37, +6.25]`, mirrored: `[-6.98, -0.37]` — disjoint distributions. Arm B (p=1.0) catastrophically diverges because all training samples live in mirrored half (raceCar ground at y=0 → pos_y ≥ 0) while val is unmirrored.
+- **Decision:** CLOSED (normalization bug). Hypothesis remains physically valid. **Reassigned as y-mirror-v2 (#4499): apply mirror in normalized space with explicit bias correction `x_norm[k] = -x_norm[k] - 2·mean[k]/std[k]`** — no offline stats regeneration needed, ~15 lines in training loop.
+
+---
+
+## 2026-05-17 09:00 — New assignments: tanjiro #4499 y-mirror-v2, fern #4501 channel-dropout
+
+- **#4499 (tanjiro y-mirror-v2):** Post-normalization y-mirror with explicit bias correction. Arm A: flip all fields (pos_y, saf_1, AoA0, AoA1, stagger, u_y) p=0.5. Arm B: geometry-only flip (pos_y, saf_1) p=0.5.
+- **#4501 (fern channel-dropout):** Stochastic input channel masking. p_drop=0.10 (Arm A), 0.20 (Arm B). Forces robustness to feature-subset absence; different mechanism from edward's continuous noise (#4454). Inverted-dropout scaling preserves expected magnitude.
