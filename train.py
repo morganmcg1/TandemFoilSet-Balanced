@@ -77,6 +77,44 @@ def encode_inputs(x_norm: torch.Tensor, num_freq: int) -> torch.Tensor:
     return torch.cat([enc, non_pos], dim=-1)
 
 
+def compute_per_foil_features(x_raw: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Per-foil chord-relative coord and foil-id indicator for tandem geometry.
+
+    For tandem samples (stagger > 0), assign nodes to foil-2 when world-x is at
+    least ``stagger - 0.5``; otherwise foil-1. ``x_chord`` shifts foil-2 nodes by
+    ``-stagger`` so each foil's chord position is referenced consistently. The
+    heuristic is approximate — race-car tandems with small stagger have overlapping
+    foils, and cruise tandems have foil-2 chord/position different from stagger —
+    but the transformation is consistent and gives the model a structured
+    per-foil reference even when imperfect physically.
+
+    Args:
+        x_raw: ``[B, N, 24]`` (or ``[N, 24]``) raw inputs pre-normalization. World-x
+            at dim 0, stagger at dim 23.
+
+    Returns:
+        ``(x_chord, foil_id)`` each shaped ``[B, N]`` (or ``[N]``).
+    """
+    x_world = x_raw[..., 0]
+    stagger = x_raw[..., 23]
+    is_tandem = stagger > 0
+    is_foil2 = is_tandem & (x_world >= stagger - 0.5)
+    foil_id = is_foil2.to(x_raw.dtype)
+    x_chord = torch.where(is_foil2, x_world - stagger, x_world)
+    return x_chord, foil_id
+
+
+def append_per_foil_features(x_norm: torch.Tensor, x_raw: torch.Tensor) -> torch.Tensor:
+    """Append ``(x_chord, foil_id)`` to the last dim of ``x_norm``.
+
+    ``x_chord`` and ``foil_id`` are computed from raw (pre-normalization) inputs
+    and added unnormalized — they already live in well-bounded ranges
+    (``x_chord``∈[-0.5, ~1.5], ``foil_id``∈{0,1}).
+    """
+    x_chord, foil_id = compute_per_foil_features(x_raw)
+    return torch.cat([x_norm, x_chord.unsqueeze(-1), foil_id.unsqueeze(-1)], dim=-1)
+
+
 # ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
@@ -310,7 +348,7 @@ def _pointwise_loss(pred, y_norm, loss_type: str):
     raise ValueError(f"Unknown loss_type: {loss_type!r}")
 
 
-def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_type: str = "l1", use_bf16: bool = False) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_type: str = "l1", use_bf16: bool = False, use_per_foil_coords: bool = False) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -336,6 +374,8 @@ def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_typ
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            if use_per_foil_coords:
+                x_norm = append_per_foil_features(x_norm, x)
             x_enc = encode_inputs(x_norm, num_freq)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             with amp_ctx:
@@ -566,6 +606,7 @@ class Config:
     lion_lr: float = 1e-4  # Lion lr; canonical: AdamW_lr / 3..10
     lion_wd: float = 1e-3  # Lion wd; canonical: AdamW_wd * 3..10
     use_qk_norm: bool = False  # ViT-22B-style LayerNorm(head_dim) on Q and K before SDPA
+    use_per_foil_coords: bool = False  # append (x_chord, foil_id) per-foil features to inputs
 
 
 cfg = sp.parse(Config)
@@ -594,7 +635,8 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
-ENCODED_X_DIM = 4 * cfg.num_freq + (X_DIM - 2)  # 4*num_freq Fourier feats + 22 non-coord feats
+PER_FOIL_EXTRA_DIMS = 2 if cfg.use_per_foil_coords else 0  # (x_chord, foil_id)
+ENCODED_X_DIM = 4 * cfg.num_freq + (X_DIM - 2) + PER_FOIL_EXTRA_DIMS  # Fourier feats + 22 non-coord feats + per-foil extras
 model_config = dict(
     space_dim=2,  # unchanged; only used as input-dim split for preprocess MLP
     fun_dim=ENCODED_X_DIM - 2,  # so fun_dim + space_dim == ENCODED_X_DIM
@@ -613,6 +655,33 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 ffn_inner = next(m.inner for m in model.modules() if isinstance(m, SwiGLUFFN))
 print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN=SwiGLU inner={ffn_inner})")
+
+if cfg.use_per_foil_coords:
+    print(
+        f"\nPer-foil input: X_DIM {X_DIM} -> ENCODED_X_DIM {ENCODED_X_DIM} "
+        f"(+2 per-foil features: x_chord, foil_id)"
+    )
+    sanity_ds = val_splits.get("val_geom_camber_rc")
+    if sanity_ds is not None and len(sanity_ds) > 0:
+        sx, _, sis = sanity_ds[0]
+        sx_chord, sfoil = compute_per_foil_features(sx)
+        stagger = sx[0, 23].item()
+        surf_idx = sis.nonzero(as_tuple=True)[0]
+        surf_x = sx[surf_idx, 0]
+        order = torch.argsort(surf_x)
+        print(f"  Sanity sample (val_geom_camber_rc[0]): stagger={stagger:.3f}, n_surf={len(surf_idx)}")
+        print(f"    {'world_x':>8}  {'x_chord':>8}  {'foil_id':>7}  {'z':>7}")
+        # Pick ~10 nodes spanning the surface span
+        n_show = min(10, len(order))
+        picks = [int(p * (len(order) - 1)) for p in [i / (n_show - 1) for i in range(n_show)]]
+        for k in picks:
+            i = surf_idx[order[k]]
+            print(
+                f"    {sx[i, 0].item():8.3f}  {sx_chord[i].item():8.3f}  "
+                f"{int(sfoil[i].item()):7d}  {sx[i, 1].item():7.3f}"
+            )
+        n_foil2 = int(sfoil[surf_idx].sum().item())
+        print(f"  Surface split: foil-1 nodes={len(surf_idx) - n_foil2}, foil-2 nodes={n_foil2}")
 
 if cfg.use_lion:
     optimizer = Lion(model.parameters(), lr=cfg.lion_lr,
@@ -702,6 +771,8 @@ for epoch in range(MAX_EPOCHS):
             noise = torch.randn_like(x_norm[..., :2]) * cfg.coord_noise_std * pad_mask
             x_norm = x_norm.clone()
             x_norm[..., :2] = x_norm[..., :2] + noise
+        if cfg.use_per_foil_coords:
+            x_norm = append_per_foil_features(x_norm, x)
         x_enc = encode_inputs(x_norm, cfg.num_freq)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
 
@@ -746,7 +817,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type, cfg.use_bf16)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type, cfg.use_bf16, cfg.use_per_foil_coords)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -820,7 +891,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type, cfg.use_bf16)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type, cfg.use_bf16, cfg.use_per_foil_coords)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
