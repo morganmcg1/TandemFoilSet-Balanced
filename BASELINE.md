@@ -1,6 +1,52 @@
 # Baseline — icml-appendix-willow-pai2i-48h-r3
 
-## Current best (as of 2026-05-17 00:25) — PR #3975: bfloat16 autocast (+3 epochs in wall-clock cap)
+## Current best (as of 2026-05-17 03:10) — PR #4263: Cosine T_max=25 (schedule aligned to bf16 epoch budget)
+
+Fourteen winners merged: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + SOAP optimizer (PR #3283, −31.7%) + SOAP precond_freq=5 (PR #3495, −1.78%) + EMA model weights decay=0.999 (PR #3430, −18.8%) + EMA decay=0.99 (PR #3591, −3.85%) + Huber beta=0.5 (PR #3316, −6.05%) + Cauchy loss c=1.0 (PR #3612, −3.67%) + Huber beta=0.1 (PR #3868, −3.77%) + Lookahead k=5 (PR #3947, −4.14%) + Gradient clipping max_norm=1.0 (PR #3497, −2.72%) + Huber beta=0.01 (PR #4037, −2.51%) + bfloat16 autocast (PR #3975, −9.74%) + **cosine T_max=25** (PR #4263, tanjiro, **−8.47% vs previous canonical**).
+
+**Primary ranking metric:**
+- `val_avg/mae_surf_p` = **37.9354** (run `ymqw3n5m`, tanjiro arm3-tmax25, best epoch 17)
+
+**Test (paper-facing):**
+- `test_avg/mae_surf_p_excl_cruise` (3-split mean) = **39.0519** (−9.64% vs previous 43.2173)
+  - `test_single_in_dist/mae_surf_p` = 40.7102
+  - `test_geom_camber_rc/mae_surf_p` = 45.1351
+  - `test_re_rand/mae_surf_p` = 31.3105
+  - `test_geom_camber_cruise/mae_surf_p` = NaN (pre-existing bug)
+
+**Config (post-merge):**
+- Transolver: n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, dropout=0
+- **SOAP optimizer** (precondition_frequency=5) lr=1e-3, warmup_epochs=3 (LinearLR) → CosineAnnealingLR(**T_max=22**, i.e. `--cosine_t_max 25`), weight_decay=1e-4, batch_size=4, surf_weight=10.0
+- 50 epochs, **Huber loss (huber_beta=0.01, cauchy_c=0.0)**; `vol_loss + 10*surf_loss`
+- **EMA of model weights** (ema_decay=0.99, updated each training step)
+- **Lookahead (k=5, alpha=0.5)** wrapping SOAP
+- **Gradient clipping (max_norm=1.0)** applied before optimizer.step()
+- **bfloat16 autocast** (`--use_bf16`): forward + loss in bf16, backward + optimizer in fp32; no GradScaler
+- **cosine_t_max=25** (`--cosine_t_max 25`): cosine phase = 25 − 3 warmup = 22 effective epochs; LR at epoch 17 ≈ 2.9e-4 (not zero — partial cooldown is better than full)
+- Wall-clock: ~30 min cap, **best epoch 17**; epoch_time ~107s
+- Peak VRAM: **33.0 GB**
+- `param count = 0.66M`
+
+**Reproduce:**
+```bash
+cd target/ && python train.py \
+  --optimizer soap \
+  --precondition_frequency 5 \
+  --lr 1e-3 --warmup_epochs 3 \
+  --huber_beta 0.01 \
+  --surf_weight 10.0 --seed 42 \
+  --ema_decay 0.99 \
+  --use_lookahead --lookahead_k 5 --lookahead_alpha 0.5 \
+  --grad_clip 1.0 \
+  --use_bf16 \
+  --cosine_t_max 25
+```
+
+**Mechanism note:** With bf16 giving 17 epochs and the previous T_max=50, the LR at best epoch was ~80% of peak — the cosine cooldown phase was effectively disabled. T_max=25 gives a 22-epoch cosine window; at epoch 17 the LR is ~2.9e-4 (29% of peak), providing genuine refinement. T_max=17 (full budget match) goes all the way to zero by epoch 17, which is slightly too aggressive: Arm 3 (T_max=25) beats Arm 2 (T_max=17) on val (37.93 vs 38.32), suggesting the optimal end-point is a non-zero LR floor rather than fully cooled.
+
+---
+
+## Previous best (as of 2026-05-17 00:25) — PR #3975: bfloat16 autocast (+3 epochs in wall-clock cap)
 
 Thirteen winners merged: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + SOAP optimizer (PR #3283, −31.7%) + SOAP precond_freq=5 (PR #3495, −1.78%) + EMA model weights decay=0.999 (PR #3430, −18.8%) + EMA decay=0.99 (PR #3591, −3.85%) + Huber beta=0.5 (PR #3316, −6.05%) + Cauchy loss c=1.0 (PR #3612, −3.67%) + Huber beta=0.1 (PR #3868, −3.77%) + Lookahead k=5 (PR #3947, −4.14%) + Gradient clipping max_norm=1.0 (PR #3497, −2.72%) + Huber beta=0.01 (PR #4037, −2.51%) + **bfloat16 autocast** (PR #3975, askeladd, **−9.74% vs previous canonical**).
 
