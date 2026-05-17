@@ -1544,3 +1544,39 @@ Stop condition triggered (val > 41.0 threshold); Arm B (warmup=3) correctly not 
 - **#4553 (alphonse reglu):** ReGLU (ReLU gate) completing gate-activation sweep + SwiGLU calibration arm. Shazeer 2020 predicts ReGLU ≈ GeGLU ≈ SwiGLU; hard sparsity may help OOD.
 - **#4556 (askeladd grad-clip-sweep):** max_norm=2.0 (A) / 3.0 (B). Motivated by clip_frac=1.000 diagnostic from #4487 — every gradient update is being rescaled; loosening preserves large-gradient signal.
 - **#4558 (tanjiro y-mirror-v3):** geometry-only y-mirror at p=0.15 (A) / 0.30 (B) on GeGLU baseline. Lower p should reduce in-dist tax while retaining OOD broadening on val_geom_camber_rc.
+
+---
+
+## 2026-05-17 12:00 — PR #4501: Input channel-level dropout (p=0.10/0.20) — CLOSED (catastrophic failure)
+
+- **Branch:** charliepai2i48h2-fern/channel-dropout
+- **Hypothesis:** Stochastic masking of full 24-channel input at training time (per-channel-per-batch). Hypothesis: diverse geometric redundancy (DSDF×8, saf×2, pos×2) would allow recovery from channel drops, improving OOD generalization.
+- **Metric artifacts:** `models/model-charliepai2i48h2-fern-channel-dropout-A-*/metrics.jsonl`, `models/model-charliepai2i48h2-fern-channel-dropout-B-*/metrics.jsonl`
+
+| Metric | Baseline (GeGLU, #4477) | Arm A (p=0.10) | Arm B (p=0.20) |
+|--------|------------------------|----------------|----------------|
+| **val_avg/mae_surf_p** | **35.5046** | 75.24 (+111.9%) | 120.68 (+239.9%) |
+| **test_avg/mae_surf_p** | **30.9204** | — (stopped) | — (stopped) |
+| val_geom_camber_rc | 50.4000 | 91.84 (+82.2%) | 145.32 (+188%) |
+| Stop triggered | — | epoch 8 val=114.09 | epoch 8 val=156.22 |
+
+- **Root cause (student's excellent diagnosis):** The 24 input channels are NOT uniformly redundant. They split into two groups: (1) per-node geometry (dims 0-11: pos, saf, dsdf) with peer redundancy via attention; (2) per-sample scalar conditioning (dims 12-23: is_surface, log_Re, AoA, NACA, gap, stagger) with NO peer redundancy — these are global broadcasts. Dropping log_Re = zero Reynolds info for that step. Indiscriminate masking destroys conditioning.
+- **Decision:** CLOSED — catastrophic failure. Hypothesis correctly falsified. → fern reassigned to #4572 geometry-only channel-dropout (dims 0-11 only, p=0.05/0.15).
+
+---
+
+## 2026-05-17 12:00 — PR #4435: LayerScale γ_init=1e-4/1e-2 (thorfinn) — CLOSED (baseline superseded)
+
+- **Branch:** charliepai2i48h2-thorfinn/layerscale
+- **Hypothesis:** Learnable per-channel γ on each residual branch (CaiT). γ_init=1e-4 (CaiT default) vs γ_init=1e-2 (warmer).
+- **Result:** Arm A (γ_init=1e-4) val=37.6006 vs baseline at time 38.6750 (−2.78%); Arm B (γ_init=1e-2) failed (stopped epoch 18, val=49.68).
+- **Baseline moved:** Two subsequent merges (SwiGLU #4358 → val=36.56; GeGLU #4477 → val=35.50) moved the bar past Arm A's result. PR also CONFLICTING.
+- **Key γ insights:** ls2 (MLP) 2-4× larger than ls1 (attention); b4.ls1 collapsed to γ=0.005 (last block attention nearly unused); γ_init=1e-2 is 100× too hot for 5-block timeout-bound runs; val still descending at ep34.
+- **Decision:** CLOSED — not mergeable (result < current baseline). LayerScale is promising; re-testing on GeGLU baseline (#4576, γ_init=1e-4/3e-5, informed by γ trajectory data).
+
+---
+
+## 2026-05-17 12:05 — New assignments: fern #4572 channel-dropout-geom-only, thorfinn #4576 layerscale-geglu
+
+- **#4572 (fern channel-dropout-geom-only):** Restricts channel masking to dims 0-11 (geometry: pos, saf, dsdf) only. Dims 12-23 (conditioning: log_Re, AoA, NACA, gap, stagger) left untouched. Arms: p=0.05 (A) / p=0.15 (B). Much lower p than failed #4501 given the model's fragility to channel removal.
+- **#4576 (thorfinn layerscale-geglu):** Re-test LayerScale on the current GeGLU baseline. Arms: γ_init=1e-4 (A, same as successful #4435 Arm A) / γ_init=3e-5 (B, 3× smaller per student's own suggested follow-up). Includes γ trajectory logging from #4435.

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-17 11:05Z — round 15 of `icml-appendix-charlie-pai2i-48h-r2`
+- 2026-05-17 12:15Z — round 15 of `icml-appendix-charlie-pai2i-48h-r2`
 - No active research directives from the human research team
 - **NEW BASELINE: val=35.5046** (PR #4477 alphonse GeGLU Arm A merged, −2.89% from 36.5616). Gate-activation sweep: GeGLU > SwiGLU > BilinearGLU > GELU MLP. Cumulative: 135.02 → 35.50 = **-73.7%**
 
@@ -49,18 +49,18 @@ cd target && python train.py --agent <student> \
 
 | PR | Student | Theme | Status | Baseline context |
 |----|---------|-------|--------|-----------------|
-| #4556 | askeladd | Grad-clip max_norm loosening: 2.0 (A) / 3.0 (B) — clip_frac=1.000 diagnostic | WIP — NEW | #4487 CLOSED (grad-noise catastrophic; clip_frac=1.000 revealed max_norm=1.0 clips every step); loosening may allow higher-confidence updates |
-| #4501 | fern | Input channel-level dropout p=0.10 (A) / p=0.20 (B): stochastic feature masking for OOD robustness | WIP — NEW | #4414 closed (surf-p-weight-mult regresses monotonically, loss-weighting axis closed); channel absence robustness orthogonal to continuous noise (#4454) |
+| #4556 | askeladd | Grad-clip max_norm loosening: 2.0 (A) / 3.0 (B) — clip_frac=1.000 diagnostic | WIP | #4487 CLOSED (grad-noise catastrophic; clip_frac=1.000 revealed max_norm=1.0 clips every step); loosening may allow higher-confidence updates |
+| #4572 | fern | Geometry-only channel dropout: mask dims 0-11 (pos/saf/dsdf) only at p=0.05 (A) / p=0.15 (B) | WIP — NEW | #4501 CLOSED (catastrophic: indiscriminate masking of conditioning dims 12-23 destroys log_Re/AoA/NACA signal; geometry-only re-scoped version) |
 | #4458 | nezuko | Attention temperature: frozen τ=0.25 (A) vs τ=0.125 (B) on SwiGLU baseline | WIP — RERUNNING | Original arms beat OLD baseline (38.675) but regress vs SwiGLU baseline (36.5616); sent back with sharpened arms + `--use_swiglu` |
-| #4558 | tanjiro | Y-mirror v3: geometry-only flip (pos_y+saf_1) at p=0.15 (A) / p=0.30 (B) on GeGLU baseline | WIP — NEW | #4499 CLOSED (p=0.5 in-dist tax +3-5% > OOD benefit +0.8% on camber_rc; geometry-only confirmed correct; lower p should flip sign) |
-| #4553 | alphonse | ReGLU (ReLU gate): completes gate-activation sweep + SwiGLU calibration arm | WIP — NEW | #4477 MERGED (GeGLU wins val=35.5046); gate sweep: GeGLU>SwiGLU>BilinearGLU; ReGLU is the remaining activation to test |
-| #4435 | thorfinn | LayerScale (CaiT): per-channel learnable residual gating γ_init=1e-4 (A) / 1e-2 (B) | WIP — REBASING (rebase onto SwiGLU baseline) | #4362 closed (Lookahead triple-smoothing failure); architecture axis — how much each block contributes |
-| #4528 | edward | Slice-routing noise: Gaussian σ=0.10 (A) / σ=0.30 (B) on PhysicsAttention logits before softmax | WIP — NEW | #4454 CLOSED (feature-noise point-wise, routing absorbs it); direct attack on routing logit space per student's own diagnosis |
-| #4514 | frieren | Re-jitter: physics-meaningful Gaussian noise on log(Re) ch13, σ=0.05 (A) / σ=0.15 (B) | WIP — NEW | #4405 CLOSED (4th regularization-family failure confirms stack NOT reg-limited); physics pivot: Re-dimension augmentation targets val_re_rand directly |
+| #4558 | tanjiro | Y-mirror v3: geometry-only flip (pos_y+saf_1) at p=0.15 (A) / p=0.30 (B) on GeGLU baseline | WIP | #4499 CLOSED (p=0.5 in-dist tax +3-5% > OOD benefit +0.8% on camber_rc; geometry-only confirmed correct; lower p should flip sign) |
+| #4553 | alphonse | ReGLU (ReLU gate): completes gate-activation sweep + SwiGLU calibration arm | WIP | #4477 MERGED (GeGLU wins val=35.5046); gate sweep: GeGLU>SwiGLU>BilinearGLU; ReGLU is the remaining activation to test |
+| #4576 | thorfinn | LayerScale (CaiT) re-test on GeGLU: γ_init=1e-4 (A) / 3e-5 (B) — informed by #4435 γ trajectory | WIP — NEW | #4435 CLOSED (beat old baseline 38.675→37.60 but baseline moved to 35.50; GeGLU + LayerScale orthogonal gating levels — MLP-inside vs block-outside) |
+| #4528 | edward | Slice-routing noise: Gaussian σ=0.10 (A) / σ=0.30 (B) on PhysicsAttention logits before softmax | WIP | #4454 CLOSED (feature-noise point-wise, routing absorbs it); direct attack on routing logit space per student's own diagnosis |
+| #4514 | frieren | Re-jitter: physics-meaningful Gaussian noise on log(Re) ch13, σ=0.05 (A) / σ=0.15 (B) | WIP | #4405 CLOSED (4th regularization-family failure confirms stack NOT reg-limited); physics pivot: Re-dimension augmentation targets val_re_rand directly |
 
-## Key open questions (round 15 — NEW baseline 36.5616 after SwiGLU win)
+## Key open questions (round 15 — baseline 35.5046 after GeGLU win)
 
-**Plateau broken twice!** SwiGLU #4358 (-5.47%) then GeGLU #4477 (-2.89%) = consecutive wins from gate-activation sweep. val_geom_camber_rc (50.40) is the binding OOD constraint — GeGLU helped camber_rc 3.6% (first real improvement on this split from GLU family). Active pivot: (a) **gate sweep completion** (#4553 ReGLU); (b) **grad-clip diagnostic** (#4556 askeladd — clip_frac=1.000 demands investigation); (c) **y-mirror at lower p** (#4558 tanjiro geom-only p=0.15/0.30); (d) **augmentation** (#4501 channel-dropout, #4514 re-jitter); (e) **routing noise** (#4528 edward slice-routing-noise); (f) **architecture rebasing** (#4435 thorfinn layerscale, #4458 nezuko attn-temp). Key insight: clip_frac=1.000 means max_norm=1.0 was clipping every gradient update — may be too tight on the 15-mech GeGLU stack.
+**Plateau broken twice!** SwiGLU #4358 (-5.47%) then GeGLU #4477 (-2.89%) = consecutive wins from gate-activation sweep. val_geom_camber_rc (50.40) is the binding OOD constraint — GeGLU helped camber_rc 3.6% (first real improvement on this split from GLU family). Active pivot: (a) **gate sweep completion** (#4553 ReGLU); (b) **grad-clip diagnostic** (#4556 askeladd — clip_frac=1.000 demands investigation); (c) **y-mirror at lower p** (#4558 tanjiro geom-only p=0.15/0.30); (d) **input augmentation** (#4572 fern geometry-only channel-dropout, #4514 frieren re-jitter); (e) **routing noise** (#4528 edward slice-routing-noise); (f) **architecture** (#4576 thorfinn layerscale-geglu, #4458 nezuko attn-temp). Key insight from #4501: channel 0-11 (pos/saf/dsdf) have peer redundancy; channels 12-23 (log_Re, AoA, NACA, gap, stagger) are per-sample scalar broadcasts with NO peer — dropping any of these kills conditioning. Key insight from #4435: LayerScale γ trajectory shows ls2 (MLP) grows 2-4× larger than ls1 (attention); b4.ls1=0.005 (last block attention nearly zero); γ_init=1e-2 is 100× too hot.
 
 **Closed axes:** optimizer tuning, loss reshaping, LR-schedule disruption, normalization form (LayerNorm locked), element-level reg, structural regularization (DropPath — 4th reg failure; stack NOT reg-limited), input-representation (Fourier — convergence budget hit), point-level data aug (slice routing invariant to point perturbation). **Critical diagnostic from #4377:** PhysicsAttention slice routing is permutation-equivariant — augmentation must operate in *token space*, not point space. **Key insight from 4 reg failures:** remaining val gap (≈36.5) is capacity/data limitation at OOD splits, not overfitting — pivot to data augmentation + capacity.
 
@@ -172,8 +172,10 @@ cd target && python train.py --agent <student> \
 - **Y-mirror geometric augmentation** — CLOSED as #4433 (tanjiro); normalization-asymmetry bug caused disjoint distributions → catastrophic failure on Arm B; OOD signal in Arm A confirms direction; v2 fix in #4499
 - **Y-mirror v2 (post-norm correction)** — IN PROGRESS as #4499 (tanjiro); fixes v1 normalization bug; Arm A full-flip, Arm B geometry-only
 - **Surface-only pressure-weight multiplier** — CLOSED as #4414 (fern); monotone regression; loss-weighting axis fully closed
-- **Input channel-level dropout** — IN PROGRESS as #4501 (fern); stochastic feature masking p=0.10/0.20; discrete absence robustness, different from continuous noise
-- **LayerScale (CaiT)** — IN PROGRESS as #4435 (thorfinn); per-channel γ learnable gating; γ_init=1e-4 (A), 1e-2 (B)
+- **Input channel-level dropout (full)** — CLOSED as #4501 (fern); catastrophic failure — dims 12-23 are globally-unique conditioning, no peer redundancy; → #4572 geometry-only (dims 0-11 only)
+- **Geometry-only channel-level dropout** — IN PROGRESS as #4572 (fern); masks dims 0-11 (pos/saf/dsdf) at p=0.05 (A) / p=0.15 (B); dims 12-23 untouched
+- **LayerScale (CaiT) on old baseline** — CLOSED as #4435 (thorfinn); Arm A val=37.60 beat old baseline (38.68) but not current 35.50; PR conflicting; insights: ls2>>ls1, b4.ls1≈0, γ_init=1e-2 too hot → #4576 re-test on GeGLU
+- **LayerScale on GeGLU baseline** — IN PROGRESS as #4576 (thorfinn); γ_init=1e-4 (A) / 3e-5 (B) on current GeGLU stack; orthogonal to GeGLU's intra-MLP gating
 - **Token-space input feature noise** — CLOSED as #4454 (edward); Gaussian noise on x_norm is still point-wise; routing operator learns invariance; feature-noise direction closed → #4528 slice-routing-noise (attack logits directly)
 - **Slice-routing logit noise** — IN PROGRESS as #4528 (edward); Gaussian on PhysicsAttention routing logits σ=0.10/0.30; correct level of intervention per #4377+#4454 double lesson
 - **Attention temperature (slice-routing softmax)** — IN PROGRESS as #4458 (nezuko); frozen τ=0.25/1.0 vs current learnable init=0.5
