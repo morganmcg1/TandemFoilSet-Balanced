@@ -580,6 +580,7 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
     use_bf16: bool = False   # Enable bf16 mixed-precision via torch.autocast (H95)
+    mlp_ratio: int = 2  # FFN expansion ratio inside each Transolver block
 
 
 cfg = sp.parse(Config)
@@ -622,7 +623,7 @@ model_config = dict(
     n_layers=cfg.n_layers,
     n_head=cfg.n_head,
     slice_num=cfg.slice_num,
-    mlp_ratio=2,
+    mlp_ratio=cfg.mlp_ratio,
     cond_dim=cfg.cond_dim,  # log(Re), AoA1, NACA1(3), AoA2, NACA2(3), gap, stagger = 11; 0 disables FiLM
     ffn_act=cfg.ffn_act,
     norm_type=cfg.norm_type,
