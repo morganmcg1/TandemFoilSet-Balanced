@@ -394,7 +394,7 @@ def make_amp_ctx(amp_dtype: str):
     return torch.autocast(device_type="cuda", dtype=dt)
 
 
-def evaluate_split(model, loader, stats, surf_weight, device, amp_dtype: str = "fp32") -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, amp_dtype: str = "fp32", huber_beta: float = 1.0) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -417,7 +417,7 @@ def evaluate_split(model, loader, stats, surf_weight, device, amp_dtype: str = "
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             with make_amp_ctx(amp_dtype):
                 pred = model({"x": x_norm})["preds"]
-                sq_err = torch.nn.functional.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+                sq_err = torch.nn.functional.smooth_l1_loss(pred, y_norm, beta=huber_beta, reduction='none')
                 vol_mask = mask & ~is_surface
                 surf_mask = mask & is_surface
                 vol_loss_sum += (
@@ -488,6 +488,7 @@ def write_experiment_summary(
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
+        "huber_beta": cfg.huber_beta,
         "epochs_configured": cfg.epochs,
         "amp_dtype": cfg.amp_dtype,
         "use_ema": cfg.use_ema,
@@ -540,6 +541,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    huber_beta: float = 1.0  # smooth_l1_loss beta; L2<->L1 transition point
     epochs: int = 50
     cosine_t_max: int | None = None  # if None, use MAX_EPOCHS (existing behavior)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -721,7 +723,7 @@ for epoch in range(MAX_EPOCHS):
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         with make_amp_ctx(cfg.amp_dtype):
             pred = model({"x": x_norm})["preds"]
-            sq_err = torch.nn.functional.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+            sq_err = torch.nn.functional.smooth_l1_loss(pred, y_norm, beta=cfg.huber_beta, reduction='none')
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
@@ -756,7 +758,7 @@ for epoch in range(MAX_EPOCHS):
         optimizer.eval()  # swap params to Polyak-averaged iterate for eval
     restore = ema.apply_to(model) if ema is not None else None
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.amp_dtype)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.amp_dtype, cfg.huber_beta)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -842,7 +844,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.amp_dtype)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.amp_dtype, cfg.huber_beta)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
