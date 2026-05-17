@@ -3144,3 +3144,8 @@ Iso-epoch=26: l3 (44.75) < l2 (46.23) < l1 (50.49) — deeper is better at fixed
 - **Metric artifacts:**
   - `models/model-charliepai2i48h4-frieren-shallower-depth-probe-r1-armB-l2-20260517-082017-20260517-082020/metrics.jsonl`
 - **Analysis:** Win is a step-count effect — l2 completes 37 epochs at 48.7 s/ep vs l3's 26 epochs at 69 s/ep. l1 hits the 50-epoch cap and still loses to l2 because the per-step quality disadvantage (iso-epoch) of l1 outweighs the extra ~13 epochs. All arms still descending at cap → convergence asymptote unknown. Depth floor established at n_layers=2 for the 30-min budget regime. **MERGED as new canonical (val=40.622, test=39.598).**
+
+## 2026-05-17 09:40 — PR #4512: n_hidden sweep at n_layers=2: {96, 128, 192, 256} [ASSIGNED]
+- charliepai2i48h4-frieren/n-hidden-at-n-layers2
+- **Hypothesis:** At n_layers=2 canonical (37 epochs/budget), test whether n_hidden ∈ {96, 128, 192, 256} can find a capacity sweet spot. Narrower (96) → more steps; wider (192, 256) → fewer steps but higher per-step quality. Prior n_hidden null (PR #4225) was at stale lr=2e-3, n_layers=5 — step-count landscape fully different now.
+- **Status:** ASSIGNED — student to add --n_hidden Config flag (same infra as fern #4481) then run 4-arm sweep with iso-epoch deconfounding.
