@@ -2,41 +2,44 @@
 
 ## Current Best
 
-**PR #4272 — H99 Arm A: bf16 + T_max=21 schedule fix (alphonse)**
-Merged 2026-05-17. 21 epochs with bf16 + cosine T_max aligned to wall budget (best_epoch=21, monotone descent — no LR bounce).
+**PR #4335 — H106 Arm B: Fourier PE K=4 on H99 stack (alphonse)**
+Merged 2026-05-17. 21 epochs, bf16 + T_max=21 + Fourier positional encoding (K=4 frequencies, 16 extra input features). Fourier PE provides pre-computed sub-chord spatial basis functions; K=4 beats K=8 (less over-parameterization of input representation).
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| val_avg/mae_surf_p | **37.2626** | PR #4272 Arm A (best_epoch=21) |
-| val_single_in_dist/mae_surf_p | 37.0917 | PR #4272 Arm A |
-| val_geom_camber_rc/mae_surf_p | 49.7769 | PR #4272 Arm A |
-| val_geom_camber_cruise/mae_surf_p | 22.9287 | PR #4272 Arm A |
-| val_re_rand/mae_surf_p | 39.2532 | PR #4272 Arm A |
-| test_avg/mae_surf_p | NaN (⚠ scoring bug) | PR #4272 |
-| test_avg/mae_surf_p (3-split, excl. cruise) | **35.8568** | PR #4272 Arm A |
-| test_single_in_dist/mae_surf_p | 32.2300 | PR #4272 Arm A |
-| test_geom_camber_rc/mae_surf_p | 45.0718 | PR #4272 Arm A |
-| test_re_rand/mae_surf_p | 30.2687 | PR #4272 Arm A |
+| val_avg/mae_surf_p | **35.9159** | PR #4335 Arm B K=4 (best_epoch=21) |
+| val_single_in_dist/mae_surf_p | 32.2282 | PR #4335 Arm B |
+| val_geom_camber_rc/mae_surf_p | 50.3515 | PR #4335 Arm B |
+| val_geom_camber_cruise/mae_surf_p | 21.5957 | PR #4335 Arm B |
+| val_re_rand/mae_surf_p | 39.4884 | PR #4335 Arm B |
+| test_avg/mae_surf_p | NaN (⚠ scoring bug) | PR #4335 |
+| test_avg/mae_surf_p (3-split, excl. cruise) | **35.1221** | PR #4335 Arm B |
+| test_single_in_dist/mae_surf_p | 30.5539 | PR #4335 Arm B |
+| test_geom_camber_rc/mae_surf_p | 44.3157 | PR #4335 Arm B |
+| test_re_rand/mae_surf_p | 30.4967 | PR #4335 Arm B |
 
-**Configuration:** Same as H95 + **T_max=21** (added as `--T_max` CLI arg, default 15 preserves prior behavior). FiLM cond_dim=11 + Huber δ_vel=0.5/δ_p=0.25 + CosineAnnealingLR T_max=21 + clip_grad_norm=1.0 + optimizer=lion + lr=3e-4 + wd=1e-3 + β=(0.9, 0.997) + n_head=2 + ffn_act=geglu + n_layers=4 + slice_num=96 + norm_type=layernorm + use_bf16=True. Peak GPU memory: 30.46 GB. Mean s/epoch: 85.7.
+**Configuration:** H99 stack + `--fourier_pe --fourier_pe_freqs 4`. Fourier features γ(p) = [sin(2πf_k·p), cos(2πf_k·p)] for k=0..3, applied to normalized (x,z) mesh coordinates. 16 extra input channels concatenated before the first MLP. fun_dim widened by 4K=16. FiLM conditioning slice preserved intact.
 
-**Schedule fix:** H95's T_max=15 hardcoded created an LR bounce confound at 21 epochs. H99 Arm A aligns T_max to the actual run length, giving clean monotone cosine decay. Arm B (T_max=15 control) reproduces H95 within noise (val=40.68 vs 40.51), confirming the schedule shape is the sole improvement source.
+**Δ vs prior best (H99, 37.2626 / 35.8568):** **−1.35 pts val_avg, −0.74 pts test 3-split.** Primary signal: val_single_in_dist Δ-4.86 (well above 1.7 noise floor).
+**Cumulative R5 gain from H37b (66.11):** **−30.19 pts val_avg.**
 
-**Δ vs prior best (H95, 40.5066 / 39.0160):** **−3.24 pts val_avg, −3.16 pts test 3-split.** Strong signal (well above 1.7-pt 2σ noise floor).
-**Cumulative R5 gain from H37b (66.11):** **−28.84 pts val_avg.**
-
-**Artifacts:** `models/model-h99-arm-a-bf16-tmax21-20260517-014114/`
+**Artifacts:** `models/model-h106-arm-b-fourier4-20260517-042933/`
 
 **Reproduce:**
 ```bash
 cd target/ && python train.py --epochs 50 \
-  --experiment_name h99-arm-a-bf16-tmax21 --agent <student> \
+  --experiment_name h106-arm-b-fourier4 --agent <student> \
   --optimizer lion --lr 3e-4 --weight_decay 1e-3 \
   --beta1 0.9 --beta2 0.997 \
   --slice_num 96 --n_layers 4 --ffn_act geglu \
   --n_head 2 --clip_grad_norm 1.0 \
-  --use_bf16 --T_max 21
+  --use_bf16 --T_max 21 \
+  --fourier_pe --fourier_pe_freqs 4
 ```
+
+## Previous Best (overridden by #4335)
+
+**PR #4272 — H99 Arm A: bf16 + T_max=21 schedule fix (alphonse)** — val_avg=37.2626 / test 3-split=35.8568. H106 Fourier K=4 yielded Δ-1.35 pts via pre-computed spatial basis functions at sub-chord scales.
 
 ## Previous Best (overridden by #4272)
 
