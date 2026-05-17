@@ -270,14 +270,15 @@ class TransolverBlock(nn.Module):
         return fx
 
 
-def fourier_features(coords: torch.Tensor, num_freqs: int) -> torch.Tensor:
+def fourier_features(coords: torch.Tensor, num_freqs: int, scale: float = 1.0) -> torch.Tensor:
     """Tancik-style sinusoidal positional encoding for 2D coordinates.
 
-    Applies γ(p) = [sin(2π f_k p), cos(2π f_k p)] with log-spaced f_k = 2^k,
+    Applies γ(p) = [sin(2π f_k p), cos(2π f_k p)] with log-spaced f_k = scale·2^k,
     k = 0..num_freqs-1. ``coords`` shape (..., 2); returns (..., 4 * num_freqs).
-    Bounded in [-1, 1] regardless of coord scale.
+    Bounded in [-1, 1] regardless of coord scale. ``scale`` multiplies all
+    frequencies — scale=0.5 doubles the wavelength (H123 Arm B sub-chord test).
     """
-    freqs = 2.0 ** torch.arange(num_freqs, dtype=coords.dtype, device=coords.device)
+    freqs = scale * 2.0 ** torch.arange(num_freqs, dtype=coords.dtype, device=coords.device)
     proj = coords.unsqueeze(-1) * freqs * (2.0 * math.pi)
     return torch.cat([proj.sin(), proj.cos()], dim=-1).flatten(-2)
 
@@ -288,12 +289,14 @@ class Transolver(nn.Module):
                  slice_num=32, ref=8, unified_pos=False, cond_dim=0,
                  ffn_act="gelu", norm_type="layernorm",
                  fourier_pe_freqs: int = 0,
+                 fourier_pe_scale: float = 1.0,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.fourier_pe_freqs = fourier_pe_freqs
+        self.fourier_pe_scale = fourier_pe_scale
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
 
@@ -342,7 +345,7 @@ class Transolver(nn.Module):
         # (e.g. Fourier PE at dim 24+) don't leak into the FiLM input.
         cond = x[:, 0, 13:13 + self.cond_dim] if self.cond_dim > 0 else None
         if self.fourier_pe_freqs > 0:
-            ff = fourier_features(x[..., :2], self.fourier_pe_freqs)
+            ff = fourier_features(x[..., :2], self.fourier_pe_freqs, self.fourier_pe_scale)
             x = torch.cat([x, ff], dim=-1)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
@@ -601,6 +604,7 @@ class Config:
     T_max: int = 15  # CosineAnnealingLR period; default preserves prior behavior
     fourier_pe: bool = False   # Tancik Fourier PE on (x, z) coords (H106)
     fourier_pe_freqs: int = 8  # Number of log-spaced frequencies; adds 4*K features
+    fourier_pe_scale: float = 1.0  # Multiplier on all freqs (H123); scale<1 → longer wavelengths
 
 
 cfg = sp.parse(Config)
@@ -650,6 +654,7 @@ model_config = dict(
     ffn_act=cfg.ffn_act,
     norm_type=cfg.norm_type,
     fourier_pe_freqs=fourier_pe_freqs,
+    fourier_pe_scale=cfg.fourier_pe_scale,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -793,6 +798,7 @@ for epoch in range(MAX_EPOCHS):
         "T_max": cfg.T_max,
         "fourier_pe": cfg.fourier_pe,
         "fourier_pe_freqs": fourier_pe_freqs,
+        "fourier_pe_scale": cfg.fourier_pe_scale,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "gate_stats": gate_stats,

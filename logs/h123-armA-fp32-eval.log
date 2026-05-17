@@ -1,0 +1,9 @@
+Train: 1499, val_single_in_dist: 100, val_geom_camber_rc: 100, val_geom_camber_cruise: 100, val_re_rand: 100
+Test: test_single_in_dist: 200, test_geom_camber_rc: 200, test_geom_camber_cruise: 200, test_re_rand: 200
+
+Re-evaluated model-charliepai2i48h3-askeladd-h123-arm-a-fourier0-20260517-073829 in fp32
+  test_avg/mae_surf_p = nan
+  test_single_in_dist            surf[p=30.8536 Ux=0.3699 Uy=0.2494] vol[p=39.4611 Ux=1.7421 Uy=0.6633]
+  test_geom_camber_rc            surf[p=43.7440 Ux=0.6894 Uy=0.3677] vol[p=49.7819 Ux=2.5057 Uy=1.0974]
+  test_geom_camber_cruise        surf[p=nan Ux=0.2541 Uy=0.1505] vol[p=nan Ux=1.2977 Uy=0.4234]
+  test_re_rand                   surf[p=29.2319 Ux=0.4146 Uy=0.2461] vol[p=32.3243 Ux=1.7140 Uy=0.6813]
