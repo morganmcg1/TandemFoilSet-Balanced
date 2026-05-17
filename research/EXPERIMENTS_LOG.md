@@ -1,5 +1,41 @@
 # SENPAI Research Results
 
+## 2026-05-17 09:15 — #4434 #4436 CLOSED (Findings #49-50: Huber β and wd compositions fail@T_max=22); alphonse→#4503 (R13 H91 Huber β-down), edward→#4505 (R13 H92 spec_norm)
+
+### #4434 alphonse — R13 H85: Huber β {0.10, 0.15} at T_max=22 (CLOSED — Finding #49)
+
+| Arm | β | run | val_avg | test_avg | Δ val vs BL |
+|-----|---|-----|---------|----------|---|
+| BL | 0.05 | 1neonugr | 49.75 | 42.89 | — |
+| A | 0.10 | wq8x73z3 | 52.45 | 44.76 | **+2.69** ✗ |
+| B | 0.15 | y3jgff90 | 51.96 | 44.16 | **+2.21** ✗ |
+
+Per-split Arm A: in_dist +3.18, camber_rc +2.51, camber_cruise **+2.94** (inverts!), re_rand +2.15
+Per-split Arm B: in_dist +3.58, camber_rc +2.17, camber_cruise **+2.59** (inverts!), re_rand +0.50
+
+**Finding #49**: Huber β upward composition fails at T_max=22. β=0.10's cruise win from Finding #43 (at T_max=20) INVERTS at T_max=22 — cruise gets WORSE. Mechanism: T_max=22 keeps lr higher for longer (~30% higher mean); β-widening × higher mean lr = over-emphasis on small residuals at expense of large-residual sharpening. β=0.05 correctly matches T_max=22's gentler endpoint. Student's own analysis: "β=0.05 closer to L1 better matched to T_max=22" → downward probe assigned (#4503).
+
+---
+
+### #4436 edward — R13 H86: wd {2e-3, 3e-3} at T_max=22 (CLOSED — Finding #50)
+
+| Arm | wd | run | val_avg | test_avg | Δ val vs BL |
+|-----|------|-----|---------|----------|---|
+| BL | 1e-3 | 1neonugr | 49.75 | 42.89 | — |
+| A | 2e-3 | 82qf5yv6 | 53.38 | 45.42 | **+3.63** ✗ |
+| B | 3e-3 | yho2omcb | 52.02 | 45.03 | **+2.27** ✗ |
+
+Per-split Arm A: in_dist +5.09, camber_rc +3.32, camber_cruise **+4.09** (inverts!), re_rand +2.02
+Per-split Arm B: in_dist +4.51, camber_rc +0.98, camber_cruise **+2.79** (inverts!), re_rand +0.78
+
+**Finding #50**: wd upward composition fails at T_max=22. Finding #42's cruise/re_rand wins (at T_max=20) do NOT compose at T_max=22. cruise metric inverts both arms. T_max=22 already absorbed the regularization budget that wd=2e-3 was providing at T_max=20 — two interventions compete for the same regularization budget. Student meta-observation: "effects at one substrate cannot be assumed to add when substrate shifts" — now confirmed 4th time (after #4391, #4419, #4434). Student suggests orthogonal axes → spec_norm assigned (#4505).
+
+**Meta-finding (structural)**: T_max=22 is NOT a linear extension of T_max=20. All 4 attempts to transfer T_max=20 directional wins have failed with comparable regressions: lr +1.91 val (#4391), ls-smaller +3.10 val (#4419), Huber β +2.69 val (#4434), wd +3.63 val (#4436). Each intervention that worked at T_max=20 inverts at T_max=22 because the substrate change already consumed the regularization/optimization budget those interventions were adding.
+
+New assignments: alphonse → #4503 (R13 H91 Huber β {0.03, 0.04} downward); edward → #4505 (R13 H92 spec_norm output at T_max=22).
+
+---
+
 ## 2026-05-17 09:00 — #4419 CLOSED (Finding #48: ls smaller-dir inverts@T_max=22); askeladd→#4495 (R13 H90 ls-upward@T_max=22)
 
 ### #4419 askeladd — R13 H83: ls {5e-5, 1e-5} at T_max=22 (CLOSED — Finding #48)
