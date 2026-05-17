@@ -291,21 +291,36 @@ class Lookahead(torch.optim.Optimizer):
     the base optimizer; param_groups/defaults/state are passthroughs so existing
     code that inspects the wrapper sees the base optimizer's view.
 
-    Side effect: ``self.last_sync_diff_norm`` is set to the L2 norm of
-    ``θ_fast - θ_slow`` just before each sync (and ``None`` between syncs) for
-    optional logging of how far the fast trajectory wanders from the slow one.
+    Optional outer momentum (β_outer > 0) smooths the slow-step DIRECTION
+    across sync events with a Polyak buffer:
+        v_t   = β_outer · v_{t-1} + α·(θ_fast - θ_slow)
+        θ_slow ← θ_slow + v_t
+    Equivalent to a low-pass filter on the slow-step direction. When
+    β_outer == 0.0 the update collapses to the original Lookahead recipe and
+    behaves bit-identically (no slow_velocity allocations are made).
+
+    Side effects:
+      ``self.last_sync_diff_norm`` = L2 norm of ``θ_fast - θ_slow`` at sync
+      (None between syncs).
+      ``self.last_slow_velocity_norm`` = L2 norm of v_t after sync (None
+      between syncs or when outer momentum disabled).
     """
 
-    def __init__(self, base_optimizer, k=5, alpha=0.5):
+    def __init__(self, base_optimizer, k=5, alpha=0.5, beta_outer=0.0):
         self.base = base_optimizer
         self.k = k
         self.alpha = alpha
+        self.beta_outer = beta_outer
         self.step_count = 0
         self.last_sync_diff_norm: float | None = None
+        self.last_slow_velocity_norm: float | None = None
         self.slow_state = {}
+        self.slow_velocity = {}
         for group in base_optimizer.param_groups:
             for p in group["params"]:
                 self.slow_state[p] = p.data.clone().detach()
+                if self.beta_outer > 0.0:
+                    self.slow_velocity[p] = torch.zeros_like(p.data)
         self.param_groups = base_optimizer.param_groups
         self.defaults = base_optimizer.defaults
         self.state = base_optimizer.state
@@ -318,18 +333,31 @@ class Lookahead(torch.optim.Optimizer):
         loss = self.base.step(closure)
         self.step_count += 1
         self.last_sync_diff_norm = None
+        self.last_slow_velocity_norm = None
         if self.step_count % self.k == 0:
             sq_sum = None
+            v_sq_sum = None
+            use_outer_mom = self.beta_outer > 0.0
             for group in self.base.param_groups:
                 for p in group["params"]:
                     slow = self.slow_state[p]
                     diff = p.data - slow
                     s = diff.pow(2).sum()
                     sq_sum = s if sq_sum is None else sq_sum + s
-                    slow.add_(diff, alpha=self.alpha)
+                    if use_outer_mom:
+                        v = self.slow_velocity[p]
+                        # v_t = β_outer · v_{t-1} + α · (fast - slow)
+                        v.mul_(self.beta_outer).add_(diff, alpha=self.alpha)
+                        slow.add_(v)
+                        vs = v.pow(2).sum()
+                        v_sq_sum = vs if v_sq_sum is None else v_sq_sum + vs
+                    else:
+                        slow.add_(diff, alpha=self.alpha)
                     p.data.copy_(slow)
             if sq_sum is not None:
                 self.last_sync_diff_norm = float(sq_sum.sqrt().item())
+            if v_sq_sum is not None:
+                self.last_slow_velocity_norm = float(v_sq_sum.sqrt().item())
         return loss
 
 
@@ -572,6 +600,7 @@ class Config:
     lion_b2: float = 0.99  # Lion beta2; default matches historical baseline
     lookahead_k: int = 5
     lookahead_alpha: float = 0.5
+    lookahead_outer_momentum: float = 0.0  # β_outer; 0.0 = bit-identical to vanilla Lookahead
 
 
 cfg = sp.parse(Config)
@@ -641,7 +670,12 @@ else:
         model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.95)
     )
 if cfg.lookahead_k > 0:
-    optimizer = Lookahead(base_optimizer, k=cfg.lookahead_k, alpha=cfg.lookahead_alpha)
+    optimizer = Lookahead(
+        base_optimizer,
+        k=cfg.lookahead_k,
+        alpha=cfg.lookahead_alpha,
+        beta_outer=cfg.lookahead_outer_momentum,
+    )
 else:
     optimizer = base_optimizer
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(base_optimizer, T_max=17)
@@ -692,7 +726,7 @@ _lookahead_on = cfg.lookahead_k > 0
 _optim_name = f"lookahead-{_base_name}" if _lookahead_on else _base_name
 print(f"Base optimizer: {_base_name}  betas={_betas_per_group}  lr={_lr_per_group}  wd={_wd_per_group}")
 print(f"Lookahead wrap: {'ON' if _lookahead_on else 'OFF'}"
-      + (f" (k={cfg.lookahead_k}, alpha={cfg.lookahead_alpha})" if _lookahead_on else ""))
+      + (f" (k={cfg.lookahead_k}, alpha={cfg.lookahead_alpha}, beta_outer={cfg.lookahead_outer_momentum})" if _lookahead_on else ""))
 run.summary["optim/betas"] = list(_betas_per_group[0])
 run.summary["optim/n_param_groups"] = len(_betas_per_group)
 run.summary["optim/lr_initial"] = _lr_per_group[0]
@@ -703,6 +737,8 @@ run.summary["use_lion"] = cfg.use_lion
 run.summary["lion_b2"] = cfg.lion_b2
 run.summary["lookahead_k"] = cfg.lookahead_k
 run.summary["lookahead_alpha"] = cfg.lookahead_alpha
+run.summary["lookahead_outer_momentum"] = cfg.lookahead_outer_momentum
+run.summary["lookahead_outer_momentum_on"] = _lookahead_on and cfg.lookahead_outer_momentum > 0.0
 run.summary["lookahead_on"] = _lookahead_on
 
 # Rolling buffer for per-step train losses to compute volatility (window=100).
@@ -755,6 +791,8 @@ for epoch in range(MAX_EPOCHS):
         }
         if _lookahead_on and optimizer.last_sync_diff_norm is not None:
             _log_dict["train/lookahead_sync_diff_norm"] = optimizer.last_sync_diff_norm
+        if _lookahead_on and optimizer.last_slow_velocity_norm is not None:
+            _log_dict["train/lookahead_slow_velocity_norm"] = optimizer.last_slow_velocity_norm
         wandb.log(_log_dict)
 
         epoch_vol += vol_loss.item()
