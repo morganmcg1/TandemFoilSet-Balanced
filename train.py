@@ -475,6 +475,7 @@ class Config:
     sgdr_t0: int = 0  # CosineAnnealingWarmRestarts cycle length; 0 disables (use plain cosine)
     slice_num: int = 64  # physics-attention slice count (node partitioning granularity)
     adamw_beta2: float = 0.999  # AdamW second-moment EMA decay; default 0.999
+    surf_p_reweight_alpha: float = 0.0  # per-sample surface-loss reweighting by peak |p|; 0 disables (baseline)
 
 
 cfg = sp.parse(Config)
@@ -584,6 +585,11 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    epoch_peak_p_mean_sum = 0.0
+    epoch_peak_p_std_sum = 0.0
+    epoch_w_min = float("inf")
+    epoch_w_max = float("-inf")
+    epoch_surf_p_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -619,7 +625,30 @@ for epoch in range(MAX_EPOCHS):
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (elem_loss * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (elem_loss * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        if cfg.surf_p_reweight_alpha > 0:
+            # Per-sample peak |p| from surface nodes only (normalized-pressure space).
+            # Pressure is target channel index 2 (Ux, Uy, p).
+            p_abs_surf = y_norm[..., 2].abs().masked_fill(~surf_mask, float("-inf"))
+            peak_p_per_sample = p_abs_surf.amax(dim=1).clamp(min=0.0)  # [B]
+            mean_peak_p = peak_p_per_sample.mean().clamp(min=1e-6)
+            w = (peak_p_per_sample / mean_peak_p) ** cfg.surf_p_reweight_alpha
+            w = w / w.mean().clamp(min=1e-6)  # normalize to mean=1, preserve loss scale
+            # Per-sample surface loss matching baseline magnitude: sum_NC / surf_count
+            # (baseline = sum_BNC / sum_BN ≈ 3*mean_per_element; this preserves that scale)
+            surf_count = surf_mask.sum(dim=1).clamp(min=1).float()  # [B]
+            surf_loss_per_sample = (
+                (elem_loss * surf_mask.unsqueeze(-1)).sum(dim=(1, 2)) / surf_count
+            )  # [B]
+            surf_loss = (w * surf_loss_per_sample).mean()
+            surf_p_diag = {
+                "peak_p_mean": peak_p_per_sample.mean().item(),
+                "peak_p_std": peak_p_per_sample.std(unbiased=False).item() if peak_p_per_sample.numel() > 1 else 0.0,
+                "w_min": w.min().item(),
+                "w_max": w.max().item(),
+            }
+        else:
+            surf_loss = (elem_loss * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            surf_p_diag = None
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -637,6 +666,16 @@ for epoch in range(MAX_EPOCHS):
         step_log = {"train/loss": loss.item(), "global_step": global_step}
         if grad_norm_preclip is not None:
             step_log["train/grad_norm_preclip"] = grad_norm_preclip
+        if surf_p_diag is not None:
+            step_log["train/peak_p_per_sample_mean_step"] = surf_p_diag["peak_p_mean"]
+            step_log["train/peak_p_per_sample_std_step"] = surf_p_diag["peak_p_std"]
+            step_log["train/surf_p_w_min_step"] = surf_p_diag["w_min"]
+            step_log["train/surf_p_w_max_step"] = surf_p_diag["w_max"]
+            epoch_peak_p_mean_sum += surf_p_diag["peak_p_mean"]
+            epoch_peak_p_std_sum += surf_p_diag["peak_p_std"]
+            epoch_w_min = min(epoch_w_min, surf_p_diag["w_min"])
+            epoch_w_max = max(epoch_w_max, surf_p_diag["w_max"])
+            epoch_surf_p_batches += 1
         wandb.log(step_log)
 
         epoch_vol += vol_loss.item()
@@ -683,6 +722,11 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "global_step": global_step,
     }
+    if epoch_surf_p_batches > 0:
+        log_metrics["train/peak_p_per_sample_mean"] = epoch_peak_p_mean_sum / epoch_surf_p_batches
+        log_metrics["train/peak_p_per_sample_std"] = epoch_peak_p_std_sum / epoch_surf_p_batches
+        log_metrics["train/surf_p_w_min"] = epoch_w_min
+        log_metrics["train/surf_p_w_max"] = epoch_w_max
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
