@@ -1,5 +1,46 @@
 # SENPAI Research Results
 
+## 2026-05-17 02:30 — PR #4268: Lookahead-Lion k=2 ← CLOSED (canonical Lion k-frontier; U-curve SHIFTS RIGHT vs AdamW)
+
+- Branch: `willowpai2i48h1-tanjiro/lookahead-lion-k2`
+- Student: willowpai2i48h1-tanjiro
+- W&B run: `3bp5obwz` (group `lookahead_lion_k_sweep`)
+- Hypothesis: Extend Lion-era k-curve below k=5 (k=2 was 0.73 better than k=5 under AdamW).
+
+### Results (terminal SENPAI-RESULT, W&B-verified; clean single run)
+
+| Metric | Value | Δ vs k=5 baseline (PR #4123) |
+|---|---|---|
+| val_avg/mae_surf_p | **48.8371** | **+0.864** |
+| test_avg/mae_surf_p | 47.5378 | +1.048 |
+| best_epoch | 17 (cosine floor ✓) | — |
+| VRAM | 35.86 GB | — |
+
+All splits regress uniformly (+0.4 to +1.7) — clean signal.
+
+### Cross-optimizer k-curve comparison (major mechanism finding)
+
+| k | AdamW val | Lion val |
+|---|---|---|
+| 2 | 56.49 | **48.84** (THIS PR) |
+| 3 | 55.97 (k-min at AdamW) | pending (edward #4241) |
+| 5 | 57.22 | **47.97** (Lion-min, PR #4123) |
+| 8 | 60.09 | — |
+
+**The U-curve minimum SHIFTS RIGHT when switching AdamW → Lion** (AdamW min at k=3; Lion min at k≥5).
+
+### Mechanism interpretation
+
+Lion's sign-update has constant per-step magnitude (no per-param variance scaling) → fast trajectory has low variance natively. With variance already suppressed, the fast weights need **more steps** before drifting meaningfully from slow weights. Short k=2 syncs pull fast weights back before sufficient basin geometry has been explored — Lookahead's basin-averaging benefit is **lost**.
+
+Implication: edward's #4241 (Lookahead-Lion k=3, predicted val ~48.3-48.5) likely also regresses. If so, k=7-8 under Lion becomes a research question.
+
+### Decision
+
+Closed — val=48.84 > current best 47.97. Strong mechanism finding (k-curve right-shift). tanjiro reassigned to **architectural escalation: depth=6 (#4294)**, orthogonal capacity dimension to thorfinn's mlp_ratio=3 (#4286).
+
+✓ Clean single run, no heartbeat rerun. Good flow.
+
 ## 2026-05-17 02:00 — PR #4213: Lookahead-AdamW k=3 α=0.8 ← CLOSED (final AdamW α-frontier datum; trend inversion confirmed at saturation)
 
 - Branch: `willowpai2i48h1-thorfinn/lookahead-k3-alpha-08`
