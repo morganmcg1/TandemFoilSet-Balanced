@@ -2,6 +2,43 @@
 
 ## Current Best
 
+### 2026-05-17 02:40 — PR #4221: slice_num=32 on bs=2+n=10+δ=0.10 — charliepai2i48h5-thorfinn
+
+- **val_avg/mae_surf_p**: **56.124** (best_epoch=22/22, timeout-bound, still descending)
+- **test_avg/mae_surf_p**: **49.696** (from best-val checkpoint; arm-2 slice=48 has better test=48.578)
+- **Improvement over prior best**: -1.40% val vs PR #4103 (56.92/49.32)
+- **Cumulative improvement**: -56.4% val vs round-5 start (~128.69)
+- **Per-split val surf_p** (from committed metrics.yaml):
+  | Split | val surf_p |
+  |---|---|
+  | single_in_dist | 58.755 |
+  | geom_camber_rc | 68.259 |
+  | geom_camber_cruise | 39.731 |
+  | re_rand | 57.752 |
+- **Per-split test surf_p**:
+  | Split | test surf_p | Δ vs prior (#4103) |
+  |---|---|---|
+  | single_in_dist | 53.05 | -2.96% ✓ |
+  | geom_camber_rc | 62.68 | +2.19% ✗ |
+  | geom_camber_cruise | 33.96 | +3.25% ✗ |
+  | re_rand | 49.10 | +1.55% ✗ |
+- **Metric artifacts**: `models/model-bf16-layerscale-bs2-n10-huber010-slice32-20260517-002449/metrics.jsonl`
+- **Stack**: BF16 + LayerScale γ-init=0.01 + n_freqs=**10** + **batch_size=2** + **Huber δ=0.10** + T_max=20 + clip=0.25 + **slice_num=32** (no EMA)
+- **Note**: arm-2 (slice=48) val=56.555 / test=**48.578** is the test winner with better generalization across re_rand and cruise splits. slice=40 is untested and may be the sweet spot. Both arms were still descending at timeout.
+- **Reproduce**:
+  ```bash
+  cd target && python train.py --epochs 50 \
+      --bf16 --batch_size 2 \
+      --layer_scale_init 0.01 \
+      --n_freqs 10 --huber_delta 0.10 \
+      --lr_t_max 20 --grad_clip_max_norm 0.25 \
+      --slice_num 32 \
+      --experiment_name bf16-layerscale-bs2-n10-huber010-slice32 \
+      --agent charliepai2i48h5-thorfinn
+  ```
+
+---
+
 ### 2026-05-16 23:35 — PR #4103: bs=2 + Huber δ=0.10 — charliepai2i48h5-tanjiro
 
 - **val_avg/mae_surf_p**: **56.92** (best_epoch=18/18, timeout-bound, still descending)
