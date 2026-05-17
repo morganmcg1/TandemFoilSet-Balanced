@@ -4,7 +4,34 @@
 
 ---
 
-## 2026-05-17 05:30 — PR #4270: QK-norm (LayerNorm on Q,K) + Lion + nh=176 + bf16 + ep14 (edward) — ← CURRENT BEST
+## 2026-05-17 11:30 — PR #4550: Per-Foil Chord-Relative Coords + foil_id (edward) — ← CURRENT BEST
+
+- **val_avg/mae_surf_p: 44.2736** (best epoch 14/14, W&B run `a46jhvdo`) — **−5.78% vs PR #4270**
+- **test_avg/mae_surf_p: 38.1696** — **−5.71% vs PR #4270** ← TEST METRIC WIN
+
+| Split | test mae_surf_p | Δ vs #4270 |
+|---|---:|---:|
+| single_in_dist | 42.7440 | **−1.00%** (flat within noise 1.14) |
+| geom_camber_rc | 53.0184 | +0.43% (flat within noise — falsifies camber-specific prediction) |
+| **geom_camber_cruise** | **21.4998** | **−16.78%** ← huge gain |
+| **re_rand** | **35.4179** | **−11.71%** ← huge gain |
+| **avg** | **38.1696** | **−5.71%** |
+
+- **Architectural change:** add per-foil chord-relative coordinates `x_chord` and `foil_id` to input feature vector. Foil-id heuristic: assign node to foil-2 if world_x ≥ stagger - 0.5, else foil-1. `x_chord = world_x` for foil-1 nodes, `world_x - stagger` for foil-2 nodes. Input feature dim grows from 24 → 26 (38 → 40 after sinusoidal encoding).
+- **Mechanism:** the model previously had no clean way to distinguish foil-1 nodes from foil-2 nodes in tandem samples — world-x coords put foil-2 entirely beyond x>0.6 (overlapping with foil-1 TE/wake). Per-foil features give the attention/slice routing an explicit reference frame per foil. Cruise (different camber distribution) and re_rand (mixed raceCar+cruise) splits benefit most because the model can now correctly group "foil-2 LE nodes" across tandem configurations with varying stagger.
+- **Plateau-broken after 28 non-improvements.** The geom_camber_rc OOD (M=6-8 camber extrapolation) gap is NOT closed — likely a separate mechanism (high-camber × negative-AoA loading physics, NOT tandem confusion).
+- **Inter-seed noise floor:** val=2.31, test=1.14. This result is well outside both.
+- **Throughput:** 30.7 min wall (vs 30.6 baseline), peak VRAM 44.6 GB (same), params 1.24M (preprocess input MLP +2 dims).
+- **Stack:** Per-foil-coords + QK-norm + Lion lr=1e-4 wd=1e-3 + nh=176 + bf16 + ep14.
+
+**Reproduce command:**
+```bash
+cd "target/" && python train.py --n_hidden 176 --epochs 14 --use_bf16 --use_lion --lion_lr 1e-4 --lion_wd 1e-3 --use_qk_norm --use_per_foil_coords
+```
+
+---
+
+## 2026-05-17 05:30 — PR #4270: QK-norm (LayerNorm on Q,K) + Lion + nh=176 + bf16 + ep14 (edward) — SUPERSEDED BY #4550
 
 - **val_avg/mae_surf_p: 46.9886** (best epoch 14/14, W&B run `oospddft`) — **−4.61% vs Lion baseline #4252**
 - **test_avg/mae_surf_p: 40.4803** — **−2.74% vs Lion baseline #4252** ← TEST METRIC WIN
