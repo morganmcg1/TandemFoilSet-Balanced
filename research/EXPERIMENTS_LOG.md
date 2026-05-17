@@ -1,5 +1,51 @@
 # SENPAI Research Results
 
+## 2026-05-17 01:00 — PR #4183: Lookahead-AdamW β2 fine scan ({0.93, 0.97}) ← CLOSED (AdamW β2 frontier closed)
+
+- Branch: `willowpai2i48h1-frieren/lookahead-b2-scan`
+- Student: willowpai2i48h1-frieren
+- W&B runs: `savqxetz` (β2=0.93), `8zsyxcer` (β2=0.97); group `lookahead_beta2_fine_scan`
+- Hypothesis: β2 fine scan around the inherited β2=0.95 under Lookahead-AdamW.
+
+### Results (W&B-verified; no SENPAI-RESULT posted but runs finished cleanly)
+
+| Arm | val_avg | test_avg | best_epoch | Δ val vs β2=0.95 (57.22) |
+|---|---|---|---|---|
+| β2=0.93 | 57.50 | 54.59 | 17 | +0.28 |
+| β2=0.95 (prior baseline) | 57.22 | 54.05 | 17 | — |
+| β2=0.97 | 57.28 | 54.78 | 17 | +0.06 |
+
+### Frontier finding
+
+β2 is **flat in [0.93, 0.97]** under Lookahead-AdamW. val swing 0.28 << seed σ̂≈1.3. β2=0.95 sits at the joint optimum — Lookahead's online basin-averaging takes over the variance-reduction role that AdamW's β2 was performing alone. **Validates the triple-stack β2=0.95 default; AdamW β2 frontier now closed.**
+
+### Decision
+
+Closed (rate-limit-close). frieren reassigned to **Lookahead-Lion β2 scan (#4264)** — the analogous question in the new era, where Lion's m-buffer β2 (default 0.99) is structurally different from AdamW's v_t β2.
+
+## 2026-05-17 01:00 — PR #4182: Lookahead-AdamW LR sweep ({7e-4, 1e-3}) ← CLOSED (AdamW LR frontier closed)
+
+- Branch: `willowpai2i48h1-fern/lookahead-higher-lr-sweep`
+- Student: willowpai2i48h1-fern
+- W&B runs: `6kvyr43u` (lr=7e-4), `aopbgr36` (lr=1e-3); group `lookahead_lr_sweep`
+- Hypothesis: Probe whether Lookahead unlocks higher peak LR (where plain AdamW diverged at lr=1e-3).
+
+### Results (W&B-verified; no SENPAI-RESULT posted but runs finished cleanly)
+
+| Arm | val_avg | test_avg | best_epoch | Δ val vs lr=5e-4 (57.22) |
+|---|---|---|---|---|
+| lr=5e-4 (prior baseline) | 57.22 | 54.05 | 17 | — |
+| **lr=7e-4** | **56.87** | 54.59 | 17 | **−0.35** (marginal win) |
+| lr=1e-3 | 58.87 | 56.02 | 17 | +1.65 (regress) |
+
+### Frontier finding
+
+Lookahead-AdamW LR optimum is **bounded in [5e-4, 7e-4]**. lr=7e-4 wins by −0.35 (within seed noise but directionally positive). lr=1e-3 still regresses — Lookahead does NOT unlock the AdamW LR ceiling materially. Basin-averaging works in a smoother neighborhood, not on the divergent edge.
+
+### Decision
+
+Closed (rate-limit-close). fern reassigned to **Lookahead-Lion LR sweep (#4265)** — the analogous question in the new era. Lion runs at cfg.lr/3 = 1.667e-4 (paper default); the actual TandemFoilSet optimum may sit elsewhere in [Lion lr=1e-4, 2.5e-4].
+
 ## 2026-05-17 00:35 — PR #4224: Lookahead-Lion seed=1 verification ← CLOSED (canonical, seed-robust confirmed)
 
 - Branch: `willowpai2i48h1-edward/lookahead-lion-seed1-verify`

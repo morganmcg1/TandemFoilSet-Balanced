@@ -1,7 +1,7 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 00:40
-- **Launch:** willow-pai2i-48h-r1 (round 12 — Lookahead-Lion era; programme best val=47.97, seed-robust ✓)
+- **Date:** 2026-05-17 01:05
+- **Launch:** willow-pai2i-48h-r1 (round 13 — Lookahead-Lion era; programme best val=47.97, seed-robust ✓)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN)
 - **Latest direction from human team:** None (no open issues scoped to this launch)
@@ -66,16 +66,21 @@ These findings suggest the optimal Lookahead-Lion hyperparameters are likely (k=
 
 | PR | Student | Hypothesis | Status | Priority |
 |----|---------|-----------|--------|----------|
-| #4242 | nezuko | Lookahead-Lion seed=2 (complete 3-seed canonical for new best) | **NEW — high** | Closes paper-facing seed-variance story |
-| #4241 | edward | Lookahead-Lion k=3 (compose k=3 finding with Lion-era) | **NEW — high** | Highest expected delta |
+| #4265 | fern | Lookahead-Lion LR sweep (cfg.lr∈{3e-4, 7.5e-4} → Lion lr∈{1e-4, 2.5e-4}) | **NEW** | Probe Lion-era LR frontier vs paper /3 default |
+| #4264 | frieren | Lookahead-Lion β2 scan (Lion m-buffer EMA ∈ {0.95, 0.98}) | **NEW** | Lion-era β2 frontier vs default 0.99 |
+| #4242 | nezuko | Lookahead-Lion seed=2 (complete 3-seed canonical for new best) | Running | Closes paper-facing seed-variance story |
+| #4241 | edward | Lookahead-Lion k=3 (compose k=3 finding with Lion-era) | Running | Highest expected delta |
 | #4202 | alphonse | Lookahead-AdamW k=3 seed=1 (3-seed canonical) | Running | k=3 era canonical |
 | #4203 | tanjiro | Lookahead-AdamW k=2 (k-sweep extension) | Running | Informs Lion k-sweep |
 | #4211 | askeladd | Lookahead-AdamW k=3 + α∈{0.6,0.7} sweep | Running | Informs Lion α-sweep |
 | #4213 | thorfinn | Lookahead-AdamW k=3 + α=0.8 | Running | Informs Lion α-sweep |
-| #4182 | fern | Lookahead-AdamW + LR sweep ({7e-4, 1e-3}) | Running | Informs Lion LR-sweep |
-| #4183 | frieren | Lookahead-AdamW + β2 scan ({0.93, 0.97}) | Running | Lion has no β2, but informs AdamW frontier |
 
 **Note:** All currently-running AdamW sweeps were assigned before Lookahead-Lion's val=47.97 result landed. Let them run to completion — their k/α/LR/β2 findings still inform the Lookahead-Lion hyperparameter space. Once they return, those students will be reassigned to Lion-era experiments.
+
+## Round-13 closures (frontier closures: AdamW β2 + LR exhausted)
+
+- **#4183 frieren (Lookahead-AdamW β2 fine scan)** CLOSED: val=57.50 (β2=0.93) / 57.28 (β2=0.97) — **β2 flat in [0.93, 0.97]**; AdamW β2 frontier closed
+- **#4182 fern (Lookahead-AdamW LR sweep)** CLOSED: val=56.87 (lr=7e-4, marginal win) / 58.87 (lr=1e-3, regress) — **AdamW LR optimum in [5e-4, 7e-4]**; Lookahead does not unlock the lr=1e-3 ceiling
 
 ## Round-12 closures
 
@@ -126,16 +131,18 @@ T_max=17 cosine has no stationary tail for either fast or slow trajectories. Onl
 
 ## Next research directions
 
-### Priority 1 (Lion-era composition tests — IN FLIGHT)
+### Priority 1 (Lion-era composition + frontier tests — IN FLIGHT)
 
 - **Lookahead-Lion k=3** (edward #4241) — k=3 was −1.25 on AdamW; expect ~−0.5 to −1.5 on Lion if it transfers
 - **Lookahead-Lion seed=2** (nezuko #4242) — close 3-seed canonical for paper
+- **Lookahead-Lion β2 scan** (frieren #4264) — Lion m-buffer β2 ∈ {0.95, 0.98} vs default 0.99
+- **Lookahead-Lion LR sweep** (fern #4265) — cfg.lr ∈ {3e-4, 7.5e-4} → Lion lr ∈ {1e-4, 2.5e-4} vs default 1.667e-4
 
 ### Priority 2 (Lion-era follow-ups, queue for next idle assignments)
 
 - **Lookahead-Lion α sweep** (α∈{0.6, 0.7, 0.8}) — α was inherited from AdamW; Lion's lower per-step noise may prefer higher α
-- **Lion LR fine-tune** — current LR divisor is 3 (paper default); try /2 and /5 to localize Lion-specific optimum
 - **Lookahead-Lion k=2** if AdamW k=2 (tanjiro #4203) shows continued improvement below k=3
+- **Lion β1 scan** (β1 ∈ {0.85, 0.95}) — controls update direction weighting; complement to β2 scan
 
 ### Priority 3 (architectural / compositional)
 
