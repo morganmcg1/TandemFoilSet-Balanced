@@ -18,12 +18,14 @@ Usage:
 from __future__ import annotations
 
 import copy
+import json
 import os
 import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -32,7 +34,7 @@ import wandb
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from tqdm import tqdm
 
 from data import (
@@ -497,6 +499,189 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Camber-bridging mixup
+# ---------------------------------------------------------------------------
+
+def build_camber_index(
+    train_ds, splits_dir: Path, debug: bool = False
+) -> tuple[dict[int, int], dict[int, list[int]], set[int]]:
+    """Cache per-training-index camber (M) value and racecar_tandem index buckets.
+
+    Reads meta.json to identify the racecar_tandem subset, then loads each
+    racecar_tandem .pt file once to extract the (single-value) NACA M channel
+    at x[:, 15]. We treat M as an integer 0..9 by rounding M_norm * 9.
+
+    Cached to ``camber_index_cache.json`` next to the splits dir so repeat
+    runs don't re-scan all training samples on init.
+
+    Returns:
+      idx_to_M_norm  : training index -> normalized camber value (only for racecar_tandem)
+      rt_idx_by_M    : integer M -> list of racecar_tandem training indices
+      rt_idx_set     : set of racecar_tandem training indices (for O(1) lookup)
+    """
+    splits_dir = Path(splits_dir)
+    with open(splits_dir / "meta.json") as f:
+        meta = json.load(f)
+    rt_idxs_full = list(meta["domain_groups"]["racecar_tandem"])
+
+    # In debug mode load_data truncates train_ds.files; only keep indices that
+    # still resolve to a real file. Mixup then operates on whatever survives.
+    rt_idxs = [i for i in rt_idxs_full if i < len(train_ds)]
+    rt_idx_set = set(rt_idxs)
+    if debug:
+        print(f"[camber-mixup] debug mode: {len(rt_idxs)}/{len(rt_idxs_full)} racecar_tandem indices remain after truncation")
+
+    cache_path = splits_dir / "camber_index_cache.json"
+    cached = None
+    if cache_path.exists():
+        try:
+            with open(cache_path) as f:
+                cached = json.load(f)
+        except Exception:
+            cached = None
+    if cached and cached.get("n") == len(rt_idxs_full) and not debug:
+        idx_to_M_norm = {int(k): float(v) for k, v in cached["idx_to_M_norm"].items()}
+    else:
+        print(f"[camber-mixup] Scanning camber values for {len(rt_idxs)} racecar_tandem training samples...")
+        idx_to_M_norm = {}
+        for i, idx in enumerate(rt_idxs):
+            x, _, _ = train_ds[idx]
+            idx_to_M_norm[idx] = float(x[0, 15].item())
+            if (i + 1) % 100 == 0:
+                print(f"  scanned {i+1}/{len(rt_idxs)}")
+        if not debug:
+            try:
+                with open(cache_path, "w") as f:
+                    json.dump({"n": len(rt_idxs_full), "idx_to_M_norm": {str(k): v for k, v in idx_to_M_norm.items()}}, f)
+                print(f"[camber-mixup] Cached camber index to {cache_path}")
+            except Exception as e:
+                print(f"[camber-mixup] Could not write cache ({e}); continuing.")
+
+    rt_idx_by_M: dict[int, list[int]] = {}
+    for idx, m_norm in idx_to_M_norm.items():
+        M = int(round(m_norm * 9))
+        rt_idx_by_M.setdefault(M, []).append(idx)
+
+    M_summary = ", ".join(f"M={M}:{len(v)}" for M, v in sorted(rt_idx_by_M.items()))
+    print(f"[camber-mixup] racecar_tandem camber distribution: {M_summary}")
+    return idx_to_M_norm, rt_idx_by_M, rt_idx_set
+
+
+class CamberMixupDataset(Dataset):
+    """Wraps a training dataset to apply camber-bridging mixup in __getitem__.
+
+    For samples whose training index is in the racecar_tandem set, with
+    probability ``mixup_prob`` we draw a partner sample (also racecar_tandem,
+    but with a DIFFERENT integer-M value) and a ratio alpha ~ Beta(a, a).
+    The mixed sample is::
+
+        x_mixed[:n_common] = alpha * x[:n_common] + (1 - alpha) * x_p[:n_common]
+        y_mixed[:n_common] = alpha * y[:n_common] + (1 - alpha) * y_p[:n_common]
+
+    where n_common = min(n_self, n_partner). Trailing self nodes (positions
+    n_common..n_self) keep the original sample's values. ``is_surface`` is
+    preserved from sample i.
+
+    Non-racecar_tandem samples (single, cruise) pass through unchanged.
+
+    A 1D ``mix_diag`` tensor of length 3 is appended:
+        mix_diag = [used_mixup_flag, alpha_used, M_eff_norm]
+    so the training loop can aggregate epoch-0 diagnostics. When mixup is
+    not used, alpha_used=1.0 and M_eff_norm=self_M_norm.
+    """
+
+    def __init__(
+        self,
+        base: Dataset,
+        rt_idx_by_M: dict[int, list[int]],
+        idx_to_M_norm: dict[int, float],
+        rt_idx_set: set[int],
+        mixup_prob: float,
+        mixup_alpha: float,
+    ):
+        self.base = base
+        self.rt_idx_by_M = rt_idx_by_M
+        self.idx_to_M_norm = idx_to_M_norm
+        self.rt_idx_set = rt_idx_set
+        self.mixup_prob = mixup_prob
+        self.mixup_alpha = mixup_alpha
+        self._available_M = sorted(self.rt_idx_by_M.keys())
+
+    def __len__(self):
+        return len(self.base)
+
+    def __getitem__(self, idx):
+        x, y, is_surface = self.base[idx]
+        if (
+            self.mixup_prob > 0
+            and idx in self.rt_idx_set
+            and torch.rand(1).item() < self.mixup_prob
+        ):
+            self_M_norm = self.idx_to_M_norm[idx]
+            self_M = int(round(self_M_norm * 9))
+            other_M_choices = [M for M in self._available_M if M != self_M]
+            if other_M_choices:
+                partner_M = other_M_choices[
+                    torch.randint(0, len(other_M_choices), (1,)).item()
+                ]
+                partner_pool = self.rt_idx_by_M[partner_M]
+                partner_idx = partner_pool[
+                    torch.randint(0, len(partner_pool), (1,)).item()
+                ]
+                x_p, y_p, _ = self.base[partner_idx]
+                alpha = float(np.random.beta(self.mixup_alpha, self.mixup_alpha))
+                n_common = min(x.shape[0], x_p.shape[0])
+                x_mixed = x.clone()
+                y_mixed = y.clone()
+                x_mixed[:n_common] = alpha * x[:n_common] + (1 - alpha) * x_p[:n_common]
+                y_mixed[:n_common] = alpha * y[:n_common] + (1 - alpha) * y_p[:n_common]
+                return x_mixed, y_mixed, is_surface
+        return x, y, is_surface
+
+
+def simulate_mixup_distribution(
+    idx_to_M_norm: dict[int, float],
+    rt_idx_by_M: dict[int, list[int]],
+    mixup_prob: float,
+    mixup_alpha: float,
+    n_samples: int = 5000,
+    seed: int = 0,
+) -> dict[str, list[float]]:
+    """Monte-Carlo simulate the mixup pipeline to verify alpha + M_eff coverage.
+
+    Mirrors the sampling logic in ``CamberMixupDataset.__getitem__`` exactly so
+    the histograms reflect what training will actually see. Pure float work;
+    no I/O. Returns lists of (alpha, m_eff_norm) for the simulated mixed
+    samples plus an empty list when no-op cases happened.
+    """
+    rng = np.random.default_rng(seed)
+    rt_idxs = list(idx_to_M_norm.keys())
+    available_M = sorted(rt_idx_by_M.keys())
+    alphas: list[float] = []
+    m_effs: list[float] = []
+    m_eff_M_int: list[int] = []
+    for _ in range(n_samples):
+        idx = rt_idxs[rng.integers(0, len(rt_idxs))]
+        if rng.random() >= mixup_prob:
+            continue
+        self_M_norm = idx_to_M_norm[idx]
+        self_M = int(round(self_M_norm * 9))
+        others = [M for M in available_M if M != self_M]
+        if not others:
+            continue
+        partner_M = others[rng.integers(0, len(others))]
+        partner_pool = rt_idx_by_M[partner_M]
+        partner_idx = partner_pool[rng.integers(0, len(partner_pool))]
+        partner_M_norm = idx_to_M_norm[partner_idx]
+        alpha = float(rng.beta(mixup_alpha, mixup_alpha))
+        m_eff_norm = alpha * self_M_norm + (1 - alpha) * partner_M_norm
+        alphas.append(alpha)
+        m_effs.append(m_eff_norm)
+        m_eff_M_int.append(int(round(m_eff_norm * 9)))
+    return {"alphas": alphas, "m_effs": m_effs, "m_eff_M_int": m_eff_M_int}
+
+
+# ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
 
@@ -530,6 +715,8 @@ class Config:
     use_lookahead: bool = False  # wrap AdamW with Lookahead (Zhang et al. 2019)
     lookahead_k: int = 5  # Lookahead inner steps before slow-weights sync
     lookahead_alpha: float = 0.5  # Lookahead slow-weights interpolation factor
+    camber_mixup_prob: float = 0.0  # per-sample probability of camber-bridging mixup; 0 disables
+    camber_mixup_alpha: float = 0.4  # Beta(a, a) shape parameter for mixup ratio
 
 
 cfg = sp.parse(Config)
@@ -542,15 +729,65 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
+mixup_sim_stats: dict | None = None
+if cfg.camber_mixup_prob > 0:
+    idx_to_M_norm, rt_idx_by_M, rt_idx_set = build_camber_index(
+        train_ds, Path(cfg.splits_dir), debug=cfg.debug
+    )
+    if not idx_to_M_norm:
+        print("[camber-mixup] no eligible racecar_tandem samples available; mixup will be a no-op.")
+        train_ds_effective = train_ds
+    else:
+        mixup_sim = simulate_mixup_distribution(
+            idx_to_M_norm, rt_idx_by_M,
+            mixup_prob=cfg.camber_mixup_prob,
+            mixup_alpha=cfg.camber_mixup_alpha,
+            n_samples=5000, seed=0,
+        )
+        alphas_arr = np.asarray(mixup_sim["alphas"])
+        m_effs_arr = np.asarray(mixup_sim["m_effs"])
+        m_eff_int = np.asarray(mixup_sim["m_eff_M_int"])
+        print(
+            f"[camber-mixup] MC sim ({len(alphas_arr)} mixups out of 5000 draws): "
+            f"alpha mean={alphas_arr.mean():.3f} std={alphas_arr.std():.3f}  "
+            f"M_eff_norm mean={m_effs_arr.mean():.3f}  "
+            f"frac M_eff in [6,7,8]={float(np.isin(m_eff_int, [6,7,8]).mean()):.3f}"
+        )
+        mixup_sim_stats = {
+            "n_simulated_mixups": int(len(alphas_arr)),
+            "alpha_mean": float(alphas_arr.mean()) if len(alphas_arr) else float("nan"),
+            "alpha_std": float(alphas_arr.std()) if len(alphas_arr) else float("nan"),
+            "m_eff_norm_mean": float(m_effs_arr.mean()) if len(m_effs_arr) else float("nan"),
+            "frac_m_eff_in_held_out": float(np.isin(m_eff_int, [6, 7, 8]).mean()) if len(m_eff_int) else 0.0,
+            "alpha_samples": alphas_arr.tolist(),
+            "m_eff_norm_samples": m_effs_arr.tolist(),
+            "m_eff_M_int_samples": m_eff_int.tolist(),
+        }
+        train_ds_effective = CamberMixupDataset(
+            base=train_ds,
+            rt_idx_by_M=rt_idx_by_M,
+            idx_to_M_norm=idx_to_M_norm,
+            rt_idx_set=rt_idx_set,
+            mixup_prob=cfg.camber_mixup_prob,
+            mixup_alpha=cfg.camber_mixup_alpha,
+        )
+        print(
+            f"[camber-mixup] enabled: prob={cfg.camber_mixup_prob}, "
+            f"alpha={cfg.camber_mixup_alpha} (Beta(a,a)). "
+            f"{len(rt_idx_set)} racecar_tandem training indices eligible."
+        )
+else:
+    train_ds_effective = train_ds
+
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
 if cfg.debug:
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
+    train_loader = DataLoader(train_ds_effective, batch_size=cfg.batch_size,
                               shuffle=True, **loader_kwargs)
 else:
     sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
+    train_loader = DataLoader(train_ds_effective, batch_size=cfg.batch_size,
                               sampler=sampler, **loader_kwargs)
 
 val_loaders = {
@@ -600,22 +837,43 @@ if cfg.sgdr_t0 > 0:
 else:
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
+wandb_config = {
+    **asdict(cfg),
+    "model_config": model_config,
+    "n_params": n_params,
+    "train_samples": len(train_ds),
+    "val_samples": {k: len(v) for k, v in val_splits.items()},
+    "ema_decay": ema_decay,
+}
+if mixup_sim_stats is not None:
+    wandb_config["mixup_sim"] = {
+        k: v for k, v in mixup_sim_stats.items()
+        if k not in {"alpha_samples", "m_eff_norm_samples", "m_eff_M_int_samples"}
+    }
+
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
     project=os.environ.get("WANDB_PROJECT"),
     group=cfg.wandb_group,
     name=cfg.wandb_name,
     tags=[cfg.agent] if cfg.agent else [],
-    config={
-        **asdict(cfg),
-        "model_config": model_config,
-        "n_params": n_params,
-        "train_samples": len(train_ds),
-        "val_samples": {k: len(v) for k, v in val_splits.items()},
-        "ema_decay": ema_decay,
-    },
+    config=wandb_config,
     mode=os.environ.get("WANDB_MODE", "online"),
 )
+
+if mixup_sim_stats is not None:
+    wandb.summary.update({
+        "mixup/n_simulated": mixup_sim_stats["n_simulated_mixups"],
+        "mixup/alpha_mean": mixup_sim_stats["alpha_mean"],
+        "mixup/alpha_std": mixup_sim_stats["alpha_std"],
+        "mixup/m_eff_norm_mean": mixup_sim_stats["m_eff_norm_mean"],
+        "mixup/frac_m_eff_in_held_out": mixup_sim_stats["frac_m_eff_in_held_out"],
+    })
+    wandb.log({
+        "mixup/alpha_hist": wandb.Histogram(mixup_sim_stats["alpha_samples"]),
+        "mixup/m_eff_norm_hist": wandb.Histogram(mixup_sim_stats["m_eff_norm_samples"]),
+        "mixup/m_eff_M_int_hist": wandb.Histogram(mixup_sim_stats["m_eff_M_int_samples"]),
+    })
 
 wandb.define_metric("global_step")
 wandb.define_metric("train/*", step_metric="global_step")
