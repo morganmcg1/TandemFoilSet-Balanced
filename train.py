@@ -580,6 +580,7 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
     use_bf16: bool = False   # Enable bf16 mixed-precision via torch.autocast (H95)
+    T_max: int = 15  # CosineAnnealingLR period; default preserves prior behavior
 
 
 cfg = sp.parse(Config)
@@ -646,7 +647,7 @@ elif cfg.optimizer == "adamw":
 else:
     raise ValueError(f"Unknown optimizer: {cfg.optimizer!r} (expected 'adamw' or 'lion')")
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer, T_max=15, eta_min=cfg.eta_min
+    optimizer, T_max=cfg.T_max, eta_min=cfg.eta_min
 )
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
@@ -766,6 +767,7 @@ for epoch in range(MAX_EPOCHS):
         "norm_type": cfg.norm_type,
         "ffn_act": cfg.ffn_act,
         "use_bf16": cfg.use_bf16,
+        "T_max": cfg.T_max,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "gate_stats": gate_stats,
