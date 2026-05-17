@@ -1886,3 +1886,44 @@ Note: both #4186 and #4155 were trained on the **old pre-SF baseline** since the
 | #4361 | thorfinn | n_hidden=160 on mlp_ratio=2 — deferred capacity axis, per wd evidence | architecture |
 | #4363 | tanjiro | slice_num=12 on mlp_ratio=2 — upward probe per student follow-up | attention |
 | #4364 | fern | surf_weight sweep {15, 20} — bias loss toward primary metric | loss |
+
+## 2026-05-17 05:45 — R26 BATCH: 1 closure (nezuko dropout sweep); 1 new assignment
+
+---
+
+## 2026-05-17 05:45 — PR #4340 — dropout sweep {0.05, 0.15} (CLOSED)
+
+- **Branch:** `charliepai2i48h1-nezuko/dropout-sweep-on-mlp-ratio-2`
+- **Hypothesis:** mlp_ratio=2 fix +33.6% params may need different attention dropout strength. Sweep ±50% from baseline 0.1.
+- **Results:**
+
+| Metric | Arm A (d=0.05) | Baseline (d=0.1, 36.13) | Arm B (d=0.15) |
+|--------|---------------|------------------------|----------------|
+| val_avg/mae_surf_p | 36.937 (+0.81 = +2.2%) | **36.13** | 37.060 (+0.93 = +2.6%) |
+| test_avg/mae_surf_p | 32.002 (tie) | **31.97** | 32.381 (+1.3%) |
+| val_single_in_dist | 35.772 (−0.90) | 36.67 | 37.847 (+1.18) |
+| val_geom_camber_rc | 50.607 (+2.46) | 48.15 | 50.737 (+2.59) |
+| val_geom_camber_cruise | 21.114 (−0.26) | 21.37 | 20.994 (−0.38) |
+| val_re_rand | 40.254 (+1.91) | 38.34 | 38.663 (+0.32) |
+
+- **Metrics paths:** `models/model-dropout-0.05-on-mlp-ratio-2-20260517-034803/metrics.jsonl`, `models/model-dropout-0.15-on-mlp-ratio-2-20260517-042550/metrics.jsonl`
+- **Key finding:** Both arms regress on val_avg by similar amounts (+0.81 / +0.93). Two-sided regression → dropout=0.1 confirmed as local optimum. **Axis CLOSED at 0.1 on new stack.**
+- **Critical insight surfaced by student**: `val_geom_camber_rc` is the dominant val_avg driver (~50.6 absolute vs ~20 for cruise) and degrades by ~2.5 in BOTH arms. The rc-split is NOT dropout-rate-sensitive — it is failing on something structural. **This split is the bottleneck for nearly all interventions** (also seen in mlp_ratio=3, n_layers=4+mlp_ratio=3 combo, wd=5e-4 results). Future hypotheses should specifically target geometry-shift generalization (geometric data augmentation, geometric inductive biases, or split-specific loss reweighting).
+- **Asymmetry observations**: less reg (d=0.05) boosts in-dist (−0.90) but tanks val_re_rand (+1.91). More reg (d=0.15) helps re_rand mildly (+0.32) but hurts in-dist (+1.18). Standard reg-vs-fit trade — but the rc-split moves the same direction in both, confirming structural failure.
+- **Decision:** CLOSED. Reassigned nezuko to drop_path probe — block-level reg is structurally different from weight-level reg and her own #1 suggested follow-up.
+
+---
+
+## 2026-05-17 05:45 — PR #4314 status update (edward, lr sweep)
+
+- **Issue:** Flagged as stale_wip in survey. Investigation: edward pod hit GitHub API rate limit during iterations 107-109 (05:07-05:17 UTC), couldn't see assignment, returned "No assigned PRs". Recovered at iteration 110 (05:22 UTC) and picked up #4314.
+- **Current state:** Edward is actively processing assignment as of 05:22 UTC. No advisor action required — rate-limit was transient.
+- **Action:** None. Monitor for terminal SENPAI-RESULT in next polling cycle.
+
+---
+
+### R26 New Assignment
+
+| PR | Student | Hypothesis | Theme |
+|----|---------|------------|-------|
+| #4381 | nezuko | Stochastic depth (drop_path) p=0.1 on residual branches — block-level reg, attack rc-split bottleneck | regularization (structural) |

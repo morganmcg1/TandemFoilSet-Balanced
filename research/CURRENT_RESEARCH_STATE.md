@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-17 05:30 UTC (R25 — 4 closures; 4 new assignments; 0 merges this round)
+- **Updated:** 2026-05-17 05:45 UTC (R26 — dropout sweep closed; nezuko → drop_path; rc-split bottleneck escalating)
 - **Track:** Charlie local-metrics arm (`charlie-pai2i-48h-r1`)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-48h-r1`
 - **Target base:** `icml-appendix-charlie`
@@ -67,9 +67,9 @@ Per-split test: single=36.53, rc=44.62, cruise=17.23, re_rand=29.50.
 | #4361 | thorfinn | n_hidden=160 on mlp_ratio=2 — deferred capacity axis; wd evidence says capacity-limited | architecture | WIP — R25 fresh |
 | #4363 | tanjiro | slice_num=12 on mlp_ratio=2 — probe upward; slice_num=6 slower, hypothesis: wider FFN wants more slices | attention | WIP — R25 fresh |
 | #4364 | fern | surf_weight sweep {15, 20} — bias loss toward primary surface metric; not re-swept since early rounds | loss | WIP — R25 fresh |
+| #4381 | nezuko | Stochastic depth (drop_path) p=0.1 — block-level reg, target rc-split bottleneck | regularization | WIP — R26 fresh |
 | #4342 | askeladd | 3-seed multi-seed baseline confirmation | validation | WIP — pre-R25 |
-| #4340 | nezuko | dropout sweep {0.05, 0.15} on mlp_ratio=2 stack | regularization | WIP — pre-R25 |
-| #4314 | edward | lr sweep {3e-4, 7.5e-4} on mlp_ratio=2 stack | optim | WIP — pre-R25 |
+| #4314 | edward | lr sweep {3e-4, 7.5e-4} on mlp_ratio=2 stack (delayed start, rate-limit recovered) | optim | WIP — pre-R25 |
 | #4281 | alphonse | beta=0.1 confirm + beta=0.05 2-arm on mlp_ratio=2 stack | loss | WIP — pre-R25 |
 
 ## Fully closed axes
@@ -83,7 +83,7 @@ Per-split test: single=36.53, rc=44.62, cruise=17.23, re_rand=29.50.
 | **SF warmup_steps** | PARTIALLY CLOSED — 50 hurts, 500 hurts on new stack; 200 confirmed optimal from above. Probing 100 (below) |
 | **slice_num (current)** | PARTIALLY CLOSED — 6 regresses (+3.1%), 8 optimal; 12 in-flight (upward probe) |
 | EMA decay | CLOSED at 0.997 |
-| dropout (prior) | CLOSED at 0.1 on old stack; re-sweeping on new stack (nezuko) |
+| **dropout (PhysicsAttention)** | **FULLY CLOSED at 0.1 on mlp_ratio=2 stack** — 0.05 hurts re_rand sharply (+1.91), 0.15 hurts in-dist (+1.18); axis sandwiched cleanly |
 | GEGLU on attention projections | FULLY CLOSED — all regressed |
 | Gate-activation axis | CLOSED — GEGLU > ReGLU > SwiGLU |
 | FiLM family | FULLY CLOSED |
@@ -100,6 +100,7 @@ Per-split test: single=36.53, rc=44.62, cruise=17.23, re_rand=29.50.
 3. **Slice_num kernel alignment** (tanjiro): compile path distinctly favors slice_num=8 (possibly power-of-two). slice_num=6 was actually 10% slower than baseline despite fewer slices. This is a systems finding to keep in mind.
 4. **Camber-cruise gain orthogonality**: Multiple experiments (mlp_ratio=3 standalone, n_layers=4+mlp_ratio=3 combo) show camber-cruise (val_geom_camber_cruise) consistently improves with wider FFN, while in-dist/re_rand don't. This suggests the camber-cruise split is FFN-capacity-limited while OOD-Re splits are more depth/routing-limited.
 5. **Asymmetric FFN potential** (fern's suggestion): wider FFN on only the last Transolver block could capture the camber-cruise gain without losing the mixing depth that OOD-Re splits need. Promising future hypothesis if current directions exhaust.
+6. **val_geom_camber_rc is the dominant val_avg bottleneck** (nezuko's escalation): rc-split absolute ~50.6 vs cruise ~20 (2.5× weight in avg). Every recent intervention (mlp_ratio=3, n_layers=4+mlp_ratio=3, wd=5e-4, dropout=0.05, dropout=0.15) has degraded rc-split. **rc-split is NOT dropout-rate-sensitive** — failing on something structural. Geometry-shift hypothesis: rc tests rear-camber geometries unseen in training. Future hypotheses should specifically target geometric generalization (data augmentation, geometric inductive biases, split-aware loss).
 
 ## Potential next research directions
 
@@ -107,12 +108,14 @@ Per-split test: single=36.53, rc=44.62, cruise=17.23, re_rand=29.50.
 2. **n_hidden=160** — IN FLIGHT (thorfinn #4361). Deferred capacity axis, now timely.
 3. **slice_num=12** — IN FLIGHT (tanjiro #4363). Upward probe at wider FFN.
 4. **surf_weight sweep {15, 20}** — IN FLIGHT (fern #4364). Direct loss bias toward primary metric.
-5. **dropout {0.05, 0.15} on new stack** — IN FLIGHT (nezuko #4340).
+5. **drop_path p=0.1** — IN FLIGHT (nezuko #4381). Block-level structural reg, target rc-split.
 6. **lr sweep {3e-4, 7.5e-4}** — IN FLIGHT (edward #4314).
 7. **SmoothL1 beta {0.1, 0.05}** — IN FLIGHT (alphonse #4281).
 8. **3-seed baseline confirmation** — IN FLIGHT (askeladd #4342).
-9. **Asymmetric FFN per block** — after current results; wider last-block only.
-10. **EMA checkpoint averaging (last-N-epoch)** — alternative checkpoint selection; thorfinn's wd=0 arm showed test wins despite val tie.
-11. **Stochastic depth (drop_path)** — only if evidence shifts toward over-parameterized (currently under).
-12. **n_hidden=160 + warmup_steps tuning** — compound if n_hidden=160 wins.
-13. **surf_weight combination with capacity changes** — after fern's surf_weight result.
+9. **Geometric data augmentation for rc-split** — direct attack on dominant bottleneck. Mirror flip, small rotation/scale perturbations. Physics-preserving where possible.
+10. **Asymmetric FFN per block** — wider last-block only; from fern's analysis.
+11. **EMA checkpoint averaging (last-N-epoch)** — alternative selection; thorfinn's wd=0 test wins despite val tie suggests selector noise.
+12. **Decoupled attn_dropout vs proj_dropout** — finer dropout decomposition; nezuko's #2 follow-up.
+13. **drop_path rate sweep** — if nezuko's p=0.1 wins, probe {0.05, 0.2}.
+14. **Gradient clipping max_grad_norm** — stability axis untested.
+15. **n_hidden=160 + warmup_steps tuning** — compound if n_hidden=160 wins.
