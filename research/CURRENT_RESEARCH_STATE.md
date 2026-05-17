@@ -1,7 +1,7 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 08:00
-- **Launch:** willow-pai2i-48h-r1 (round 22 — Lookahead-Lion era; **NEW PROGRAMME ALL-TIME BEST val=46.8383 / test=45.3196** (PR #4373 merged, β2=0.995 + α=0.7 compound); **β2-bowl fully resolved (narrow at 0.995, NOT monotone)**; **α-bowl confirmed at 0.7, k-bowl sharp at k=5**; **architectural up-direction DEAD (4/4 up-arms regress)**; **β2-right-edge + 3-seed canonical of new best in flight**)
+- **Date:** 2026-05-17 09:00
+- **Launch:** willow-pai2i-48h-r1 (round 23 — Lookahead-Lion era; **CURRENT PROGRAMME BEST val=46.8383 / test=45.3196** (PR #4373); **k-bowl SHIFTED to k=6 under α=0.7 (NEW FINDING, PR #4371 closed today)**; **β2-bowl fully resolved (narrow at 0.995, NOT monotone)**; **α-bowl confirmed at 0.7**; **k=6 + β2=0.995 compound dispatched (PR #4402, predicted val ≈ 46.39 = potential NEW best)**)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN)
 - **Latest direction from human team:** None (no open issues scoped to this launch)
@@ -49,18 +49,24 @@ Win threshold: **val < 46.8383** (seed=0). Prior best: val=47.5894 (PR #4269, β
 
 **α-bowl minimum CONFIRMED at α=0.7.** Effective-pull-rate framing α/k ≈ 0.14 validated.
 
-## k-frontier at α=0.7 (Lion-era, seed=0) — FULLY MAPPED (sharp bowl at k=5)
+## k-frontier under α=0.7 (Lion-era, seed=0) — k-BOWL SHIFTED to k=6 (round-23 finding)
+
+Under β2=0.99 slice at α=0.7:
 
 | k | val_avg | α/k | Status |
 |---|---|---|---|
 | 2 | 48.84 | 0.35 (over-pulled) | closed (round-17, AdamW era) |
 | 3 | 48.20 | 0.23 (over-pulled) | closed (PR #4241) |
 | 4 | ~48.30 | 0.175 (slight over-pull) | closed (PR #4355 round-22) |
-| **5 (BEST)** | **46.84 @ β2=0.995** | **0.14 (critical rate)** | **MERGED** |
-| 6 | TBD | 0.12 | askeladd #4371 IN FLIGHT |
+| 5 | 47.59 | 0.14 | superseded by k=6 |
+| **6 (NEW LOCAL MIN @ β2=0.99)** | **47.14** | **0.117** | closed (PR #4371) — beats k=5 by −0.45 val |
 | 7 | 48.48 | 0.10 (under-pulled) | closed (PR #4310) |
 
-**k-bowl sharp at k=5.** Even at α=0.7, k=4 (α/k=0.175) is slightly worse than the prior k=3+α=0.5 experiment (α/k=0.17) — k-axis sensitivity is sharp.
+**CRITICAL UPDATE:** k-bowl is at **k=6** under α=0.7, NOT k=5 as previously asserted. PR #4371 (just closed today round-23) showed k=6 beats k=5 by −0.45 val at β2=0.99. The bowl is asymmetric (k=4: +0.71, k=6: −0.45, k=7: +0.89 relative to k=5).
+
+**Effective-pull-rate framing REFINED:** Optimal α/k is **~0.117 at α=0.7** (k=6), not 0.14 (k=5). The cross-optimizer invariant α/k≈0.14 from AdamW era does NOT cleanly transfer to Lion at α=0.7.
+
+**Open question (NOW DISPATCHED #4402):** Does k=6 stack with β2=0.995 winner? Predicted val ≈ 46.84 + (47.14 − 47.59) = **46.39** if additive = potential NEW programme best.
 
 ## Compound winner decomposition
 
@@ -91,28 +97,32 @@ Win threshold: **val < 46.8383** (seed=0). Prior best: val=47.5894 (PR #4269, β
 
 VRAM gating resolved by thorfinn's data (39.16 GB at h=128 mlp_ratio=3 → h=192 mlp_ratio=2 estimated 45-55 GB; comfortable in 96 GB). Tests whether hidden-dim scaling composes with Lion + Lookahead + α=0.7 + β2=0.99 — a NEW combination unstudied in this launch.
 
-## Active WIP experiments (round 22)
+## Active WIP experiments (round 23)
 
 | PR | Student | Hypothesis | Status | Priority |
 |----|---------|-----------|--------|----------|
-| #4386 | tanjiro | **3-seed canonical seed=1: α=0.7 + β2=0.995** | **NEW (round 22)** | Paper-facing canonical |
-| #4385 | thorfinn | **3-seed canonical seed=2: α=0.7 + β2=0.995** | **NEW (round 22)** | Paper-facing canonical |
-| #4384 | fern | **β2=0.997 right-edge probe (refines 0.995→0.999 bowl)** | **NEW (round 22)** | β2-bowl micro-refinement |
+| #4402 | askeladd | **k=6 + β2=0.995 + α=0.7 compound (potential NEW best, predicted ~46.39)** | **NEW (round 23)** | **#1 Winner candidate** |
+| #4386 | tanjiro | 3-seed canonical seed=1: α=0.7 + β2=0.995 | Running (round 22) | Paper-facing canonical |
+| #4385 | thorfinn | 3-seed canonical seed=2: α=0.7 + β2=0.995 | Running (round 22) | Paper-facing canonical |
+| #4384 | fern | β2=0.997 right-edge probe (refines 0.995→0.999 bowl) | Running (round 22) | β2-bowl micro-refinement |
 | #4376 | alphonse | β1=0.88 + α=0.7 (β1 micro-probe at α winner) — at β2=0.99 | Running (round 21) | HP probe |
 | #4375 | frieren | slice_num=32 + α=0.7 (α-compound of slice32 near-winner) — at β2=0.99 | Running (round 21) | Winner candidate (predicted ~47.40, now needs −0.75 more) |
 | #4374 | edward | h=192 + α=0.7 (architectural probe, VRAM unblocked) — at β2=0.99 | Running (round 21) | Winner candidate (architectural) |
-| #4371 | askeladd | k=6 + α=0.7 (k-frontier gap-fill right flank) — at β2=0.99 | Running (round 21) | HP probe |
 | #4345 | nezuko | α=0.7 seed=2 at β2=0.99 (legacy 3-seed canonical of old best) | Running | Canonical of OLD best (47.59) |
 
 **All 8 students active. Zero idle. Single-arm policy in force.**
 
-### Round-22 strategic theme: bracket new programme best + recanonicalize
+### Round-23 strategic theme: compound k-bowl shift with β2 winner
 
-Three of round-22's new assignments serve the NEW programme best:
-- **β2=0.997 (fern #4384)** — refines the β2-bowl right edge between 0.995 (winner) and 0.999 (catastrophic), expected within ±0.3 val of the new best
-- **3-seed canonical seed=1 / seed=2 (tanjiro #4386, thorfinn #4385)** — verifies seed-robustness of the new best for paper-facing reporting
+Askeladd's #4371 just revealed a k-bowl shift — under α=0.7, k=6 beats k=5 by −0.45 val (at β2=0.99). This is the highest-value finding since fern's β2=0.995 discovery (PR #4373). The natural next experiment composes the k=6 finding with the β2=0.995 winner.
 
-Round-21's 5 in-flight PRs are at β2=0.99 (the OLD baseline's β2). Their results will compare against the OLD baseline win threshold of 47.59 (not the new 46.84) — winning configs from those can be combined with β2=0.995 in a follow-up round.
+Note that #4371's result (47.14) does NOT beat the current programme best (46.84) because the new best (#4373) was merged 3 hours before the k=6 run completed. The k=6 finding is the "k-direction" discovery; #4402 is the "compound test" that determines whether the new programme best lives.
+
+Round-21's 4 still-running PRs (alphonse #4376, frieren #4375, edward #4374, nezuko #4345) are at β2=0.99 — their results will compare against the OLD 47.59 win threshold for direction discovery, not the new 46.84.
+
+## Round-23 closures (1 closure; k-bowl shift discovered)
+
+- **#4371 askeladd (k=6 + α=0.7 at β2=0.99)** CLOSED: val=47.1361 / test=45.5200 (W&B `i8agcpvv`, finished, best_ep=17, 31.4 min). **BEATS old k=5 baseline by −0.45 val / −0.49 test**, but does NOT beat current best 46.84 (+0.30 val). **k-bowl SHIFTED to k=6 under α=0.7** (was k=5 under α=0.5). Effective-pull-rate framing REFINED to α/k=0.117 at α=0.7. Askeladd reassigned to **k=6 + β2=0.995 + α=0.7 compound (#4402)** — predicted val ≈ 46.39 = potential NEW programme best.
 
 ## Round-22 closures (3 closures + 1 merge; β2-bowl mapped; new programme best landed)
 
@@ -168,26 +178,27 @@ Round-21's 5 in-flight PRs are at β2=0.99 (the OLD baseline's β2). Their resul
 
 ## Next research directions
 
-### Priority 1 (Immediate — IN FLIGHT round 22)
+### Priority 1 (Immediate — IN FLIGHT round 23)
 
+- **k=6 + β2=0.995 + α=0.7 compound** (askeladd #4402) — TOP PRIORITY: composes the k-bowl shift finding with the β2=0.995 winner; predicted val ≈ 46.39 = potential NEW programme best
 - **β2=0.997 right-edge probe** (fern #4384) — refines β2-bowl floor between 0.995 (winner) and 0.999 (catastrophic)
 - **3-seed canonical seed=1** (tanjiro #4386) — α=0.7 + β2=0.995 with --seed 1 for paper-facing reporting
 - **3-seed canonical seed=2** (thorfinn #4385) — α=0.7 + β2=0.995 with --seed 2 for paper-facing reporting
 
 ### Priority 1b (Still running round 21; results pending against OLD 47.59 baseline)
 
-- **slice_num=32 + α=0.7** (frieren #4375) — predicted val ≈ 47.40; now needs to clear 46.84 to win outright; if 46.84 < val < 47.59 it's promising for compounding
+- **slice_num=32 + α=0.7** (frieren #4375) — predicted val ≈ 47.40; now needs to clear 46.84 to win outright
 - **h=192 + α=0.7** (edward #4374) — first architectural probe under α=0.7
-- **k=6 + α=0.7** (askeladd #4371) — k-frontier gap-fill on right flank
 - **β1=0.88 + α=0.7** (alphonse #4376) — β1 micro-probe of asymmetric landscape
 - **α=0.7 seed=2** (nezuko #4345) — completes 3-seed canonical of OLD best
 
-### Priority 2 (next idle-round; gated on round-22 outcomes)
+### Priority 2 (next idle-round; gated on round-23 outcomes)
 
-- **β2=0.996 + α=0.7** — if 0.997 lands close to 0.995, refine the bowl further
+- **k=6 + slice_num=32 + α=0.7 + β2=0.995** — 4-way compound if both #4402 (k=6 stack) and #4375 (slice32 stack) show promise
+- **k=7 + β2=0.995 + α=0.7** — gap-fill the new k-bowl right flank with the β2 winner (mechanism: confirm whether k-bowl asymmetry persists at β2=0.995)
+- **k=5 / k=6 / k=7 at β2=0.997** — if fern's #4384 lands close to 0.995, map the (k, β2) interaction grid
 - **β2=0.995 + α=0.65 / α=0.75 micro-bowl** — refine α-bowl floor at new β2 winner (may shift slightly)
-- **Compound winning HP knobs at β2=0.995** — once round-21 HP probes settle, recompose any winning knobs at the new β2=0.995 baseline
-- **β2=0.995 + slice_num=32 + α=0.7** — 3-way compound if frieren's #4375 shows promise
+- **α-frontier at k=6** — if #4402 wins, sweep α at the new k optimum (predict α-bowl narrower at k=6)
 
 ### Priority 3 (Plateau-protocol escalation if round-22+ saturates)
 
@@ -204,9 +215,9 @@ Round-21's 5 in-flight PRs are at β2=0.99 (the OLD baseline's β2). Their resul
 
 ### Observations for paper
 
-1. **Lion's α-frontier at k=5 mirrors AdamW's:** basin-averaging mechanism (not optimizer) dominates at k=5; Lookahead is optimizer-independent in the strong-pull regime
+1. **k-bowl shifts under α regime:** at α=0.5, k=5 was optimal; at α=0.7, the k-bowl minimum shifted to k=6 (PR #4371). Effective-pull-rate framing α/k=0.14 (AdamW era) does NOT transfer cleanly to Lion at α=0.7 (where α/k=0.117 may be the new optimum). The basin-averaging mechanism is α-dependent, not optimizer-dependent.
 2. **Lion β1 landscape is asymmetric:** raising β1 from 0.9 is ~9× worse than lowering it
 3. **β2 bowl narrow at 0.995:** half-life ≈ 138 steps is the within-basin sweet spot; both lower (0.95→14 steps) and much higher (0.999→692 steps) catastrophic
 4. **heads=8 is budget-incompatible at h=128:** wall-clock failure, not capacity failure
-5. **Effective-pull-rate α/k ≈ 0.14 is a cross-optimizer invariant:** validated at k=5 for both AdamW and Lion
-6. **Compound winners stack additively:** α=0.7 (PR #4269) + β2=0.995 (PR #4373) → combined Δ −1.13 val vs prior baseline; no destructive interaction
+5. **Compound winners stack additively:** α=0.7 (PR #4269) + β2=0.995 (PR #4373) → combined Δ −1.13 val vs prior baseline; no destructive interaction. PR #4402 tests whether k=6 (−0.45 val at β2=0.99) also stacks with β2=0.995 (predicted: yes, → val ≈ 46.39).
+6. **k-bowl asymmetric and α-dependent:** under α=0.7, gap k=4→5 is +0.71 vs gap k=7→5 is +0.89, but k=6 BEATS k=5 by −0.45 — the bowl is non-monotone and shifted.

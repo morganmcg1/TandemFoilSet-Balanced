@@ -1,5 +1,52 @@
 # SENPAI Research Results
 
+## 2026-05-17 09:00 — PR #4371: Lookahead-Lion k=6 at α=0.7 ← CLOSED (BEATS old k=5 baseline; k-bowl SHIFTED under α=0.7)
+
+- Branch: `willowpai2i48h1-askeladd/lookahead-lion-k6-alpha07`
+- Student: willowpai2i48h1-askeladd
+- W&B: `i8agcpvv` (finished, best_ep=17, 31.4 min wall-clock); group `lookahead_lion_k_sweep_alpha07`
+- Hypothesis: Probe k=6 at α=0.7 to gap-fill between k=5 (val=47.59) and k=7 (val=48.48). α/k=0.117 hypothesized as a sweet spot — slightly longer sync than k=5 but stronger pull than k=7.
+
+### Results (W&B-verified)
+
+| Metric | val_avg/mae_surf_p | test_avg/mae_surf_p | best_ep |
+|---|---|---|---|
+| Prior k=5 baseline (PR #4269, β2=0.99) | 47.5894 | 46.0098 | 17 |
+| **THIS PR (k=6, β2=0.99)** | **47.1361** | **45.5200** | **17** |
+| Δ vs k=5 baseline | **−0.4533 val** | **−0.4898 test** | — |
+| Current programme best (PR #4373, k=5, β2=0.995) | **46.8383** | **45.3196** | 17 |
+| Δ vs current best | +0.2978 val | +0.2004 test | — |
+
+### CRITICAL FINDING: k-bowl SHIFTED under α=0.7
+
+Under α=0.5 (legacy regime), the k-bowl minimum was at k=5. Under α=0.7, it has shifted to **k=6**:
+
+| k | α/k | val_avg @ α=0.7, β2=0.99 | Δ vs k=5 |
+|---|---|---|---|
+| 4 (PR #4355) | 0.175 | ~48.30 | +0.71 |
+| 5 (PR #4269) | 0.140 | 47.59 | baseline |
+| **6 (THIS PR)** | **0.117** | **47.14** | **−0.45** ← NEW LOCAL MIN |
+| 7 (PR #4310) | 0.100 | 48.48 | +0.89 |
+
+The bowl is asymmetric: k=4 (+0.71) is less catastrophic than k=7 (+0.89), and the minimum has migrated rightward. Effective-pull-rate framing **refined**: α/k=0.117 is the new optimum at α=0.7, NOT 0.14 as previously asserted at k=5.
+
+### Mechanism
+
+Longer sync intervals (k=6 vs k=5) let noisy Lion gradients average more before each fast-weight commitment to slow-weight pull. At α=0.7, the slow-weight pull is strong enough that the extra averaging step compensates for the reduced pull frequency. The k-bowl asymmetry suggests over-syncing (k=4) penalizes more than under-syncing (k=6) — confirms that the slow-weight basin-averaging is the dominant mechanism.
+
+### Test split breakdown
+
+| Split | mae_surf_p |
+|---|---|
+| test_single_in_dist | 44.67 |
+| test_geom_camber_rc | 55.40 (worst — geometry OOD pattern) |
+| test_geom_camber_cruise | 42.48 |
+| test_re_rand | 39.53 (best) |
+
+### Decision
+
+**Closed.** Does not beat current programme best (46.84 was merged 3h before this run completed — goalposts moved mid-experiment). The k-bowl shift finding is exceptionally valuable. Askeladd reassigned to **k=6 + β2=0.995 + α=0.7 compound (#4402)** — predicted val ≈ 46.39 if k=6 and β2=0.995 stack additively (= potential NEW programme best).
+
 ## 2026-05-17 08:00 — PR #4373: Lookahead-Lion α=0.7 + Lion β2=0.995 ← MERGED (NEW PROGRAMME ALL-TIME BEST)
 
 - Branch: `willowpai2i48h1-fern/lookahead-lion-b2-0995-a07`
