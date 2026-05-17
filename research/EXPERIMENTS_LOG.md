@@ -1417,3 +1417,31 @@ Reference: canonical val=41.4446, test=43.2173.
 - Branch: `willowpai2i48h3-fern/mlp-ratio-revisit-bf16`
 - Hypothesis: PR #3169 crashed on mlp_ratio=4 at launch (fp32 ~95% VRAM, no mitigations). Now unblocked by bf16 (33 GB vs 42 GB), grad_clip=1.0, and SOAP+Lookahead.
 - 2 arms: mlp_ratio ∈ {3 (incremental), 4 (original crashed config)} on full bf16 canonical.
+
+## 2026-05-17 03:10 — PR #4263 (tanjiro): Cosine T_max sweep {50, 17, 25} — **MERGED (14th winner)**
+
+- Branch: `willowpai2i48h3-tanjiro/cosine-t-max-sweep`
+- W&B runs: `o3xqizbn` (arm1 T_max=50), `wx1zpu1n` (arm2 T_max=17), `ymqw3n5m` (arm3 T_max=25) ⭐
+
+**Result:**
+
+| Arm | T_max | LR@epoch17 | val | test_excl | Δ val |
+|---|---|---|---|---|---|
+| 1 (canonical) | 50 | ~0.80 × peak | 41.4446 | 43.2173 | 0.00% |
+| 2 | 17 | ~0 | 38.3203 | 38.8671 | **−7.54%** |
+| **3** | **25** | **~0.29 × peak** | **37.9354** | **39.0519** | **−8.47%** ⭐ |
+
+Per-split test (arm 3 / T_max=25):
+- test_single_in_dist: 40.7102 (vs 45.9176 canonical, −11.3%)
+- test_geom_camber_rc: 45.1351 (vs 49.1937, −8.2%)
+- test_re_rand: 31.3105 (vs 34.5406, −9.4%)
+
+**Analysis:** T_max=50 with bf16's 17-epoch budget meant the LR at best_epoch was still ~80% of peak — the cosine cooldown phase was silently disabled. Fixing T_max to 25 gives a 22-epoch cosine window with LR ≈ 2.9e-4 at epoch 17, providing genuine refinement. T_max=17 (full budget match) goes to zero LR by epoch 17 — slightly too aggressive: Arm 3 (T_max=25) beats Arm 2 on val (37.93 vs 38.32), showing the optimal end-point is a non-zero LR floor. The mechanism is schedule alignment: every win since bf16 was running with an effectively constant LR because T_max=50 >> 17 epochs.
+
+**New canonical:** val=37.9354 (−8.47%), test=39.0519 (−9.64%). Added `--cosine_t_max 25` to reproduce command. **MERGED.**
+
+## 2026-05-17 03:10 — Assignment: #4336 tanjiro lr-retune-cosine-t25
+
+- Branch: `willowpai2i48h3-tanjiro/lr-retune-cosine-t25`
+- Hypothesis: LR=1e-3 was swept previously (PR #4216) on broken T_max=50 schedule. With correct T_max=25, higher LR (1.5e-3, 2e-3) may now improve val as well as test. SOAP+grad_clip+bf16 is known-stable at 2-3× canonical LR.
+- 2 arms: lr ∈ {1.5e-3, 2e-3}, both with cosine_t_max=25.
