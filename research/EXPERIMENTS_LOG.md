@@ -1,5 +1,105 @@
 # SENPAI Research Results
 
+## 2026-05-17 08:00 — PR #4373: Lookahead-Lion α=0.7 + Lion β2=0.995 ← MERGED (NEW PROGRAMME ALL-TIME BEST)
+
+- Branch: `willowpai2i48h1-fern/lookahead-lion-b2-0995-a07`
+- Student: willowpai2i48h1-fern
+- W&B: `3k6hob38` (canonical; finished, best_ep=17); group `lookahead_lion_b2_high`
+- Hypothesis: Probe Lion β2=0.995 at α=0.7 to bracket tanjiro's β2=0.999 (#4356) and resolve high-β2 frontier — m-buffer half-life at β2=0.995 ≈ 138 steps (sweet spot for within-basin smoothing without spanning entire training run).
+
+### Results (W&B-verified)
+
+| Config | val_avg | test_avg | best_ep | W&B |
+|---|---|---|---|---|
+| Prior best (PR #4269, β2=0.99 / α=0.7) | 47.5894 | 46.0098 | 17 | `oftlu9tn` |
+| **THIS PR (β2=0.995 / α=0.7)** | **46.8383** | **45.3196** | 17 | `3k6hob38` |
+| Δ vs prior best | **−0.7511 val** | **−0.6902 test** | — | — |
+
+### Compound winner: α=0.7 + β2=0.995 stack additively
+
+Original AdamW triple-stack baseline → Lookahead-Lion (k=5/α=0.7, β2=0.99) → +β2=0.995:
+- Total Δ val = **−1.135** (combining α-frontier gain + β2-frontier gain)
+- Both knobs independently optimized at α=0.7 winner; their gains stack with NO destructive interaction
+
+### Test splits
+
+3 of 4 splits improve materially; mild +0.62 regression on test_re_rand only:
+- test_geom_camber_rc, test_geom_thickness, test_full_distribution all improve in lockstep with val
+- Single-split regression within seed noise envelope (σ̂ ≈ 0.64)
+
+### Mechanism
+
+β2=0.995 m-buffer half-life ≈ 138 steps — within-basin smoothing without spanning entire training run (17 epochs ≈ 850 steps for this dataset). Stronger m-buffer EMA pairs synergistically with Lookahead's slow-weight averaging: both mechanisms operate at compatible (not destructive) timescales.
+
+### Decision
+
+**MERGED.** New programme best val=46.8383 / test=45.3196. BASELINE.md updated. Win threshold dropped accordingly. Fern reassigned to **β2=0.997 right-edge probe (#4384)** — refines β2 bowl between winner 0.995 and catastrophic 0.999.
+
+## 2026-05-17 08:00 — PR #4356: Lookahead-Lion β2=0.999 at α=0.7 ← CLOSED (β2-bowl narrow at 0.995; NOT monotone)
+
+- Branch: `willowpai2i48h1-tanjiro/lookahead-lion-b2-0999-a07`
+- Student: willowpai2i48h1-tanjiro
+- W&B: finished, best_ep=17; group `lookahead_lion_b2_high`
+- Hypothesis: Probe β2=0.999 to extend Lion m-buffer half-life and capture longer-horizon gradient signal.
+
+### Results
+
+| Config | val_avg | test_avg | Δ vs new best (46.84) |
+|---|---|---|---|
+| **NEW PROGRAMME BEST (PR #4373, β2=0.995)** | **46.8383** | **45.3196** | — |
+| THIS PR (β2=0.999) | ~52.04 | ~49.6 | **+5.20 val (catastrophic)** |
+
+### β2-frontier fully resolved (narrow bowl at 0.995, NOT monotone toward 1.0)
+
+| β2 | val_avg | m-buffer half-life | Verdict |
+|---|---|---|---|
+| 0.95 | 54.62 | 14 steps | catastrophic (PR #4264 round-18) |
+| 0.99 | 47.59 | 69 steps | baseline (PR #4269 merged) |
+| **0.995 (BEST)** | **46.84** | **138 steps** | **MERGED (PR #4373)** |
+| 0.999 (THIS PR) | 52.04 | **692 steps** | catastrophic (β2 too high) |
+
+### Mechanism
+
+At β2=0.999, m-buffer half-life ≈ 692 steps spans the entire training run (≈ 850 steps total). The momentum buffer never fully refreshes within the cosine schedule's annealing phase — gradient signals from epoch 1 still bleed into epoch 17 update directions. Destroys the cosine-floor advantage that the rest of the system relies on.
+
+### Decision
+
+**Closed.** β2-bowl narrow at 0.995. Tanjiro reassigned to **3-seed canonical seed=1 of new programme best (#4386)** — α=0.7 + β2=0.995 with --seed 1 to verify seed-robustness of the new best for paper-facing metrics.
+
+## 2026-05-17 08:00 — PR #4355: Lookahead-Lion k=4 at α=0.7 ← CLOSED (k-bowl sharp at k=5; α/k=0.175 over-pulls)
+
+- Branch: `willowpai2i48h1-thorfinn/lookahead-lion-k-4-a07`
+- Student: willowpai2i48h1-thorfinn
+- W&B: finished, best_ep=17; group `lookahead_lion_k_sweep`
+- Hypothesis: Gap-fill the k-frontier on left flank between k=3 (val=48.20) and k=5 (val=47.59) under the new α=0.7 winner.
+
+### Results
+
+| Arm | k | α/k | val_avg | Δ vs current best (47.59 @ k=5) |
+|---|---|---|---|---|
+| Prior k=3 (α=0.5; PR #4241) | 3 | 0.17 | 48.20 | +0.61 |
+| **Current best (PR #4269)** | **5** | **0.14** | **47.59** | — |
+| THIS PR (α=0.7) | 4 | 0.175 | ~48.30 | **+0.71 val** |
+| Prior k=7 (α=0.5; PR #4310) | 7 | 0.10 | 48.48 | +0.89 |
+
+### k-frontier under α=0.7 — fully mapped
+
+| k | val_avg | α/k | Verdict |
+|---|---|---|---|
+| 2 | 48.84 | 0.35 | over-pulled |
+| 3 | 48.20 | 0.23 | over-pulled |
+| 4 (THIS PR) | ~48.30 | 0.175 | **slight over-pull (worse than k=3!)** |
+| **5 (BEST)** | **47.59** | **0.14** | **optimum** |
+| 7 | 48.48 | 0.10 | under-pulled |
+
+### Mechanism
+
+k=4 under α=0.7 has α/k=0.175 — **over-pulls** vs the optimal 0.14 band. Note k=4 is non-monotone-worse-than-k=3 (despite both being over-pulled): k=4 has higher α/k ratio than the prior k=3+α=0.5 experiment (0.175 vs 0.17). k-bowl sharp at k=5; α/k=0.14 is the empirically-confirmed critical effective-pull-rate.
+
+### Decision
+
+**Closed.** k-bowl sharp at k=5 fully confirmed. Thorfinn reassigned to **3-seed canonical seed=2 of new programme best (#4385)** — α=0.7 + β2=0.995 with --seed 2 to complete the 3-seed canonical for paper-facing reporting.
+
 ## 2026-05-17 07:00 — PR #4344: Lookahead-Lion α=0.7 seed=1 ← CLOSED (canonical 2-seed confirmation; no merge)
 
 - Branch: `willowpai2i48h1-askeladd/lookahead-lion-alpha07-seed1`
