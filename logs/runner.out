@@ -1,0 +1,3 @@
+=== [2026-05-16T23:41:48+00:00] Launching arm1 (lr=1e-3) -> logs/arm1_lr1e3.log ===
+=== [2026-05-17T00:17:31+00:00] arm1 finished rc=0 ===
+=== [2026-05-17T00:17:31+00:00] Launching arm2 (lr=5e-4) -> logs/arm2_lr5e4.log ===

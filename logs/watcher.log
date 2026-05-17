@@ -1,0 +1,4 @@
+[watcher 2026-05-17T00:34:53+00:00] waiting for arm2 PID=106463
+[watcher 2026-05-17T00:53:33+00:00] arm2 PID=106463 has ended; sleeping 10s before launching arms 3+4
+[watcher 2026-05-17T00:53:43+00:00] launching arms 3+4
+[watcher 2026-05-17T00:53:48+00:00] arms 3+4 runner exited rc=0

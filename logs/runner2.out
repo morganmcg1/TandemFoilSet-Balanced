@@ -1,0 +1,5 @@
+=== [2026-05-17T00:53:43+00:00] Launching arm3 (lr=2e-3, bf16) -> logs/arm3_lr2e3_bf16.log ===
+=== [2026-05-17T00:53:45+00:00] arm3 finished rc=2 ===
+=== [2026-05-17T00:53:45+00:00] Launching arm4 (lr=3e-3, bf16) -> logs/arm4_lr3e3_bf16.log ===
+=== [2026-05-17T00:53:48+00:00] arm4 finished rc=2 ===
+=== [2026-05-17T00:53:48+00:00] ARMS 3+4 DONE ===
