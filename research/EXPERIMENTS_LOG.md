@@ -1,5 +1,44 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-17 02:35 — PR #4165 CLOSED (slice_num=48 U-shape) + #4297 alphonse Lion+ep18 assigned
+
+### #4165 alphonse slice_num=48 retest at nh=176+bf16+ep18 — **CLOSED** (U-shape confirmed)
+
+- **Student:** willowpai2i48h4-alphonse (branch: `willowpai2i48h4-alphonse/slice-num-48-retest`)
+- **Hypothesis:** slice_num=48 (fewer, richer slices) might beat slice_num=64 baseline on the nh=176 stack — together with #4140 (slice_num=96, val=74.47) this triangulates the slice_num curve.
+
+#### Results
+
+| Metric | slice_num=48 (this PR) | slice_num=64 (#4082) | slice_num=96 (#4140) | Δ vs #4082 |
+|---|---:|---:|---:|---:|
+| val_avg/mae_surf_p | **53.91** | 50.90 | 74.47 | **+5.91%** REGRESS |
+| test_avg/mae_surf_p | **46.48** | 43.90 | — | **+5.88%** REGRESS |
+| test/single_in_dist | 52.43 | 48.97 | — | +7.06% |
+| test/geom_camber_rc | 58.31 | 55.45 | — | +5.16% |
+| test/geom_camber_cruise | 30.04 | 28.27 | — | +6.25% |
+| test/re_rand | 45.16 | 42.91 | — | +5.25% |
+| Wall time | 31.7 min (cut ep16/18) | 39 min | — | — |
+
+- **W&B run:** `5hujyy6m`
+- **Best epoch:** 16/18 (cut by 30-min pod cap; monotonic improvement ep14→16: 73.7→59.8→53.9)
+
+#### Decision: CLOSE
+- Per predetermined criteria val ≥ 53.8221 → close (just barely above threshold by 0.09)
+- Uniform +5-7% regression across ALL 4 splits → clean capacity loss, not domain-specific failure
+- Trajectory extrapolated to ep17/18 lands ~51.5-52.5 — still above baseline 50.90
+- **slice_num=64 is confirmed U-shape sweet spot** on nh=176 stack. Both 48 AND 96 regress; 96 regresses ~3x more.
+- vs new Lion baseline (val=49.26): regression is even larger (+9.4% val, +11.7% test)
+- **slice_num axis is exhausted on this stack.**
+
+#### Follow-up: #4297 alphonse Lion + epochs=18 + T_max=18 schedule extension
+
+The Lion baseline (#4252) was at ep14 because that was AdamW's wall-budget optimum. Lion is ~10% faster per epoch, so we have headroom in the 30-min cap. Tests whether Lion benefits from extended schedule or has already converged at ep14.
+- Single arm, ~27 min expected wall time
+- Single-flag change: `--epochs 18` (with cosine T_max=18 auto-matched)
+- Decision: merge if val < 49.26 AND test < 41.62; send back to ep=16 if intermediate; close if val > 50.5
+
+---
+
 ## 2026-05-17 01:25 — PR #4252 MERGED (Lion optimizer) + #4280 assigned
 
 ### #4252 frieren LION optimizer at nh=176+bf16+ep14 — **MERGED** (new baseline: val=49.26, test=41.62)
