@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-17 (cycle 38)
+- **Date**: 2026-05-17 (cycle 40)
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
-- **Round**: 5 late-phase — **CURRENT BEST: H99 Arm A bf16 + T_max=21 (val=37.26 / test=35.86, PR #4272). Δ-3.24 vs H95 (40.51).** Cycle 38: merged H99, closed H100/H101/H93, assigned H113/H114/H106/H107 to 4 idle students. 8 WIP, 0 idle.
+- **Round**: 5 late-phase — **CURRENT BEST: H99 Arm A bf16 + T_max=21 (val=37.26 / test=35.86, PR #4272). Δ-3.24 vs H95 (40.51).** Cycle 40: closed thorfinn/H96 (val=41.05, below baseline; rebase failures); assigned H118 (torch.compile+bf16+T_max=21 compound) to thorfinn (PR #4380). 8 WIP, 0 idle.
 - **Most recent human research directive**: None received
 
 ## Current Best
@@ -46,10 +46,10 @@ Decision thresholds:
 | **#4333** | frieren | **H113: n_layers=6 + bf16 + T_max=21 (retest H101 Arm B undertraining)** | HIGH (was wall-cut at T_max=15; with T_max=21 shape, potential val ~36-37) | ~36-38 |
 | **#4335** | alphonse | **H106: Fourier PE of mesh coordinates (K=8, K=4)** | MED (orthogonal axis; multi-scale spatial frequencies) | ~35-38 |
 | **#4337** | askeladd | **H107: log(Re) aux head (λ=0.1, λ=0.01)** | MED (multi-task Re regularization; targets val_re_rand) | ~36-38 |
-| **#4291** | edward | **H102: slice_num=128 under bf16** | MED (still running at old T_max=15 config — results will be compared vs new H99 baseline) | uncertain |
-| **#4292** | tanjiro | **H103: mlp_ratio=3 under bf16** | MED (same; old T_max=15 config) | uncertain |
-| **#4217** | thorfinn | **H96: compile+bf16+T_max=21 compound (Arms C, D)** | HIGH (efficiency stack; compile+bf16 may yield ~45% more compute per wall-minute) | ~35-38 |
-| **#4316** | fern | **H112: AoA + log(Re) + gap/stagger input jitter** | MED (first OOD regularization; targets val_re_rand and val_geom_camber_cruise) | ~36-39 |
+| **#4378** | fern | **H116: log(Re) aux head v2 (λ=0.01, λ=0.05 on H99 stack)** | MED (Re-structured trunk; targets val_geom_camber_rc 49.78 + val_re_rand 39.25) | ~36-38 |
+| **#4379** | tanjiro | **H117: Fourier PE of mesh coords (K=8, K=4 on H99 stack)** | MED (multi-scale spatial frequency encoding; orthogonal axis) | ~35-38 |
+| **#4380** | thorfinn | **H118: torch.compile + bf16 + T_max=21 compound (Arms A,B: reduce-overhead vs default)** | HIGH (compile may cut s/epoch ~85.7→~70, fitting ~25 epochs; clean H99 baseline test) | ~35-37 |
+| **#4357** | edward | **H115: slice_num=80 and 64 on H99 bf16+T_max=21 stack** | MED (sub-96 slice probe; does narrower slice improve generalization?) | uncertain |
 
 ## Lever Status
 
@@ -70,7 +70,7 @@ Decision thresholds:
 | FFN act | ✅ GEGLU locked (H48) | GEGLU | — |
 | Normalization | ✅ LayerNorm locked (H72, H81) | LN | — |
 | Mixed precision (bf16) | 🏆 LOCKED (H95) | −30% s/epoch | — |
-| torch.compile | 🔬 H96 active (compile+bf16+T_max=21 compound, Arms C, D) | -27% s/epoch alone | — |
+| torch.compile | 🔬 H118 active (compile+bf16+T_max=21 compound, Arms A,B; H96 CLOSED val=41.05 below baseline) | -27% s/epoch alone | H96 confounded by missing bf16+T_max=21; H118 retests cleanly |
 | Fourier PE | 🔬 H106 active (K=8, K=4) | none | First coordinate-encoding experiment |
 | log(Re) aux head | 🔬 H107 active (λ=0.1, λ=0.01) | none | Multi-task Re regularization |
 | OOD input jitter | 🔬 H112 active (AoA+log(Re)+gap/stagger) | none | — |
