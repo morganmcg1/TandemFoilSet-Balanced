@@ -414,6 +414,52 @@ class Lion(torch.optim.Optimizer):
         return loss
 
 
+class Lookahead(torch.optim.Optimizer):
+    """Lookahead wraps any inner optimizer with slow/fast weight tracking.
+
+    Zhang et al. 2019 (arxiv.org/abs/1907.08610). Every k inner steps:
+        slow += alpha * (fast - slow)
+        fast.copy_(slow)
+    """
+
+    def __init__(self, base_optimizer, k=5, alpha=0.5):
+        self.base_optimizer = base_optimizer
+        self.k = k
+        self.alpha = alpha
+        self.step_count = 0
+        self.slow_weights = [
+            [p.data.clone().detach() for p in g["params"]]
+            for g in self.base_optimizer.param_groups
+        ]
+
+    @property
+    def param_groups(self):
+        return self.base_optimizer.param_groups
+
+    @property
+    def state(self):
+        return self.base_optimizer.state
+
+    @property
+    def defaults(self):
+        return self.base_optimizer.defaults
+
+    def zero_grad(self, set_to_none=False):
+        self.base_optimizer.zero_grad(set_to_none=set_to_none)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = self.base_optimizer.step(closure)
+        self.step_count += 1
+        if self.step_count % self.k == 0:
+            for gi, group in enumerate(self.base_optimizer.param_groups):
+                for pi, p in enumerate(group["params"]):
+                    slow = self.slow_weights[gi][pi]
+                    slow.add_(p.data - slow, alpha=self.alpha)  # phi += alpha(theta - phi)
+                    p.data.copy_(slow)                           # theta = phi
+        return loss
+
+
 class EMA:
     """Exponential moving average of model parameters for evaluation.
 
@@ -464,6 +510,9 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    use_lookahead: bool = False
+    lookahead_k: int = 5
+    lookahead_alpha: float = 0.5
 
 
 cfg = sp.parse(Config)
@@ -514,6 +563,9 @@ if cfg.compile_mode:
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = Lion(model.parameters(), lr=cfg.lr, betas=(0.9, 0.99), weight_decay=cfg.weight_decay)
+if cfg.use_lookahead:
+    optimizer = Lookahead(optimizer, k=cfg.lookahead_k, alpha=cfg.lookahead_alpha)
+    print(f"[Lookahead] k={cfg.lookahead_k}, alpha={cfg.lookahead_alpha}")
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.cosine_t_max_epochs)
 ema = EMA(model, decay=cfg.ema_decay)
 
@@ -648,6 +700,17 @@ for epoch in range(MAX_EPOCHS):
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+if cfg.use_lookahead:
+    lh_total_steps = optimizer.step_count
+    lh_sync_events = lh_total_steps // optimizer.k
+    print(f"[Lookahead] total_steps={lh_total_steps}, sync_events={lh_sync_events}")
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "lookahead_summary",
+        "lookahead_k": optimizer.k,
+        "lookahead_alpha": optimizer.alpha,
+        "total_steps": lh_total_steps,
+        "sync_events": lh_sync_events,
+    })
 
 # --- Test evaluation + local summary ---
 if best_metrics:
