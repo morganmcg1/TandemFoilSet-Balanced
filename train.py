@@ -150,9 +150,30 @@ class GEGLUBlock(nn.Module):
         return self.w2(F.gelu(gate) * val)
 
 
+class DropPath(nn.Module):
+    """Per-sample stochastic depth. At training, with probability `drop_prob`,
+    the input tensor is zeroed (residual branch contributes nothing). At eval,
+    identity. Kept inputs are scaled by 1/(1-drop_prob) so expected magnitude
+    is unchanged.
+    """
+    def __init__(self, drop_prob: float = 0.0):
+        super().__init__()
+        self.drop_prob = drop_prob
+
+    def forward(self, x):
+        if self.drop_prob == 0.0 or not self.training:
+            return x
+        keep_prob = 1.0 - self.drop_prob
+        shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+        random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
+        random_tensor.floor_()
+        return x.div(keep_prob) * random_tensor
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 drop_path_rate: float = 0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -163,6 +184,7 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         # GEGLU FFN: intermediate dim scaled by mlp_ratio
         self.mlp = GEGLUBlock(hidden_dim, hidden_dim, hidden_dim=int(hidden_dim * mlp_ratio))
+        self.drop_path = DropPath(drop_prob=drop_path_rate)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -171,8 +193,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = self.drop_path(self.attn(self.ln_1(fx))) + fx
+        fx = self.drop_path(self.mlp(self.ln_2(fx))) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -183,7 +205,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 drop_path_rate: float = 0.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -204,6 +227,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                drop_path_rate=drop_path_rate,
             )
             for i in range(n_layers)
         ])
@@ -399,6 +423,7 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     ema_decay: float = 0.997  # EMA decay for shadow model evaluated at val/test
     sf_warmup_steps: int = 200  # Schedule-Free linear LR warmup
+    drop_path_rate: float = 0.0  # Stochastic depth rate (per-block residual drop probability)
 
 
 cfg = sp.parse(Config)
@@ -437,6 +462,7 @@ model_config = dict(
     slice_num=8,
     mlp_ratio=2,
     dropout=0.1,
+    drop_path_rate=cfg.drop_path_rate,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
