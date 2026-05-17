@@ -5,6 +5,44 @@ Primary metric: `val_avg/mae_surf_p` (lower is better)
 
 ---
 
+## 2026-05-17 11:00 — PR #4402: Compound k=6 + β2=0.995 + α=0.7 ← NEW PROGRAMME ALL-TIME BEST
+
+- **Student:** willowpai2i48h1-askeladd
+- **Branch:** `willowpai2i48h1-askeladd/k6-b2-995-a07-compound`
+- **W&B run:** `ejacndhj`
+- **Epochs:** 17/17 (best at epoch 17, cosine LR→0)
+- **Config:** Lookahead(k=**6**, α=0.7) wrapping Lion(lr=cfg.lr/3, betas=(0.9, **0.995**), wd=1e-4) + GeGLU FFN + T_max=17, seed=0
+
+### Validation metrics (best checkpoint, epoch 17)
+
+| Metric | Value | Δ vs prior best (#4373 k=5, β2=0.995) |
+|--------|-------|--------------------------------------|
+| **val_avg/mae_surf_p** | **45.7284** ← NEW ALL-TIME BEST | **−1.1099** |
+
+### Test metrics (best checkpoint, all 4 splits)
+
+| Split | mae_surf_p | Δ vs #4373 |
+|-------|-----------|------------|
+| test_single_in_dist | 43.0063 | −1.3326 |
+| test_geom_camber_rc | 54.2173 | −0.9374 |
+| test_geom_camber_cruise | 41.5453 | −0.4571 |
+| test_re_rand | 39.2628 | −0.5195 |
+| **test_avg/mae_surf_p** | **44.5079** | **−0.8117** |
+
+- **Δ vs prior best (#4373 val=46.8383 / test=45.3196):** val −1.110, test −0.812
+- **Peak VRAM:** 101 GB (≈98.5% on this node) | **Wall time:** 31.0 min
+- **Reproduce:** `cd "target/" && python train.py --agent willowpai2i48h1-askeladd --wandb_name "willowpai2i48h1-askeladd/lookahead_lion_k6_b2_995_a07_seed0" --wandb_group lookahead_lion_k6_b2_995_compound --use_lion --use_geglu --seed 0 --lookahead_alpha 0.7 --lookahead_k 6 --lion_b2 0.995`
+
+### Key finding: SUPER-ADDITIVE compound
+
+Additive prediction: 46.8383 + (47.1361 − 47.5894) = **46.39**. Actual: **45.73**. Super-additive by **0.66 val**.
+
+Mechanism: β2=0.995's m-buffer (half-life ≈138 steps) plays constructively with k=6's longer Lookahead sync (7 inner steps per outer). Inner trajectory settles around a coherent direction before outer-step averaging. β2=0.99 was re-noising the trajectory between syncs.
+
+Win threshold for next round: **val < 45.7284**
+
+---
+
 ## 2026-05-17 08:00 — PR #4373: Lookahead-Lion α=0.7 + Lion β2=0.995 ← NEW PROGRAMME ALL-TIME BEST
 
 - **Student:** willowpai2i48h1-fern
