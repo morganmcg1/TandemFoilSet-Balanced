@@ -462,6 +462,17 @@ optimizer = schedulefree.AdamWScheduleFree(
 )
 print(f"Optimizer: schedulefree.AdamWScheduleFree warmup_steps={cfg.sf_warmup_steps}")
 
+# dynamic=True is required: per-batch max_n varies (pad_collate), so static-shape
+# compile would recompile every batch. Compile model (not ema_model) — training loop
+# steps through model; ema_model.update_parameters reads model.parameters() and is
+# transparent to the compile wrapper. SF state lives on the optimizer object, not
+# the model, so SF + compile compose cleanly.
+try:
+    model = torch.compile(model, dynamic=True, mode="default")
+    print("torch.compile: applied (dynamic=True, mode=default)")
+except Exception as e:
+    print(f"torch.compile: FAILED, falling back to eager — {e}")
+
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
 model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{experiment_stamp}"
@@ -571,7 +582,11 @@ print(f"\nTraining done in {total_time:.1f} min")
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
 
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+    # torch.compile wraps the module so its state_dict has `_orig_mod.` prefixes.
+    # Load into the underlying module (shared params) to stay key-compatible with
+    # the EMA checkpoint saved above, regardless of compile success/fallback.
+    load_target = getattr(model, "_orig_mod", model)
+    load_target.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
     optimizer.eval()
 
