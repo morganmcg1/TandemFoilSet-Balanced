@@ -2113,3 +2113,40 @@ Old stack: lr=3e-4 val=38.51 (+6.6%), lr=7.5e-4 val=36.54 (+1.1% vs 36.13 old ba
 | #4444 | fern | surf_weight {5, 7} downward on grad-clip stack | loss |
 | #4445 | nezuko | grad_clip rate {0.5, 2.0} — explore max_norm axis | optim |
 | #4446 | askeladd | EMA decay {0.995, 0.999} retest on grad-clip stack | optim |
+
+---
+
+# R29 — 2026-05-17 07:40 UTC
+
+## Round summary
+
+Alphonse #4281 returned with terminal SENPAI-RESULT from R28-era 2-arm retest:
+- **Arm A** (β=0.1 + mlp_ratio=2, NO grad_clip): val=35.73, test=30.48 — vs no-clip baseline 36.13: −0.40 ✓ (small improvement)
+- **Arm B** (β=0.05 + mlp_ratio=2, NO grad_clip): val=34.60, test=29.52 — vs no-clip baseline 36.13: **−1.53 ✓** (strong improvement, matches old-old stack mechanism almost exactly: previously −1.45 on 37.31 → 35.86)
+
+Per-split val (Arm B vs mlp_ratio=2 baseline):
+- single_in_dist: 35.34 (−1.33), camber_rc: 47.64 (−0.51), **camber_cruise: 18.34 (−3.03 ← biggest beneficiary)**, re_rand: 37.07 (−1.27)
+
+**Critical baseline shift**: PR #4398's grad_clip merged while alphonse was running (advisor branch tip is now val=33.68/test=29.65). Alphonse's β=0.05 result (val=34.60, test=29.52) is:
+- vs grad-clip val=33.68: **+0.92 (1.5σ above)** — within noise, not a clear win on val
+- vs grad-clip test=29.65: **−0.13 (basically tied)** — within noise
+
+**Cannot merge as-is** — the runs were on the no-clip stack, current baseline is grad-clip. Mechanically β (loss shape) and grad_clip (optimizer stability) are orthogonal axes. Expected combined effect if fully orthogonal: 33.68 − 1.53 = **32.15 (clear 2σ win)**.
+
+## Decisions
+
+| PR | Student | Outcome | Reason |
+|----|---------|---------|--------|
+| #4281 | alphonse | SEND BACK (single-arm confirmation) | β=0.05 + grad_clip on rebased advisor branch. Default max_grad_norm=1.0 already active. Expected val ≈ 32.15 if orthogonal; close decisively whichever way. |
+
+## R29 New Assignments
+
+None — 7 students still WIP on R28 batch, alphonse re-assigned to #4281 single-arm.
+
+## Key R29 insights
+
+1. **β=0.05 orthogonality with mlp_ratio=2 confirmed**: −1.45pt on old-old (β=0.25→0.1 path) vs −1.53pt on mlp_ratio=2 (β=0.25→0.05 path). Loss-shape gain transfers cleanly through architecture changes.
+2. **L1-regime axis not yet saturated on no-clip stack**: each halving of β yielded roughly −1.1 to −1.45 pt with no flattening at terminal epoch. β=0.03/0.02 may extract additional gain if β=0.05 + grad_clip confirms.
+3. **camber_cruise is the dominant beneficiary of sharper Huber** (−3.03pt). This split has the smallest residual magnitudes — exactly where extending the linear regime decouples gradient signal from L2 shrinkage.
+4. **camber_rc reverse-engineered**: pure outlier-sensitivity worry was wrong. β=0.1 *slightly hurt* camber_rc (+0.58); β=0.05 *recovered* it (−0.51). The L1-regime gradient signal is more informative than the L2 quadratic for medium-large residuals at this scale.
+5. **Pure L1 (MAE) loss is a clean follow-up**: with two consistent data points along the β-axis showing roughly linear gain, the β→0 limit (MAE) is a single screening run away. Reserve for R30 if β=0.05 + grad_clip confirms.

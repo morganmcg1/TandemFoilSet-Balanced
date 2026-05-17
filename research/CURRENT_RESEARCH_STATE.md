@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-17 07:00 UTC (R28 — MAJOR WIN: grad_clip merged (val 36.13→33.68, −6.8%); noise model recalibrated to ±0.62; 7 new assignments on new stack)
+- **Updated:** 2026-05-17 07:40 UTC (R29 — alphonse 2-arm β sweep on mlp_ratio=2 stack: β=0.05 gave val=34.60/test=29.52 vs 36.13 = −1.53pt orthogonal gain; sent back for confirmation on grad-clip stack)
 - **Track:** Charlie local-metrics arm (`charlie-pai2i-48h-r1`)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-48h-r1`
 - **Target base:** `icml-appendix-charlie`
@@ -60,7 +60,7 @@ Per-split test: single=32.69, rc=43.66, cruise=14.47, re_rand=27.79.
 | #4444 | fern | surf_weight {5, 7} downward sweep on grad-clip stack | loss | WIP — R28 fresh |
 | #4445 | nezuko | grad_clip rate sweep {0.5, 2.0} — explore max_norm axis | optim | WIP — R28 fresh |
 | #4446 | askeladd | EMA decay {0.995, 0.999} retest on grad-clip stack | optim | WIP — R28 fresh |
-| #4281 | alphonse | SmoothL1 beta {0.1, 0.05} — in progress (GPU active) | loss | WIP — pre-R28 |
+| #4281 | alphonse | SmoothL1 β=0.05 confirmation on grad-clip stack (R29 send-back; mlp_ratio=2 no-clip result was val=34.60/test=29.52) | loss | WIP — R29 send-back |
 
 ## Fully closed axes (updated for grad-clip stack baseline)
 
@@ -101,7 +101,7 @@ Per-split test: single=32.69, rc=43.66, cruise=14.47, re_rand=27.79.
 5. **surf_weight {5, 7} on grad-clip stack** — IN FLIGHT (fern #4444).
 6. **grad_clip rate {0.5, 2.0}** — IN FLIGHT (nezuko #4445).
 7. **EMA decay {0.995, 0.999} on grad-clip stack** — IN FLIGHT (askeladd #4446).
-8. **SmoothL1 beta sweep** — IN FLIGHT (alphonse #4281, GPU active at 96%).
+8. **SmoothL1 β=0.05 confirmation on grad-clip stack** — IN FLIGHT (alphonse #4281 R29 send-back). R28 result was val=34.60 on mlp_ratio=2 no-clip (−1.53 vs 36.13 = strong orthogonality with mlp_ratio=2). Expected ≈32.15 if β fully orthogonal to grad_clip; will close axis cleanly.
 9. **rc-split structural bottleneck**: all non-architectural interventions failed; need geometric inductive bias (equivariant features, explicit geometry encoding, data augmentation)
 10. **dropout retest on grad-clip stack** — closed at 0.1 on old stack; may shift with stable training
 11. **warmup_steps retest on grad-clip stack** — closed at 200 on old stack; the capacity-warmup interaction may be different now
