@@ -568,6 +568,47 @@ class Lion(torch.optim.Optimizer):
 # Training
 # ---------------------------------------------------------------------------
 
+
+def cond_mixup_batch(
+    x: torch.Tensor,
+    y: torch.Tensor,
+    alpha: float,
+    p_mix: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Condition-only Mixup (H135). Mix dims 13:24 of x (Re, AoA, NACA, gap,
+    stagger) and y between sample i and a random donor j. Geometry dims
+    (0:12) and is_surface flag (12) stay sample-local — no mesh mixing.
+
+    Args:
+        x: (B, N, 24) padded feature tensor
+        y: (B, N, 3)  padded target tensor
+        alpha: Beta(α,α) concentration. 0 disables.
+        p_mix: per-sample probability of being mixed.
+
+    Returns:
+        x_mix, y_mix — clones with mixing applied to a subset of samples.
+    """
+    B = x.size(0)
+    if alpha <= 0.0 or B < 2:
+        return x, y
+
+    lam = float(torch.distributions.Beta(alpha, alpha).sample().item())
+    mix_mask = torch.rand(B, device=x.device) < p_mix
+    if not mix_mask.any():
+        return x, y
+
+    perm = torch.randperm(B, device=x.device)
+    x_mix = x.clone()
+    y_mix = y.clone()
+
+    x_mix[mix_mask, :, 13:24] = (
+        lam * x[mix_mask, :, 13:24]
+        + (1.0 - lam) * x[perm[mix_mask], :, 13:24]
+    )
+    y_mix[mix_mask] = lam * y[mix_mask] + (1.0 - lam) * y[perm[mix_mask]]
+    return x_mix, y_mix
+
+
 DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 
@@ -601,6 +642,8 @@ class Config:
     T_max: int = 15  # CosineAnnealingLR period; default preserves prior behavior
     fourier_pe: bool = False   # Tancik Fourier PE on (x, z) coords (H106)
     fourier_pe_freqs: int = 8  # Number of log-spaced frequencies; adds 4*K features
+    cond_mixup_alpha: float = 0.0   # Beta(α,α) for condition-only Mixup; 0 disables (H135)
+    cond_mixup_prob: float = 0.3    # Fraction of batch samples to mix per step (H135)
 
 
 cfg = sp.parse(Config)
@@ -709,6 +752,30 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
+        if cfg.cond_mixup_alpha > 0.0:
+            x_orig = x
+            y_orig = y
+            x, y = cond_mixup_batch(x, y, cfg.cond_mixup_alpha, cfg.cond_mixup_prob)
+            if epoch == 0 and n_batches == 0:
+                # H135 sanity: geometry/surface untouched, conditioning changed,
+                # no NaN, surface flag still binary.
+                geom_diff = (x[..., :13] - x_orig[..., :13]).abs().max().item()
+                cond_diff = (x[..., 13:24] - x_orig[..., 13:24]).abs().max().item()
+                surf_unique = torch.unique(x[..., 12]).tolist()
+                y_finite = torch.isfinite(y).all().item()
+                print(
+                    "[cond_mixup verify] "
+                    f"geom_max_diff={geom_diff:.2e} (expect 0)  "
+                    f"cond_max_diff={cond_diff:.4f} (expect > 0 when mixed)  "
+                    f"surf_unique={surf_unique} (expect [0.0, 1.0])  "
+                    f"y_finite={y_finite}"
+                )
+                assert geom_diff == 0.0, f"cond_mixup leaked into geometry: {geom_diff}"
+                assert y_finite, "cond_mixup produced non-finite targets"
+                assert all(v in (0.0, 1.0) for v in surf_unique), (
+                    f"is_surface flag corrupted: {surf_unique}"
+                )
+
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=cfg.use_bf16):
@@ -793,6 +860,8 @@ for epoch in range(MAX_EPOCHS):
         "T_max": cfg.T_max,
         "fourier_pe": cfg.fourier_pe,
         "fourier_pe_freqs": fourier_pe_freqs,
+        "cond_mixup_alpha": cfg.cond_mixup_alpha,
+        "cond_mixup_prob": cfg.cond_mixup_prob,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "gate_stats": gate_stats,
