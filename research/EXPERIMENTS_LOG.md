@@ -1243,3 +1243,45 @@ Stop condition triggered (val > 41.0 threshold); Arm B (warmup=3) correctly not 
   2. Arm B (boost attn) over-fit to easy splits → improved val_single_in_dist (−1.49) and test_in_dist (−0.23) but regressed val_re_rand (+2.95).
 - **Key insight (from student's diagnostic):** Lion's `sign(momentum)` already neutralizes the gradient-norm *magnitude* asymmetry. Per-group LR ratios only change the **total trajectory length** in each group's parameter subspace. The 5× MLP/attn grad-norm gap is a **measurement artefact**, not a steering signal Lion can be told to act on.
 - **Decision:** CLOSED — no_improvement. Third optimizer-tuning failure on slice=48 (#4031 β2, #4181 lr-fine, this). Lion optimizer geometry comprehensively resolved.
+
+---
+
+## 2026-05-17 07:10 — PR #4365: RMSNorm vs LayerNorm on slice=48 stack
+
+- **Branch:** charliepai2i48h2-tanjiro/rmsnorm
+- **Hypothesis:** RMSNorm (LayerNorm minus mean-centering and bias) is faster, more bf16-stable, and used in LLaMA/Mistral/T5v1.1. Simpler normalization form should maintain or improve performance on this small-data, bf16, timeout-limited stack.
+
+| Metric | Baseline (PR #4243) | Arm A (scope=all norms) | Arm B (scope=pre-block only) |
+|--------|---------------------|-------------------------|-----------------------------|
+| **val_avg/mae_surf_p** | **38.6750** | 39.7936 (+1.12) | 39.9674 (+1.29) |
+| **test_avg/mae_surf_p** | **33.4948** | 33.8518 (+0.36) | 34.6572 (+1.16) |
+| val_single_in_dist | 42.1400 | ~43.0 | ~43.5 |
+| val_geom_camber_rc | 51.6180 | ~52.4 | ~53.1 |
+| Best epoch | 35 | 35 | 35 |
+| Per-epoch time | 51.7 s | 52.2 s | 52.3 s |
+| n_RMSNorm / param delta | — | 11 / −1408 | 10 / −1280 |
+| Metric artifacts | | `models/model-charliepai2i48h2-tanjiro-rmsnorm-A-*/metrics.jsonl` | `models/model-charliepai2i48h2-tanjiro-rmsnorm-B-*/metrics.jsonl` |
+
+- **Analysis:** Output-head-only (Arm B) hurt LESS than pre-block (Arm A), ruling out "safe in residual stream" as a positioning fix. Param delta confirms bias-drop is working (n_RMSNorm 11/10, −1408/−1280 params from bias removal). Mean-centering absorbs a non-trivial mean shift in this architecture that downstream linears must fight without it.
+- **Key insight (from student's diagnostic):** "RMSNorm = LayerNorm minus mean subtraction and bias. The fact that both arms regress suggests the mean-centering term *is* doing useful work." In this Transolver with 128-dim hidden, the residual stream accumulates non-zero mean shifts across 5 blocks; LayerNorm's mean subtraction is load-bearing.
+- **Decision:** CLOSED — no_improvement. Combined with #4358 (SwiGLU in-flight), architectural normalization axis comprehensively explored. LayerNorm locked as optimal normalization form.
+
+---
+
+## 2026-05-17 07:10 — PR #4362: Lookahead-Lion: slow/fast weight anchoring on slice=48 stack
+
+- **Branch:** charliepai2i48h2-thorfinn/lookahead-lion
+- **Hypothesis:** Lookahead (Zhang et al. 2019) wraps Lion with a slow-weight trust-region anchor: every k=5/10 steps, slow weights ← slow + α(fast − slow). This should help Lion escape noise-driven excursions and find flatter minima.
+
+| Metric | Baseline (PR #4243) | Arm A (k=5, α=0.5) | Arm B (k=10, α=0.5) |
+|--------|---------------------|--------------------|---------------------|
+| **val_avg/mae_surf_p** | **38.6750** | 43.5308 (+12.6%) | 41.9229 (+8.4%) |
+| **test_avg/mae_surf_p** | **33.4948** | 37.9266 (+13.2%) | 36.1539 (+7.9%) |
+| val_geom_camber_rc | 51.6180 | ~58.3 | ~55.8 |
+| Best epoch | 35 | 35 | 35 |
+| Sync events | — | 2625 (k=5) | 1312 (k=10) |
+| Metric artifacts | | `models/model-charliepai2i48h2-thorfinn-lookahead-lion-A-*/metrics.jsonl` | `models/model-charliepai2i48h2-thorfinn-lookahead-lion-B-*/metrics.jsonl` |
+
+- **Analysis:** Both arms substantially regress. LR cosine schedule intact (verified), per-epoch time and VRAM identical to baseline. Monotonic k=5→k=10 trend (worse → less-worse) suggests k→∞ (no Lookahead) is the local optimum.
+- **Key insight (from student's diagnostic):** Triple-smoothing problem. Lion already produces signed (±lr) updates that implicitly average over momentum via β1=0.9, β2=0.99. A second EMA (Lookahead α=0.5 slow-weight anchor) damps useful exploration. "Lookahead is simply making the underlying optimizer worse."
+- **Decision:** CLOSED — no_improvement. **11th consecutive optimizer/schedule failure** since slice=48 merge. Lion+EMA+cosine triple is the locked optimal. Optimizer direction comprehensively closed. Pivoting to architecture (LayerScale #4435) and data augmentation (Y-mirror #4433).

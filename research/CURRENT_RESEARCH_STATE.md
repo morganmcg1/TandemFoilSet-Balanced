@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-17 06:30Z — round 15 of `icml-appendix-charlie-pai2i-48h-r2`
+- 2026-05-17 07:15Z — round 15 of `icml-appendix-charlie-pai2i-48h-r2`
 - No active research directives from the human research team
 - **New baseline: val=38.6750** (PR #4243 askeladd slice_num=48 merged, −2.91% from 39.83)
 
@@ -51,25 +51,25 @@ cd target && python train.py --agent <student> \
 | #4414 | fern | Surface-only pressure-weight multiplier (1.5× Arm A, 2.0× Arm B) — redirect loss budget to primary metric | WIP — NEW | #4295 closed (per-group-LR no_improvement — Lion sign masks grad-norm); first asymmetric loss-budget experiment, only surface p loss is boosted |
 | #4306 | askeladd | slice_num coarser: 40 (Arm A), 32 (Arm B) — below new baseline slice=48 | WIP (stale — was rate-limited; GPU active again) | #4243 MERGED (slice=48 strong win); continue coarser direction; trend clear |
 | #4377 | nezuko | Point subsampling augmentation: keep_rate=0.8 (Arm A), 0.6 (Arm B) on non-surface points | WIP | #4278 closed (attn-dropout regresses); pivot to DATA augmentation; targets val_geom_camber_rc (51.62) coverage |
-| #4362 | thorfinn | Lookahead-Lion: slow/fast weight anchoring (k=5 Arm A, k=10 Arm B) on slice=48 | WIP | #4312 closed (SWA fails); Lookahead preserves cosine schedule, adds trust-region anchoring |
-| #4365 | tanjiro | RMSNorm vs LayerNorm: modern normalization on slice=48 stack | WIP | #4273 closed (n_head mechanisms don't compound with slice=48); norm form untested |
+| #4433 | tanjiro | Y-mirror geometric augmentation: physics-exact data doubling, p=0.5 (A) / p=1.0 (B) | WIP — NEW | #4365 closed (RMSNorm regresses, mean-centering load-bearing); data coverage is bottleneck |
+| #4435 | thorfinn | LayerScale (CaiT): per-channel learnable residual gating γ_init=1e-4 (A) / 1e-2 (B) | WIP — NEW | #4362 closed (Lookahead triple-smoothing failure); architecture axis — how much each block contributes |
 | #4403 | edward | Fourier feature encoding of mesh pos coords: NeRF octaves K=8 vs RFF K=16 σ=10 | WIP — NEW | #4253 closed (SGDR 3rd schedule-disruption failure); INPUT REPRESENTATION axis first test; spectral bias hypothesis |
 | #4405 | frieren | DropPath stochastic depth: p_max=0.10 (Arm A), 0.20 (Arm B) — block-level vs element-wise | WIP — NEW | #4327 closed (huber regresses); STRUCTURAL REGULARIZATION axis — drops entire blocks not activations |
 
 ## Key open questions (round 15 — new baseline 38.675, slice_num=48 — ACTIVE ESCALATION)
 
-**Escalation status:** 10 consecutive no_improvement results since slice=48 merged (now also +#4295 per-group-lr; +#4327 huber-loss, +#4253 SGDR; plus #4278 attn-dropout, #4308 ffn-dropout, #4312 SWA, #4273 n_head v2, + earlier #4235 mlp-ratio, #4230 weight-decay, #4287 batch-size). Optimizer-tuning, loss-function reshaping, and LR-schedule disruption directions are now fully closed. Lion's sign-update masks gradient-norm asymmetry: the MLP/attn grad-norm 5× ratio (#4154) is a **measurement artefact**, not a steering signal. Escalating to: (a) architectural changes (SwiGLU, RMSNorm, Lookahead in-flight); (b) **data augmentation** (point subsampling); (c) **input representation** (Fourier features); (d) **structural regularization** (DropPath); (e) **loss-budget redirection** (surf-p-weight-mult — primary metric is mae_surf_p, allocate gradient toward it).
+**Escalation status:** 12 consecutive no_improvement results since slice=48 merged (+#4365 RMSNorm +#4362 Lookahead, +#4295 per-group-lr, +#4327 huber-loss, +#4253 SGDR, +#4278 attn-dropout, +#4308 ffn-dropout, +#4312 SWA, +#4273 n_head v2, +#4235 mlp-ratio, +#4230 weight-decay, +#4287 batch-size). **Optimizer-tuning, loss reshaping, LR-schedule disruption, normalization form, and element-level regularization are all fully closed.** Lion's sign-update masks gradient-norm asymmetry; LayerNorm mean-centering is load-bearing; cosine T_max=40 is the locked schedule. Active pivot to: (a) **data augmentation** (Y-mirror #4433 physics-exact, point-subsample #4377 in-flight); (b) **input representation** (Fourier features #4403 in-flight); (c) **structural regularization** (DropPath #4405 in-flight); (d) **loss-budget redirection** (surf-p-weight-mult #4414 in-flight); (e) **architecture** (SwiGLU #4358 in-flight, LayerScale #4435 new).
 
 **Key reading from 3 regularization failures (FFN dropout, attention dropout, SWA):** model is NOT over-fitting in the classic sense at 35 epochs. The OOD gap on val_geom_camber_rc (51.62) is driven by **training data coverage**, not by parameter over-fitting. This pivots us toward data augmentation as the right axis.
 
 1. **Does SwiGLU gating improve over GELU in this timeout-limited PDE regime?** (#4358 alphonse) — modern transformer best practice, first clean test of activation function; Arm A param-matched (hidden×2/3), Arm B full-hidden gating.
-2. **Does Lookahead-wrapped Lion find better minima than plain Lion + EMA?** (#4362 thorfinn) — trust-region anchoring at step level (k=5 or k=10); preserves cosine schedule unlike SWA; hypothesis: Lion sign-noise + Lookahead slow weights compound.
-3. **Does RMSNorm outperform LayerNorm in this bf16, small-data regime?** (#4365 tanjiro) — simpler norm without mean centering; bf16-safer; used in LLaMA, Mistral, T5v1.1; normalization form completely untested axis.
-4. **Do even coarser slices (32, 40) continue the slice_num winning trend?** (#4306 askeladd) — slice=48 strong win vs slice=64/96; monotone coarser trend may continue.
-5. **Does up-weighting surface pressure loss (specifically, not uniformly) improve mae_surf_p?** (#4414 fern) — surf_p_weight_mult=1.5 (A) or 2.0 (B); effective surface-p loss weight 3.0 or 4.0 vs uniform 2.0; redirects gradient budget to the primary metric.
-6. **Does point subsampling augmentation improve OOD generalization?** (#4377 nezuko) — drop 20% (A) or 40% (B) of non-surface points per training batch; tests data-coverage hypothesis directly; surface points always preserved.
-7. **Does Fourier feature encoding unlock high-frequency spatial signal for surface pressure?** (#4403 edward) — NeRF octaves K=8 vs RFF K=16 σ=10; removes spectral bias of raw coord inputs; may disproportionately help val_geom_camber_rc OOD split.
-8. **Does DropPath (block-level dropout) succeed where element-wise dropout failed?** (#4405 frieren) — drops entire residual branches at p=0.10/0.20; stronger generalization pressure with less per-step noise; linear schedule 0→p_max over 5 layers.
+2. **Do even coarser slices (32, 40) continue the slice_num winning trend?** (#4306 askeladd) — slice=48 strong win vs slice=64/96; monotone coarser trend may continue.
+3. **Does up-weighting surface pressure loss (specifically, not uniformly) improve mae_surf_p?** (#4414 fern) — surf_p_weight_mult=1.5 (A) or 2.0 (B); effective surface-p loss weight 3.0 or 4.0 vs uniform 2.0; redirects gradient budget to the primary metric.
+4. **Does point subsampling augmentation improve OOD generalization?** (#4377 nezuko) — drop 20% (A) or 40% (B) of non-surface points per training batch; tests data-coverage hypothesis directly; surface points always preserved.
+5. **Does Fourier feature encoding unlock high-frequency spatial signal for surface pressure?** (#4403 edward) — NeRF octaves K=8 vs RFF K=16 σ=10; removes spectral bias of raw coord inputs; may disproportionately help val_geom_camber_rc OOD split.
+6. **Does DropPath (block-level dropout) succeed where element-wise dropout failed?** (#4405 frieren) — drops entire residual branches at p=0.10/0.20; stronger generalization pressure with less per-step noise; linear schedule 0→p_max over 5 layers.
+7. **Does Y-mirror data augmentation improve OOD generalization via physics-exact symmetry?** (#4433 tanjiro) — Navier-Stokes y-mirror symmetry doubles effective training data; p=0.5 (A) vs p=1.0 always-mirror (B); targets val_geom_camber_rc bottleneck specifically.
+8. **Does LayerScale (CaiT) enable the model to learn per-channel block contribution?** (#4435 thorfinn) — learnable γ per residual branch; γ_init=1e-4 (A) vs 1e-2 (B); allows near-identity start and automatic block gating; 1280 new params.
 
 ## 12-mechanism stack: full pipeline
 
@@ -130,6 +130,8 @@ cd target && python train.py --agent <student> \
 | #4230 (thorfinn weight-decay-sweep) | no_improvement: A (wd=1e-4) val=41.99 (+5.4%, stop), B (wd=5e-4) val=43.48 (+9.2%, stop); both hit stop cond (>41.0); monotone ordering confirms wd=3e-4 at optimum → #4312 swa |
 | #4287 (frieren batch-size-sweep) | failure: A (batch=8) val=45.26 (+13.6%, fail >45), B (batch=12) val=63.51 (+59.4%, fail); sub-linear time scaling, fewer gradient updates dominate, in-dist split suffered most (undertraining); batch axis closed at batch=4 with LR locked → #4327 huber-loss |
 | #4295 (fern per-group-lr) | no_improvement: Arm A (lr_other×0.5) val=40.07, Arm B (lr_attn×2.0) val=39.50; Lion sign-update masks grad-norm asymmetry; per-group LR only changes trajectory length not step size → #4414 surf-p-weight-mult |
+| #4365 (tanjiro rmsnorm) | no_improvement: Arm A (scope=all) val=39.79 (+1.12), Arm B (scope=pre_only) val=39.97 (+1.29); mean-centering load-bearing in this architecture; post-norm slightly better than pre-only; LayerNorm locked → #4433 y-mirror |
+| #4362 (thorfinn lookahead-lion) | no_improvement: Arm A (k=5) val=43.53 (+12.6%), Arm B (k=10) val=41.92 (+8.4%); triple-smoothing: Lion sign-update + EMA + Lookahead redundant; k=5→k=10 monotone trend confirms k→∞ optimal → #4435 layerscale |
 
 ## Potential next research directions
 
@@ -147,8 +149,8 @@ cd target && python train.py --agent <student> \
 - **n_head sweep** — CLOSED as #4273 v2; n_head=4, head_dim=32, slice=48 is local optimum (strong n_head×slice interaction found); axis closed → #4365 RMSNorm
 - **Slice_num sweep** — MERGED as #4243 (slice=48 STRONG WIN)
 - **SwiGLU gating** — IN PROGRESS as #4358 (alphonse); Arm A param-matched, Arm B full hidden; first clean implementation
-- **Lookahead-Lion** — IN PROGRESS as #4362 (thorfinn); k=5 or k=10; trust-region anchoring
-- **RMSNorm** — IN PROGRESS as #4365 (tanjiro); Arm A all norms, Arm B pre-block only
+- **Lookahead-Lion** — CLOSED as #4362 (thorfinn); triple-smoothing (Lion+EMA+Lookahead); k=5→k=10 monotone trend confirms k→∞ optimal → #4435 LayerScale
+- **RMSNorm** — CLOSED as #4365 (tanjiro); mean-centering load-bearing; both arms regress → #4433 Y-mirror
 - **Huber loss** — CLOSED as #4327 (frieren); asinh already handles outliers; loss-reshaping slows convergence under timeout → #4405 DropPath
 - **SGDR warm restarts** — CLOSED as #4253 (edward); restart spike, 3rd schedule-disruption failure → #4403 Fourier features
 - **Slice_num coarser** — IN PROGRESS as #4306 (askeladd); slice=40/32
@@ -158,13 +160,13 @@ cd target && python train.py --agent <student> \
 - **Point subsampling augmentation** — IN PROGRESS as #4377 (nezuko); keep_rate=0.8 (A), 0.6 (B); first data-augmentation experiment in the program
 - **Per-group LR** — CLOSED as #4295 (fern); Arm A (lr_other×0.5) val=40.07, Arm B (lr_attn×2.0) val=39.50; Lion sign-update masks grad-norm asymmetry; per-group LR only changes trajectory length → #4414 surf-p-weight-mult
 - **Surface-only pressure-weight multiplier** — IN PROGRESS as #4414 (fern); surf_p_weight_mult=1.5/2.0 — asymmetric loss budget targeting primary metric
+- **Y-mirror geometric augmentation** — IN PROGRESS as #4433 (tanjiro); physics-exact NS symmetry; p=0.5 (A), p=1.0 (B); targets camber_rc OOD bottleneck
+- **LayerScale (CaiT)** — IN PROGRESS as #4435 (thorfinn); per-channel γ learnable gating; γ_init=1e-4 (A), 1e-2 (B)
 
 **Not yet tried (candidates for next round):**
-- Y-mirror geometric augmentation — full physics-aware mirror of geometry + targets; targets camber_rc bottleneck (more complex than point-subsample but more effective)
-- Mixup of geometries — interpolate two training samples
-- SAM (Sharpness-Aware Minimization) — if Lookahead fails, SAM is next optimizer meta-algorithm
-- DropPath (stochastic depth) — different mechanism from FFN/attn dropout; drops entire blocks
-- GeGLU (GELU gate variant of SwiGLU) — if SwiGLU fails
-- Pre-norm vs post-norm positioning (current model norm ordering unchecked)
-- Conditional normalization / FiLM on Re_inf, AoA — physical conditioning axis untouched
-- Per-channel surf loss (separate surf_uxuy_weight from surf_p_weight) — split current uniform surf_weight=25
+- GeGLU (GELU gate variant of SwiGLU) — if SwiGLU #4358 shows signal, test sibling variant
+- Pre-norm vs post-norm positioning (current model uses pre-norm; post-norm may require warmup)
+- SAM (Sharpness-Aware Minimization) — optimizer meta-algorithm; 2× compute cost; only if clean failing
+- Mixup of geometries — interpolate two training samples in loss space (input-level too complex)
+- Conditional normalization / FiLM on Re_inf, AoA — #3115 failed on old baseline (+6.3%); worth retesting on current 13-mech stack?
+- Per-channel surf loss (separate surf_uxuy_weight from surf_p_weight) — split uniform surf_weight=25
