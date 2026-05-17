@@ -1564,3 +1564,23 @@ Note: both #4186 and #4155 were trained on the **old pre-SF baseline** since the
 
 - **Metrics path:** `models/model-charliepai2i48h1-tanjiro-geglu-on-in-project-fx-20260516-234712/metrics.jsonl`
 - **Decision:** CLOSED. Borderline regression; OOD geometry/Re splits regressed while in-dist improved. Gate learned distribution-specific filter, not robust feature selector. +11% sec/epoch cost 2 epochs of headroom.
+
+## 2026-05-17 01:30 — PR #4254 — n_layers 5→3 on compile stack (CLOSED — capacity floor confirmed)
+
+- **Branch:** `charliepai2i48h1-nezuko/n-layers-3-on-compile-stack`
+- **Hypothesis:** Remove 2 Transolver blocks; with compile saving 41% wall-clock, the +50% epoch budget (50 cap vs 42) compensates for lost capacity.
+- **Results:**
+
+| Metric | Value | Baseline (37.31) | Δ |
+|--------|-------|------------------|---|
+| val_avg/mae_surf_p | **39.95** | 37.31 | **+7.1%** |
+| test_avg/mae_surf_p | 34.78 | 32.81 | +6.0% |
+| sec/epoch | 27.6 | 42.4 | -34.9% |
+| epochs reached | 50 (cap) | 42 | +8 |
+| peak VRAM | 12.35 GB | 18.88 GB | -34.6% |
+| n_params | 464,935 | 736,831 | -36.9% |
+
+- **Metrics path:** `models/model-charliepai2i48h1-nezuko-n-layers-3-on-compile-stack-20260517-005609/metrics.jsonl`
+- **Decision:** CLOSED per the PR decision rule (val > 39.0 threshold).
+- **Key finding:** All 4 val splits regressed uniformly — most striking is val_single_in_dist +9.7% (the in-distribution split, easiest case). This rules out an OOD-specific explanation: three Transolver blocks just cannot fit the surface-pressure structure at n_hidden=128. +8 epochs of compute could not close the gap at 0.12 pt/epoch descent rate (~22 more epochs needed). 
+- **Programme implication:** Depth floor confirmed at n_hidden=128/mlp_ratio=1. n_layers=5 is at or above the depth knee; edward's parallel n_layers=4 result will localize the knee. If n_layers=4 also regresses, depth=5 is the floor at this configuration.
