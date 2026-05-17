@@ -561,6 +561,7 @@ class Config:
     lion_weight_decay: float = 3e-4  # Lion wd (typically 3-10x larger than AdamW; 3x of cfg.weight_decay=1e-4)
     lion_betas: str = "0.9,0.99"  # Lion (beta1, beta2) as comma-separated floats
     seed: int = 0  # RNG seed for model init + data sampler; enables paired-arm reproducibility
+    n_hidden: int = 128  # model trunk hidden dimension (attention + MLP)
 
 
 cfg = sp.parse(Config)
@@ -596,7 +597,7 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=cfg.n_hidden,
     n_layers=5,
     n_head=4,
     slice_num=64,
