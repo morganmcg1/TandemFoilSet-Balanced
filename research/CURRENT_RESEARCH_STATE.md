@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-17 05:15Z — round 15 of `icml-appendix-charlie-pai2i-48h-r2`
+- 2026-05-17 06:10Z — round 15 of `icml-appendix-charlie-pai2i-48h-r2`
 - No active research directives from the human research team
 - **New baseline: val=38.6750** (PR #4243 askeladd slice_num=48 merged, −2.91% from 39.83)
 
@@ -47,29 +47,29 @@ cd target && python train.py --agent <student> \
 
 | PR | Student | Theme | Status | Baseline context |
 |----|---------|-------|--------|-----------------|
-| #4358 | alphonse | SwiGLU activation: gated MLP (SiLU gate) vs GELU on slice=48 stack | WIP — NEW | #4308 closed (ffn-dropout regresses); activation-form untested; Arm A param-matched (hidden×2/3), Arm B full hidden |
-| #4327 | frieren | Huber loss: δ=1.0 (Arm A), δ=0.5 (Arm B) replacing MSE on 13-mech stack | WIP | #4287 closed; batch axis closed; loss formulation untouched axis — Huber caps gradient on large errors |
+| #4358 | alphonse | SwiGLU activation: gated MLP (SiLU gate) vs GELU on slice=48 stack | WIP | #4308 closed (ffn-dropout regresses); activation-form untested; Arm A param-matched (hidden×2/3), Arm B full hidden |
 | #4295 | fern | Per-group LR: lr_attn_mult vs lr_other_mult to rebalance MLP/attn updates | WIP | #4237 closed; depth throughput-bound; MLP/attn 5× grad-norm imbalance (PR #4154) still unaddressed |
-| #4253 | edward | SGDR warm restarts: T_0=17 (Arm A), T_0=12 (Arm B) on 13-mech stack | WIP | #4181 closed (LR axis locked at 1.7e-4); val descending at timeout in every arm |
-| #4306 | askeladd | slice_num coarser: 40 (Arm A), 32 (Arm B) — below new baseline slice=48 | WIP | #4243 MERGED (slice=48 strong win); continue coarser direction; trend clear |
-| #4377 | nezuko | Point subsampling augmentation: keep_rate=0.8 (Arm A), 0.6 (Arm B) on non-surface points | WIP — NEW | #4278 closed (attn-dropout regresses on bottleneck split); 3 regularization failures in a row → pivot to DATA augmentation; targets val_geom_camber_rc (51.62) coverage |
-| #4362 | thorfinn | Lookahead-Lion: slow/fast weight anchoring (k=5 Arm A, k=10 Arm B) on slice=48 | WIP — NEW | #4312 closed (SWA fails — SWALR stops learning); Lookahead preserves cosine schedule, adds trust-region anchoring |
-| #4365 | tanjiro | RMSNorm vs LayerNorm: modern normalization on slice=48 stack | WIP — NEW | #4273 closed (n_head mechanisms don't compound with slice=48); norm form untested |
+| #4306 | askeladd | slice_num coarser: 40 (Arm A), 32 (Arm B) — below new baseline slice=48 | WIP (stale — was rate-limited; GPU active again) | #4243 MERGED (slice=48 strong win); continue coarser direction; trend clear |
+| #4377 | nezuko | Point subsampling augmentation: keep_rate=0.8 (Arm A), 0.6 (Arm B) on non-surface points | WIP | #4278 closed (attn-dropout regresses); pivot to DATA augmentation; targets val_geom_camber_rc (51.62) coverage |
+| #4362 | thorfinn | Lookahead-Lion: slow/fast weight anchoring (k=5 Arm A, k=10 Arm B) on slice=48 | WIP | #4312 closed (SWA fails); Lookahead preserves cosine schedule, adds trust-region anchoring |
+| #4365 | tanjiro | RMSNorm vs LayerNorm: modern normalization on slice=48 stack | WIP | #4273 closed (n_head mechanisms don't compound with slice=48); norm form untested |
+| #4403 | edward | Fourier feature encoding of mesh pos coords: NeRF octaves K=8 vs RFF K=16 σ=10 | WIP — NEW | #4253 closed (SGDR 3rd schedule-disruption failure); INPUT REPRESENTATION axis first test; spectral bias hypothesis |
+| #4405 | frieren | DropPath stochastic depth: p_max=0.10 (Arm A), 0.20 (Arm B) — block-level vs element-wise | WIP — NEW | #4327 closed (huber regresses); STRUCTURAL REGULARIZATION axis — drops entire blocks not activations |
 
 ## Key open questions (round 15 — new baseline 38.675, slice_num=48 — ACTIVE ESCALATION)
 
-**Escalation status:** 7 consecutive no_improvement results since slice=48 merged (#4278 attn-dropout, #4308 ffn-dropout, #4312 SWA, #4273 n_head v2, + earlier #4235 mlp-ratio, #4230 weight-decay, #4287 batch-size). Per plateau protocol, escalating along two tracks: (a) architectural changes (SwiGLU, RMSNorm, Lookahead) and (b) **data augmentation** — point subsampling now testing the data-coverage hypothesis.
+**Escalation status:** 9 consecutive no_improvement results since slice=48 merged (now also +#4327 huber-loss, +#4253 SGDR; plus #4278 attn-dropout, #4308 ffn-dropout, #4312 SWA, #4273 n_head v2, + earlier #4235 mlp-ratio, #4230 weight-decay, #4287 batch-size). Loss-function reshaping and LR-schedule disruption are now fully closed directions. Escalating to: (a) architectural changes (SwiGLU, RMSNorm, Lookahead in-flight); (b) **data augmentation** (point subsampling); (c) **input representation** (Fourier features); (d) **structural regularization** (DropPath — block-level vs element-wise).
 
 **Key reading from 3 regularization failures (FFN dropout, attention dropout, SWA):** model is NOT over-fitting in the classic sense at 35 epochs. The OOD gap on val_geom_camber_rc (51.62) is driven by **training data coverage**, not by parameter over-fitting. This pivots us toward data augmentation as the right axis.
 
 1. **Does SwiGLU gating improve over GELU in this timeout-limited PDE regime?** (#4358 alphonse) — modern transformer best practice, first clean test of activation function; Arm A param-matched (hidden×2/3), Arm B full-hidden gating.
 2. **Does Lookahead-wrapped Lion find better minima than plain Lion + EMA?** (#4362 thorfinn) — trust-region anchoring at step level (k=5 or k=10); preserves cosine schedule unlike SWA; hypothesis: Lion sign-noise + Lookahead slow weights compound.
 3. **Does RMSNorm outperform LayerNorm in this bf16, small-data regime?** (#4365 tanjiro) — simpler norm without mean centering; bf16-safer; used in LLaMA, Mistral, T5v1.1; normalization form completely untested axis.
-4. **Does a mid-training LR reset (SGDR) escape the timeout-bound attractor?** (#4253 edward) — val descends in every arm at ep34; T_0=17 gives a second high-LR phase; T_0=12 gives nearly a full second cycle.
-5. **Do even coarser slices (32, 40) continue the slice_num winning trend?** (#4306 askeladd) — slice=48 strong win vs slice=64/96; monotone coarser trend may continue.
-6. **Does Huber loss outperform MSE on the asinh-compressed pressure + raw uxuy channels?** (#4327 frieren) — small-data regime may have outlier geometries pulling the loss; Huber caps gradient on large errors.
-7. **Does per-group LR rebalancing address the MLP/attn update magnitude imbalance?** (#4295 fern) — Arm A reins in MLP (lr_other×0.5), Arm B boosts attn (lr_attn×2.0); Lion sign-update may mask the imbalance.
-8. **Does point subsampling augmentation improve OOD generalization?** (#4377 nezuko) — drop 20% (A) or 40% (B) of non-surface points per training batch; tests data-coverage hypothesis directly; surface points always preserved.
+4. **Do even coarser slices (32, 40) continue the slice_num winning trend?** (#4306 askeladd) — slice=48 strong win vs slice=64/96; monotone coarser trend may continue.
+5. **Does per-group LR rebalancing address the MLP/attn update magnitude imbalance?** (#4295 fern) — Arm A reins in MLP (lr_other×0.5), Arm B boosts attn (lr_attn×2.0); Lion sign-update may mask the imbalance.
+6. **Does point subsampling augmentation improve OOD generalization?** (#4377 nezuko) — drop 20% (A) or 40% (B) of non-surface points per training batch; tests data-coverage hypothesis directly; surface points always preserved.
+7. **Does Fourier feature encoding unlock high-frequency spatial signal for surface pressure?** (#4403 edward) — NeRF octaves K=8 vs RFF K=16 σ=10; removes spectral bias of raw coord inputs; may disproportionately help val_geom_camber_rc OOD split.
+8. **Does DropPath (block-level dropout) succeed where element-wise dropout failed?** (#4405 frieren) — drops entire residual branches at p=0.10/0.20; stronger generalization pressure with less per-step noise; linear schedule 0→p_max over 5 layers.
 
 ## 12-mechanism stack: full pipeline
 
@@ -148,9 +148,11 @@ cd target && python train.py --agent <student> \
 - **SwiGLU gating** — IN PROGRESS as #4358 (alphonse); Arm A param-matched, Arm B full hidden; first clean implementation
 - **Lookahead-Lion** — IN PROGRESS as #4362 (thorfinn); k=5 or k=10; trust-region anchoring
 - **RMSNorm** — IN PROGRESS as #4365 (tanjiro); Arm A all norms, Arm B pre-block only
-- **Huber loss** — IN PROGRESS as #4327 (frieren)
-- **SGDR warm restarts** — IN PROGRESS as #4253 (edward)
+- **Huber loss** — CLOSED as #4327 (frieren); asinh already handles outliers; loss-reshaping slows convergence under timeout → #4405 DropPath
+- **SGDR warm restarts** — CLOSED as #4253 (edward); restart spike, 3rd schedule-disruption failure → #4403 Fourier features
 - **Slice_num coarser** — IN PROGRESS as #4306 (askeladd); slice=40/32
+- **Fourier feature encoding** — IN PROGRESS as #4403 (edward); NeRF octaves K=8 vs RFF K=16 σ=10; first input-representation experiment
+- **DropPath stochastic depth** — IN PROGRESS as #4405 (frieren); p_max=0.10/0.20; first block-level regularization attempt
 - **Attention dropout** — CLOSED as #4278 (nezuko); both arms regress on bottleneck split; train/val gap GROWS with dropout (signal-removal not co-adaptation); 3rd regularization failure → #4377 point-subsample
 - **Point subsampling augmentation** — IN PROGRESS as #4377 (nezuko); keep_rate=0.8 (A), 0.6 (B); first data-augmentation experiment in the program
 - **Per-group LR** — IN PROGRESS as #4295 (fern)

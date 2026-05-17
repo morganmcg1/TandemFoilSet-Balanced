@@ -1183,3 +1183,40 @@ Stop condition triggered (val > 41.0 threshold); Arm B (warmup=3) correctly not 
   2. **OOD split worsened on both arms** — the very split this hypothesis aimed at (geom_camber_rc) got more error. Attention dropout is NOT helping the OOD bottleneck.
   - Note: results were submitted vs the OLD baseline (val 39.83). Even comparing favorably there, both arms regressed (+1.14%, +1.93%). Against new baseline (38.675), regression is +4.2%, +5.0%.
 - **Decision:** CLOSED — no_improvement. Combined with #4308 (FFN dropout) and #4312 (SWA), three consecutive failures of model-internal regularization. Reading: model is not over-fitting; OOD gap is from data coverage. Next axis: **data augmentation**. Assigned nezuko to point-subsampling (#4377) — drop 20%/40% non-surface points per training batch.
+
+---
+
+## 2026-05-17 05:36 — PR #4327: Huber loss (δ=1.0 and δ=0.5) vs MSE on slice=48 stack
+
+- **Branch:** charliepai2i48h2-frieren/huber-loss
+- **Hypothesis:** Huber transitions quadratic→linear at δ, capping per-sample gradient on outliers. Should reduce update-direction dominance by a few large-error samples in small-data regime.
+
+| Metric | Baseline (PR #4243) | Arm A (δ=1.0) | Arm B (δ=0.5) |
+|--------|---------------------|---------------|---------------|
+| **val_avg/mae_surf_p** | **38.6750** | 39.1977 (+1.35%) | 39.5966 (+2.38%) |
+| **test_avg/mae_surf_p** | **33.4948** | 34.6382 | ~35.0 |
+| val_single_in_dist | 42.1400 | 42.6806 | 43.0686 |
+| val_geom_camber_rc | 51.6180 | 52.4771 | 53.0811 |
+| val_geom_camber_cruise | 22.4830 | 22.5467 | 21.9752 |
+| val_re_rand | 38.4600 | 39.0862 | 40.2617 |
+| Metric artifacts | | `models/model-charliepai2i48h2-frieren-huber-loss-A-20260517-034205/metrics.jsonl` | `models/model-charliepai2i48h2-frieren-huber-loss-B-20260517-043156/metrics.jsonl` |
+
+- **Analysis:** Both arms regressed nearly uniformly across all splits. asinh-pressure transform (PR #3357) already does the heavy lifting on heavy-tailed residuals — there's no remaining outlier mass for Huber to dampen. The capped gradient on residuals slows convergence in the timeout-bound regime (best epoch 33 with val still descending). The single positive (cruise on Arm B at 21.98) is offset by larger losses elsewhere.
+- **Decision:** CLOSED — no_improvement. Loss-function reshaping is now a closed direction on the slice=48 stack.
+
+---
+
+## 2026-05-17 05:39 — PR #4253: SGDR warm restarts (T_0=17 and T_0=12)
+
+- **Branch:** charliepai2i48h2-edward/sgdr-warm-restarts
+- **Hypothesis:** CosineAnnealingWarmRestarts replaces monotonic cosine with a mid-training LR reset (epoch T_0). Should help model jump out of attractor and find a flatter generalizing minimum.
+
+| Metric | Baseline (PR #4243) | Arm A (T_0=17) | Arm B (T_0=12) |
+|--------|---------------------|----------------|----------------|
+| **val_avg/mae_surf_p** | **38.6750** | 43.7760 (+13.2%) | 41.3263 (+6.9%) |
+| **test_avg/mae_surf_p** | **33.4948** | 37.8838 | 35.4141 |
+| val_geom_camber_rc | 51.6180 | 55.9754 | 55.5760 |
+| Metric artifacts | | `models/model-charliepai2i48h2-edward-sgdr-warm-restarts-A-20260517-032811/metrics.jsonl` | `models/model-charliepai2i48h2-edward-sgdr-warm-restarts-B-20260517-042242/metrics.jsonl` |
+
+- **Analysis:** Clean LR trace confirms restart implementation (Arm A: E17 lr=1.46e-6 → E18 lr=1.7e-4 = exact reset; Arm B: E12 lr=2.9e-6 → E13 lr=1.7e-4 = exact reset). The restart causes a regression spike of +5.5 (Arm A) or +8.2 (Arm B) in val. Within the 30-min budget, Arm A completes only ~47% of cycle 2 and Arm B nearly completes cycle 2 — neither recovers below cycle-1 minimum.
+- **Decision:** CLOSED — no_improvement. **Third schedule-disrupting failure** (#4312 SWA, this, plus the Huber-as-effective-LR-shape closure on #4327). Monotonic cosine T_max=40 is locally optimal under timeout constraint. Schedule-disruption strategies are a now-closed direction.
