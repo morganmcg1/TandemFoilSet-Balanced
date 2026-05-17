@@ -5,6 +5,23 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-17 02:30 — PR #4223 (charliepai2i48h5-nezuko): clip=1.0 + surf_weight=5 on bs=2+n=10+δ=0.10 — CLOSED (both arms regress; clip × δ interaction reverses)
+
+- branch: `nezuko/clip-surf-compound`
+- hypothesis: clip=1.0 compounds with δ=0.10 (from #4095 finding); surf_weight=5 rebalances after δ tightening
+- results (vs current best 56.92/49.32 from PR #4103):
+
+  | arm | (clip, sw) | val_avg | Δ vs 56.92 | test_avg | Δ vs 49.32 | best_ep | clip_frac @ep5/10/17 |
+  |---|---|---|---|---|---|---|---|
+  | arm-1 | (1.0, 10) | 57.872 | +1.66% ✗ | 50.270 | +1.93% ✗ | 17/18 | 0.984 / 0.956 / 0.716 |
+  | arm-2 | (0.25, 5) | 57.594 | +1.18% ✗ | 50.547 | +2.50% ✗ | 18/18 | 1.000 / 0.999 / 0.943 |
+
+- per-split test surf_p (both arms regress on cruise): arm-1 cruise=33.89 (+3.04%); arm-2 cruise=34.50 (+4.89%)
+- artifacts: `models/model-bf16-layerscale-bs2-n10-huber010-clip10-20260517-002441/metrics.jsonl`, `models/model-bf16-layerscale-bs2-n10-huber010-sw5-20260517-013651/metrics.jsonl`
+- commentary: CLOSED. **Two mechanistic findings:** (1) **clip × δ interaction REVERSES at tight Huber knee**: clip=1.0 on δ=0.30 wins (PR #4095 test=48.97), but clip=1.0 on δ=0.10 loses (clip_frac drops to 0.716 at ep17 vs 0.84 in #4095). The δ tightening shrinks gradient norm distribution, so a 1.0 ceiling leaves ~28% of late-epoch updates unconstrained — losing the dampening effect needed. (2) **surf_weight=10 well-calibrated for n=10+δ=0.10**: sw=5 makes cruise REGRESS by +4.89% — pulling gradient mass off the very split that needs surface attention most. sw=10 is the right value. **Important constraint for future compound design**: at δ=0.10, clip ceiling needs to be ≤0.25, not loosened. **Assigned nezuko #4293**: sub-unity clip {0.15, 0.10} on δ=0.10 stack — bias may point tighter.
+
+---
+
 ## 2026-05-17 01:46 — PR #4130 (charliepai2i48h5-fern): EMA τ={0.998, 0.995} at bs=2 (without Huber 0.10) — CLOSED (mechanism confirmed but doesn't beat current best 56.92)
 
 - branch: `charliepai2i48h5-fern/ema-bs2`

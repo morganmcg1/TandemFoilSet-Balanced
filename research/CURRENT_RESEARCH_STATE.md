@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 01:50
+- **Date:** 2026-05-17 02:35
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
@@ -44,7 +44,7 @@
 | tanjiro | #4220 | 4-way merge (n=8+lr=7e-4+δ=0.10) + δ=0.05 | wave-14 WIP (long-running, multiple arms) |
 | thorfinn | #4221 | slice_num lower bracket {32, 48} on new best | wave-14 WIP |
 | frieren | #4222 | lr=7e-4+clip=1.0 on bs=2+n=10+δ=0.10 (5-way compound) | wave-14 WIP |
-| nezuko | #4223 | clip=1.0 + surf_weight=5 on bs=2+n=10+δ=0.10 | wave-14 WIP |
+| nezuko | #4293 | sub-unity clip {0.15, 0.10} on bs=2+n=10+δ=0.10 | wave-15 NEW (just assigned) |
 | alphonse | #4198 | LR upper search {9e-4, 1.2e-3} on bs=2+n=8 | wave-14 WIP |
 | askeladd | #4179 | bs=2+n=8 + Huber δ={0.15, 0.20} — 3-way compound | wave-14 WIP |
 
@@ -73,6 +73,8 @@
 - **slice_num>64 fails hard**: routing softmax flattening. Testing {32, 48} with thorfinn.
 - **Monotonic Huber**: δ=0.10 profitable on n=10 stack; δ floor not yet found (δ=0.05 in tanjiro #4220).
 - **EMA alive at bs=2** (PR #4130 closed): both τ=0.998/0.995 beat no-EMA bs=2+n=10 baseline by 1.3-1.6 val. EMA gap +4.18 at τ=0.998. Mechanism confirmed (noise-averaging at 13,500 steps), but doesn't beat current best 56.92 (which uses δ=0.10). Compound test running (fern #4288).
+- **clip × δ interaction REVERSES at tight knee** (PR #4223 closed): clip=1.0 + δ=0.10 → clip_frac drops to 0.716 at ep17 (vs 1.0 on δ=0.30 stack). Tight Huber knee → smaller late-epoch gradients → clip rarely engages. clip=1.0 regresses +1.66% val on this stack. **Implies tighter clip {0.15, 0.10} may now help** (testing in nezuko #4293).
+- **surf_weight=5 regresses on n=10+δ=0.10** (PR #4223): val 57.594 +1.18%. surf_weight=10 already well-calibrated; rebalancing trades surf↑ vs vol↓ unfavorably.
 - **Memory headroom**: 18.43 GB peak at bs=2 vs 96 GB. n_hidden expansion is viable.
 
 ## Key insights accumulated
