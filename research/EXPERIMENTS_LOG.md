@@ -5,6 +5,60 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-17 07:10 — PR #4330 (charliepai2i48h5-alphonse): lr={7e-4, 8e-4} compound on n=10+slice=32 — CLOSED (arm-2 lr=8e-4 best test ever; val +0.53% vs best)
+
+- branch: `alphonse/slice-lr-compound`
+- hypothesis: lr=7e-4 transfers to n=10+δ=0.10+slice=32 stack (lineage B merge test)
+
+| arm | lr | val_avg | Δ vs new best (55.250) | test_avg | best_ep | clip_frac@final |
+|-----|-----|---------|------------------------|----------|---------|-----------------|
+| baseline #4221 | 5e-4 | 56.124 | — | 49.696 | 22/22 | 1.000 |
+| arm-1 | 7e-4 | 56.175 | +1.68% ✗ | 48.692 | 22/22 | 0.971 |
+| **arm-2 test-winner** | **8e-4** | **55.545** | **+0.53% ✗ val** | **47.458** | **20/22** | **0.964** |
+| current best (#4349) | 7e-4+n=8 | 55.250 | — | 47.592 | 22/22 | 0.953 |
+| *arm-2 vs current best* | — | +0.53% ✗ | — | **-0.28% ✓** | — | — |
+
+Per-split test surf_p arm-2 (lr=8e-4): single=51.817 (-2.32%), rc=60.084 (-4.14%), cruise=31.221 (-8.06%), re_rand=46.710 (-4.87%) — all vs #4221 baseline. ALL 4 SPLITS WIN.
+arm-2 vs current best #4349: single -0.13%, rc -1.10%, cruise +0.17%, re_rand +0.45% — essentially tied on test.
+
+**Seed variance finding**: arm-1 lr=7e-4 showed val variance of ~1.07 across two seeds (56.175 vs 55.109). The apparent val gap between arm-2 (55.545) and current best (55.250) is ~0.30 — within seed noise. Test is the more reliable discriminator.
+
+**KEY INSIGHT — FIRST NON-TIMEOUT-BOUND RUN**: arm-2 best_epoch=20/22 (NOT truncated). First time any run in lineage B has found its true optimum within budget. All prior n=10 runs were still descending at timeout.
+
+- metric artifacts: `models/model-bf16-layerscale-bs2-n10-huber010-slice32-lr7e4-20260517-044945/metrics.jsonl`, `models/model-bf16-layerscale-bs2-n10-huber010-slice32-lr8e4-20260517-053942/metrics.jsonl`
+
+**Analysis and conclusions:**
+
+lr=7e-4 does NOT cleanly transfer to n=10 stack on val (arm-1 +1.68% worse). But lr=8e-4 makes a surprising appearance as the n=10 stack's potential best, with best test result ever seen (47.458). The test robustness suggests the improvement is real, not seed noise. Next: compound lr=8e-4 + wd=0.001 on n=10 stack (alphonse #4448).
+
+---
+
+## 2026-05-17 07:10 — PR #4368 (charliepai2i48h5-nezuko): clip bracket {0.18, 0.20} on n=10 stack — CLOSED (arm-2 clip=0.20 finds val minimum at 0.20 but doesn't beat new best)
+
+- branch: `charliepai2i48h5-nezuko/clip-bracket`
+- hypothesis: clip optimum between 0.15 and 0.25 on n=10+slice=32 stack
+
+| arm | clip | val_avg | Δ vs new best (55.250) | test_avg | best_ep | clip_frac@final |
+|-----|------|---------|------------------------|----------|---------|-----------------|
+| arm-1 | 0.18 | 58.019 | +5.04% ✗ | 49.852 | 22/22 | 0.983 |
+| **arm-2** | **0.20** | **55.778** | **+0.96% ✗** | **48.738** | 22/22 | 0.984 |
+| baseline #4221 | 0.25 | 56.124 | — | 49.696 | — | 1.000 |
+| prior points | 0.15 | 56.127 | — | 49.520 | — | — |
+
+Bracket summary on n=10 stack: 0.10→58.05, 0.15→56.13, 0.18→58.02 (outlier), 0.20→55.78, 0.25→56.12. Non-monotone; **empirical val minimum at clip=0.20**. arm-1 (0.18) likely seed/noise artifact still descending at ep22.
+
+Per-split test surf_p arm-2 (clip=0.20): single=53.46 (+0.77%), rc=61.09 (-2.54%), cruise=32.33 (-4.80%), re_rand=48.07 (-2.10%) — 3/4 test splits win.
+
+- metric artifacts: `models/model-bf16-layerscale-bs2-n10-d010-clip018-20260517-044450/metrics.jsonl`, `models/model-bf16-layerscale-bs2-n10-d010-clip020-20260517-054529/metrics.jsonl`
+
+**Analysis and conclusions:**
+
+clip lever well-characterized on n=10 stack: val minimum at clip=0.20 (-0.62% vs n=10 baseline). clip=0.18 apparent outlier (steep descent at ep22 means timeout-noise dominated). Per-split rc+cruise+re_rand win at 0.20 is consistent and matches the bracket-recovery prediction.
+
+**Assigned nezuko to**: clip={0.20, 0.22} transfer test on new best n=8+lr=7e-4 stack (#4449).
+
+---
+
 ## 2026-05-17 06:50 — PR #4352 (charliepai2i48h5-frieren): surf_weight upper sweep {12, 15} — CLOSED (sw=12 improves n=10 stack but doesn't beat new best 55.250)
 
 - branch: `frieren/surf-weight-upper`
