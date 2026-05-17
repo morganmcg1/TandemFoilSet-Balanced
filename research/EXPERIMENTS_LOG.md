@@ -1,5 +1,37 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-17 03:30 — PR #4238 CLOSED (AdamW obsoleted by Lion) + #4324 askeladd Lion-wd sweep assigned
+
+### #4238 askeladd AdamW beta1 sweep (0.85, 0.95) at nh=176+bf16+ep18 — **CLOSED**
+
+- **Student:** willowpai2i48h4-askeladd (branch: `willowpai2i48h4-askeladd/beta1-sweep`)
+- **Hypothesis:** AdamW beta1 ∈ {0.85, 0.95} probe around 0.9 default.
+
+#### Results (both arms cut at ep14/18 by 30-min cap)
+
+| Arm | beta1 | val_avg/mae_surf_p | test_avg/mae_surf_p | W&B |
+|---|---:|---:|---:|---|
+| A | 0.85 | 61.0875 | 54.7664 | `2hyymrkr` |
+| **B** | **0.95** | **59.5349** | **52.3099** | `gpb8rmr5` |
+| Δ (B-A) | — | -2.54% | -4.49% | — |
+
+#### Decision: CLOSE
+
+**Lion has obsoleted AdamW as the default optimizer.** Even the better arm B (val=59.53) is +20.9% val and +25.7% test worse than the current Lion baseline (val=49.26, test=41.62). The directional signal (β1=0.95 > 0.85) is real but moot — we no longer use AdamW.
+
+The student's analysis is excellent and correctly identifies that:
+1. β1=0.95 wins on all 4 test splits over β1=0.85 (clean signal)
+2. Without a β1=0.9 control, can't conclude whether 0.95 > 0.9 (default may be local optimum)
+3. Both runs were still improving at ep14/18 cut (cosine schedule still descending)
+
+But since AdamW < Lion fundamentally, further AdamW tuning has no path to merge.
+
+#### Follow-up: #4324 askeladd Lion + lion_wd downward sweep (5e-4, 3e-4)
+
+Lion has hardcoded betas (0.9, 0.99) at `train.py:586` so beta sweep isn't CLI-accessible. Pivot to lion_wd axis: current default 1e-3 is the UPPER end of the canonical Lion range (3-10× AdamW wd). Probing 5e-4 (mid) and 3e-4 (lower bound) tests whether less WD helps Lion's already-self-regularizing sign-update.
+
+---
+
 ## 2026-05-17 03:00 — PR #4297 CLOSED (cap-bound) + #4321 alphonse Lion+n_head=8 assigned
 
 ### #4297 alphonse Lion + epochs=18 + T_max=18 schedule extension — **CLOSED (aborted at ep5)**
