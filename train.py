@@ -572,6 +572,7 @@ class Config:
     lion_b2: float = 0.99  # Lion beta2; default matches historical baseline
     lookahead_k: int = 5
     lookahead_alpha: float = 0.5
+    llrd_decay: float = 0.0  # Layer-wise LR decay per Transolver block; <=0 disables
 
 
 cfg = sp.parse(Config)
@@ -629,16 +630,87 @@ n_ffn_params = sum(
 )
 print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN={n_ffn_params})")
 
+
+def _transolver_layer_id(name: str, num_blocks: int) -> int:
+    """Map a Transolver named-parameter to its LLRD layer id.
+
+    Layer ids run head→embed with `head` at the top so that the head receives
+    the largest learning rate (decay**0 = 1):
+        embed      = 0   (`preprocess.*`, `placeholder`)
+        blocks.i.* = i+1 (1 .. num_blocks)
+        head       = num_blocks+1 (last block's `mlp2` + `ln_3` output stack)
+    """
+    if "preprocess" in name or "placeholder" in name:
+        return 0
+    if "blocks." in name:
+        block_idx = int(name.split("blocks.")[1].split(".")[0])
+        # The output head lives inside the last block as mlp2 / ln_3.
+        if block_idx == num_blocks - 1 and ("mlp2" in name or "ln_3" in name):
+            return num_blocks + 1
+        return block_idx + 1
+    return num_blocks  # safety default — treat unknown params as last block
+
+
+def build_llrd_param_groups(model, base_lr: float, decay: float, num_blocks: int):
+    """Return per-layer param groups with layer-wise LR decay.
+
+    ``base_lr`` is the head learning rate (no decay). Each layer ``i`` receives
+    ``base_lr * decay ** (num_blocks + 1 - layer_id)`` so the head gets the full
+    base_lr and the embedding gets ``base_lr * decay ** (num_blocks + 1)``.
+
+    Returns: (param_groups, layer_lrs, layer_counts).
+    """
+    max_layer_id = num_blocks + 1  # head's layer_id
+    layer_lrs = {i: base_lr * (decay ** (max_layer_id - i)) for i in range(max_layer_id + 1)}
+    layer_counts = {i: 0 for i in range(max_layer_id + 1)}
+    buckets: dict[int, list] = {i: [] for i in range(max_layer_id + 1)}
+
+    seen: set[int] = set()
+    for name, p in model.named_parameters():
+        if not p.requires_grad or id(p) in seen:
+            continue
+        seen.add(id(p))
+        layer_id = _transolver_layer_id(name, num_blocks)
+        buckets[layer_id].append(p)
+        layer_counts[layer_id] += 1
+
+    param_groups = [
+        {"params": buckets[lid], "lr": layer_lrs[lid], "llrd_layer_id": lid}
+        for lid in sorted(buckets) if buckets[lid]
+    ]
+    return param_groups, layer_lrs, layer_counts
+
+
+_use_llrd = cfg.llrd_decay > 0
+if _use_llrd:
+    # The "base lr" for LLRD is the head's effective optimizer lr.
+    # For Lion that's cfg.lr/3 to match the existing recipe; for AdamW it's cfg.lr.
+    _llrd_base_lr = (cfg.lr / 3.0) if cfg.use_lion else cfg.lr
+    _llrd_num_blocks = model_config["n_layers"]
+    _llrd_groups, _llrd_layer_lrs, _llrd_layer_counts = build_llrd_param_groups(
+        model, _llrd_base_lr, cfg.llrd_decay, _llrd_num_blocks,
+    )
+    print(
+        f"LLRD ON: decay={cfg.llrd_decay} num_blocks={_llrd_num_blocks} "
+        f"head_lr={_llrd_base_lr:.6e}  embed_lr={_llrd_layer_lrs[0]:.6e}  "
+        f"n_groups={len(_llrd_groups)}"
+    )
+    for _lid in sorted(_llrd_layer_lrs):
+        print(f"  layer_id={_lid}  lr={_llrd_layer_lrs[_lid]:.6e}  params={_llrd_layer_counts[_lid]}")
+    _optim_params = _llrd_groups
+else:
+    _optim_params = model.parameters()
+
 if cfg.use_lion:
     # Lion lr is ~3-10x smaller than AdamW's because sign-based updates have
     # constant magnitude (lr/3 here, matching the PR #4123 recipe).
     base_optimizer = Lion(
-        model.parameters(), lr=cfg.lr / 3.0, weight_decay=cfg.weight_decay,
+        _optim_params, lr=cfg.lr / 3.0, weight_decay=cfg.weight_decay,
         betas=(0.9, cfg.lion_b2),
     )
 else:
     base_optimizer = torch.optim.AdamW(
-        model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.95)
+        _optim_params, lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.95)
     )
 if cfg.lookahead_k > 0:
     optimizer = Lookahead(base_optimizer, k=cfg.lookahead_k, alpha=cfg.lookahead_alpha)
@@ -704,6 +776,16 @@ run.summary["lion_b2"] = cfg.lion_b2
 run.summary["lookahead_k"] = cfg.lookahead_k
 run.summary["lookahead_alpha"] = cfg.lookahead_alpha
 run.summary["lookahead_on"] = _lookahead_on
+run.summary["llrd_on"] = _use_llrd
+run.summary["llrd_decay"] = cfg.llrd_decay
+if _use_llrd:
+    run.summary["llrd/n_groups"] = len(base_optimizer.param_groups)
+    run.summary["llrd/lr_max"] = max(_lr_per_group)
+    run.summary["llrd/lr_min"] = min(_lr_per_group)
+    run.summary["llrd/lr_max_over_min"] = max(_lr_per_group) / max(min(_lr_per_group), 1e-30)
+    for _lid, _lr in _llrd_layer_lrs.items():
+        run.summary[f"llrd/layer_{_lid}_lr"] = _lr
+        run.summary[f"llrd/layer_{_lid}_n_params"] = _llrd_layer_counts[_lid]
 
 # Rolling buffer for per-step train losses to compute volatility (window=100).
 _train_loss_window: deque[float] = deque(maxlen=100)
@@ -785,17 +867,21 @@ for epoch in range(MAX_EPOCHS):
 
     step_time_ms = train_loop_dt * 1000.0 / max(n_batches, 1)
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    _last_lrs = scheduler.get_last_lr()
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/loss_std_last100": loss_std_last100,
         "val/loss": val_loss_mean,
-        "lr": scheduler.get_last_lr()[0],
+        "lr": _last_lrs[0],
         "epoch_time_s": dt,
         "step_time_ms": step_time_ms,
         "gpu_mem_gb_peak": peak_gb,
         "global_step": global_step,
     }
+    if _use_llrd:
+        log_metrics["lr_max"] = max(_last_lrs)
+        log_metrics["lr_min"] = min(_last_lrs)
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
