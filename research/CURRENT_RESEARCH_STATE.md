@@ -45,27 +45,27 @@ cd target && python train.py --agent <student> \
 
 | PR | Student | Theme | Status | Baseline context |
 |----|---------|-------|--------|-----------------|
-| #4235 | alphonse | MLP-ratio sweep: 3 and 4 (vs current 2) on 12-mech stack | WIP — NEW | #4188 closed; plateau protocol → architectural angle; MLPs are the largest param group |
-| #4236 | frieren | Warmup-cosine: 2/3-epoch linear warmup before cosine T_max=40 | WIP — NEW | #4159 closed; T_max=40 confirmed optimal but early epochs waste budget at random init |
-| #4237 | fern | Depth sweep: n_layers=6, 7 (vs current 5) on 12-mech stack | WIP — NEW | #4154 closed; depth untouched since round 1; width was throughput-bound (#4167) |
-| #4181 | edward | LR fine-sweep at T_max=40: lr=1.5e-4 (Arm A), 2.0e-4 (Arm B) | WIP | #4079 only has two LR data points (1.7e-4 vs 2.5e-4); bracket needed to confirm optimum |
-| #4029 | askeladd | EMA decay fine sweep: 0.993 and 0.990 on compile stack | WIP — STALE | 8h, multiple training GPU spikes but no commits; posted clarified instructions referencing 12-mech stack |
-| #4030 | nezuko | Velocity surface down-weighting (re-test at lr=1.7e-4): Arm C (ux=uy=0.7), Arm D (ux=uy=0.8) | WIP — SENT BACK | Initial arms ran at lr=2.5e-4: Arm B (0.7) hit val=40.19, test=33.72; need lr=1.7e-4 re-test |
-| #4061 | tanjiro | Channel-decoupled output heads: split velocity from pressure | WIP — IN PROGRESS | Code implementation committed (commit 33faba0); decoupled_heads + pressure_head_layers flags; no terminal results yet |
-| #4230 | thorfinn | Weight decay sweep: wd=1e-4, 5e-4 bracketing 3e-4 | WIP — NEW | #3734 SwiGLU closed (17h stale, blocked); wd untouched since #3293 (Lion change) |
+| #4235 | alphonse | MLP-ratio sweep: 3 and 4 (vs current 2) on 12-mech stack | WIP | #4188 closed; plateau protocol → architectural angle; MLPs are the largest param group |
+| #4236 | frieren | Warmup-cosine: 2/3-epoch linear warmup before cosine T_max=40 | WIP | #4159 closed; T_max=40 confirmed optimal but early epochs waste budget at random init |
+| #4237 | fern | Depth sweep: n_layers=6, 7 (vs current 5) on 12-mech stack | WIP | #4154 closed; depth untouched since round 1; width was throughput-bound (#4167) |
+| #4253 | edward | SGDR warm restarts: T_0=17 (Arm A), T_0=12 (Arm B) on 12-mech stack | WIP — NEW | #4181 closed (LR axis locked at 1.7e-4); all arms show val descending at timeout → test mid-training LR restart |
+| #4243 | askeladd | slice_num sweep: 48 (Arm A), 96 (Arm B) vs current 64 on 12-mech stack | WIP — NEW | #4029 closed (EMA decay 0.993/0.990 within noise); slice_num cleanest untested architectural axis |
+| #4030 | nezuko | Velocity surface down-weighting (re-test at lr=1.7e-4): Arm C (ux=uy=0.7), Arm D (ux=uy=0.8) | WIP | Initial arms ran at lr=2.5e-4: Arm B (0.7) hit val=40.19, test=33.72; need lr=1.7e-4 re-test |
+| #4061 | tanjiro | Channel-decoupled output heads: split velocity from pressure | WIP | Code implementation committed (commit 33faba0); decoupled_heads + pressure_head_layers flags; no terminal results yet |
+| #4230 | thorfinn | Weight decay sweep: wd=1e-4, 5e-4 bracketing 3e-4 | WIP | #3734 SwiGLU closed (17h stale, blocked); wd untouched since #3293 (Lion change) |
 
 ## Key open questions (round 15 — new baseline 39.83 — PLATEAU PROTOCOL ACTIVE)
 
 **Plateau signal:** 5+ recent no_improvement experiments in a row (#4188, #4154, #4159, #4167, #4078, plus partial #4030). Per CLAUDE.md plateau protocol, escalating from pure hyperparameter sweeps to architectural changes.
 
-1. **Is lr=1.7e-4 the precise optimum at T_max=40?** (#4181 edward) — bracket with 1.5e-4 and 2.0e-4.
-2. **Does velocity surface down-weighting (0.7/0.8) at lr=1.7e-4 beat baseline?** (#4030 nezuko, re-test) — Arm B at lr=2.5e-4 showed test=33.72 (promising); rerun at correct LR.
+1. **Does a mid-training LR reset (SGDR) escape the timeout-bound attractor?** (#4253 edward) — val descends in every arm at ep34; T_0=17 gives a second high-LR phase; T_0=12 gives nearly a full second cycle.
+2. **Does velocity surface down-weighting (0.7/0.8) at lr=1.7e-4 beat baseline?** (#4030 nezuko) — Arm B at lr=2.5e-4 showed test=33.72 (promising); rerun at correct LR needed.
 3. **Does weight decay re-tuning unlock more headroom?** (#4230 thorfinn) — wd untouched at 3e-4 since Lion switch in #3293.
-4. **(NEW) Does MLP-ratio expansion (3, 4) beat baseline?** (#4235 alphonse) — capacity along widest parameter group; throughput penalty ~10-20% per arm.
-5. **(NEW) Does linear warmup before cosine reduce wasted early-epoch budget?** (#4236 frieren) — frieren's T_max=50 data showed val descending at 28.7% LR at ep33; warmup tests if early budget is wasted.
-6. **(NEW) Does depth scaling (n_layers=6, 7) work where width scaling didn't?** (#4237 fern) — depth untouched since round 1; per-block slice attention is O(n_hidden·slice_num·N) which scales linearly with layers.
-7. **Do channel-decoupled output heads improve pressure specialization?** (#4061 tanjiro) — implementation committed.
-8. **What about askeladd's EMA-decay sweep?** (#4029 askeladd) — 8h stale despite GPU activity; posted clarified instructions.
+4. **Does MLP-ratio expansion (3, 4) beat baseline?** (#4235 alphonse) — capacity along widest parameter group; throughput penalty ~10-20% per arm.
+5. **Does linear warmup before cosine reduce wasted early-epoch budget?** (#4236 frieren) — T_max=50 data showed val descending at 28.7% LR at ep33; warmup tests if early budget is wasted.
+6. **Does depth scaling (n_layers=6, 7) work where width scaling didn't?** (#4237 fern) — depth untouched since round 1; per-block slice attention scales linearly with layers.
+7. **Do channel-decoupled output heads improve pressure specialization?** (#4061 tanjiro) — implementation committed, awaiting terminal results.
+8. **Does slice_num=48 or 96 improve on the current 64?** (#4243 askeladd) — cleanest untested architectural axis; prior #3106 was a three-way compound; pure slice sweep is new.
 
 ## 12-mechanism stack: full pipeline
 
@@ -115,21 +115,21 @@ cd target && python train.py --agent <student> \
 | #4188 (alphonse compile-mode-sweep) | no_improvement: reduce-overhead val=40.43 (+1.5%), max-autotune val=40.39 (+1.4%); compile-time costs (+20s/+200s) negate per-step gains; default mode optimal → #4235 mlp-ratio-sweep |
 | #4159 (frieren tmax-fine-sweep) | no_improvement: T_max=35 val=42.70 (+7.2%, schedule freezes), T_max=50 val=40.20 (+0.92% noise); confirmed T_max=40 optimal at lr=1.7e-4 → #4236 warmup-cosine |
 | #4154 (fern loosen-other-clip) | no_improvement: other=1.5 val=40.63 (+2.0%), other=2.0 val=42.04 (+5.5%); per-group(1.0,1.0) "win" in #4016 was magnitude-inflation noise → #4237 n-layers-sweep |
+| #4029 (askeladd EMA-decay-fine) | no_improvement: 0.993 val=39.79 (+noise, test +0.79 regression), 0.990 not run (below threshold); EMA decay=0.995 locked → #4243 slice-num-sweep |
+| #4181 (edward lr-fine-sweep) | no_improvement: lr=1.5e-4 val=40.39 (+1.4% null), lr=2.0e-4 val=41.87 (+5.1% failure); lr=1.7e-4 locked as optimum for T_max=40; LR axis fully closed → #4253 sgdr-warm-restarts |
 
 ## Potential next research directions
 
-- **T_max fine-sweep** — IN PROGRESS as #4159 (frieren); T_max=35/50 at lr=1.7e-4. T_max=50 is highest priority.
+- **T_max fine-sweep** — CLOSED as #4159 (frieren); T_max=35 regressed (+7.2%), T_max=50 null (+0.92%); T_max=40 optimal
 - **torch.compile mode sweep** — CLOSED as #4188 (alphonse); both modes regress; default optimal
+- **LR fine-sweep at T_max=40** — CLOSED as #4181 (edward); lr=1.5e-4 null (+1.4%), lr=2.0e-4 failure (+5.1%); lr=1.7e-4 locked
+- **EMA decay re-sweep** — CLOSED as #4029 (askeladd); 0.993 within noise + test regression; decay=0.995 locked
 - **MLP-ratio sweep** — IN PROGRESS as #4235 (alphonse); mlp_ratio=3, 4 (vs current 2)
 - **Depth sweep** — IN PROGRESS as #4237 (fern); n_layers=6, 7 (vs current 5)
 - **Warmup-cosine** — IN PROGRESS as #4236 (frieren); 2/3-epoch linear warmup before cosine T_max=40
-- **LR fine-sweep at T_max=40** — IN PROGRESS as #4181 (edward); lr ∈ {1.5e-4, 2.0e-4} bracketing 1.7e-4
-- **EMA decay re-sweep on 12-mech stack** — IN PROGRESS as #4029 (askeladd); 0.993/0.990
-- **Velocity surface down-weighting** — IN PROGRESS as #4030 (nezuko)
-- **Per-group clip loosening** — IN PROGRESS as #4154 (fern); other_grad_norm=1.5/2.0
-- **Channel-decoupled heads** — IN PROGRESS as #4061 (tanjiro)
-- **SwiGLU gating** — CLOSED as #3734 (thorfinn 17h stale, blocked on implementation)
-- **Weight decay sweep**: IN PROGRESS as #4230 (thorfinn); wd ∈ {1e-4, 5e-4} bracketing 3e-4 on 12-mech stack
-- **Deeper capacity**: n_layers=6/7 on compile stack — separate from width scaling
-- **Slice count sweep**: slice_num ∈ {32, 48, 96} — fixed at 64; PhysicsAttention slice routing granularity
-- **Longer training** — val still descending at ep34; T_max=50/60 may extract more
+- **SGDR warm restarts** — IN PROGRESS as #4253 (edward); T_0=17 and T_0=12 — mid-training LR reset to escape timeout-bound attractor
+- **Slice_num sweep** — IN PROGRESS as #4243 (askeladd); slice_num=48, 96 (vs current 64) — cleanest untested architectural axis
+- **Velocity surface down-weighting** — IN PROGRESS as #4030 (nezuko); vel_ux=vel_uy=0.7/0.8 at lr=1.7e-4
+- **Channel-decoupled heads** — IN PROGRESS as #4061 (tanjiro); split velocity/pressure output heads
+- **Weight decay sweep** — IN PROGRESS as #4230 (thorfinn); wd ∈ {1e-4, 5e-4} bracketing 3e-4
+- **SwiGLU gating** — CLOSED as #3734 (thorfinn); blocked on implementation, 3 attempts failed

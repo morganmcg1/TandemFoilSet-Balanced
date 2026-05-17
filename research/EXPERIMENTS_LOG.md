@@ -870,3 +870,43 @@ Metric artifacts:
 - **Analysis:** Direction monotonically wrong — looser other_grad_norm increases regression. Excellent student reconciliation: per-group(1.0,1.0) effectively gives 4× attn magnitude vs single-clip; loosening other to 1.5/2.0 inflates both groups further. Lion's sign-based updates suffer overshoot from the magnitude inflation. The #4016 sanity "win" was likely noise — the data refutes the directional hypothesis.
 - **Decision:** CLOSED — no_improvement, direction refuted. Per-group clip axis closed at this stack. Reassigning fern to n-layers-sweep (#4237) — depth scaling untouched since round 1 and motivated directly by fern's prior diagnostic (MLP/other has 5× attn gradient norm; more layers tests if model is depth-limited).
 
+
+---
+
+## 2026-05-17 01:15 — PR #4029: EMA decay fine sweep (0.993, 0.990) — no_improvement
+
+- **Student:** charliepai2i48h2-askeladd
+- **Hypothesis:** EMA decay=0.995 was set during a stack with T_max=30; with T_max=40 and longer training, a slightly faster decay (0.993 or 0.990) might track the improved trajectory more closely.
+- **Results:**
+
+| Metric | Baseline #4079 (decay=0.995) | Arm A (decay=0.993) | Arm B (decay=0.990) |
+|---|---|---|---|
+| **val_avg/mae_surf_p** | **39.8345** | 39.7881 (−0.046, within noise) | not run (below threshold) |
+| **test_avg/mae_surf_p** | **33.8873** | 34.6774 (+0.79 regression) | — |
+| Best epoch | 34 | — | — |
+
+- **Analysis:** Arm A val=39.79 is technically better by 0.046 — well within the 1.17 noise floor. But the paired test regression (+0.79, 17× the val gain) rules out a clean compounding win. The val gain is noise; the test signal is meaningful. Arm B was not run. PR was additionally stale for 8h (required clarified instructions referencing correct 12-mech stack — the PR body originally referenced the 9-mech stack).
+- **Decision:** CLOSED — no_improvement. EMA decay=0.995 is locked. Reassigning askeladd to slice_num sweep (#4243) — cleanest untested architectural axis (PhysicsAttention slice routing), orthogonal to all in-flight experiments.
+
+---
+
+## 2026-05-17 01:15 — PR #4181: LR fine-sweep at T_max=40 (lr=1.5e-4, 2.0e-4) — no_improvement
+
+- **Student:** charliepai2i48h2-edward
+- **Hypothesis:** PR #4079 confirmed lr=1.7e-4 beats lr=2.5e-4 at T_max=40 — two data points only. Bracket 1.7e-4 with 1.5e-4 (−12%) and 2.0e-4 (+18%) to confirm it's at the optimum.
+- **Results:**
+
+| Metric | Baseline #4079 (lr=1.7e-4) | Arm A (lr=1.5e-4) | Arm B (lr=2.0e-4) |
+|---|---|---|---|
+| **val_avg/mae_surf_p** | **39.8345** | 40.3893 (+1.4% null) | 41.8680 (+5.1% failure) |
+| **test_avg/mae_surf_p** | **33.8873** | 34.0666 (+0.5%) | 35.7273 (+5.4%) |
+| val_single_in_dist | 43.6797 | 44.9663 | 45.0380 |
+| val_geom_camber_rc | 53.1517 | 53.0366 | 58.0543 |
+| val_geom_camber_cruise | 22.7101 | 23.0733 | 24.3773 |
+| val_re_rand | 39.7965 | 40.4810 | 40.0024 |
+| Best epoch | 34 (timeout) | 33 (timeout) | 32 (timeout) |
+| Per-epoch time | ~54.2 s | ~54.3 s | ~54.5 s |
+| Peak VRAM | 23.84 GB | 23.84 GB | 23.85 GB |
+
+- **Analysis:** Arm A within null band (±1.0), test also within noise. Arm B exceeds the 41.0 failure threshold — over-LR signature (rc-camber most sensitive: 58.05 vs 53.15). Physical intuition that T_max=40's extended high-LR dwell might want lower peak LR did NOT hold. Both arms show val still descending at timeout — the model is timeout-limited, not LR-limited. Key student observation: final-epoch LR at 9.5-12% of init (above the expected 7% for T_max=40) because timeout prevents reaching cycle completion; rc-camber split is the most LR-sensitive and the dominant val error source.
+- **Decision:** CLOSED — no_improvement. LR axis fully closed. lr=1.7e-4 is the precise optimum for the 12-mech / T_max=40 stack. Reassigning edward to SGDR warm restarts (#4253) — mid-training LR reset to test if the "val still descending at timeout" attractor can be escaped via a second high-LR phase.
