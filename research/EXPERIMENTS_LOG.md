@@ -1,5 +1,77 @@
 # SENPAI Research Results
 
+## 2026-05-17 06:00 — PR #4294: Lookahead-Lion + depth=6 ← CLOSED (canonical depth-frontier closure; budget incompatibility)
+
+- Branch: `willowpai2i48h1-tanjiro/lookahead-lion-depth-6`
+- Student: willowpai2i48h1-tanjiro
+- W&B runs: `n910wmj9` (CANONICAL, val=50.60, best_ep=14, finished); group `lookahead_lion_capacity`
+- Hypothesis: Increase Transolver depth from 5 → 6 layers.
+
+### Results (W&B-verified)
+
+| Metric | Value | Δ vs new baseline (47.59, PR #4269) |
+|---|---|---|
+| val_avg/mae_surf_p | **50.5995** | **+3.01 regress** |
+| test_avg/mae_surf_p | **48.9845** | +2.97 |
+| best_epoch | **14** (timeout-cut from T_max=17) | −3 |
+| epoch_time_s | 128.9 (+21% vs 5L) | — |
+| n_params | 784,799 (+18.3%) | — |
+| gpu_mem_peak | 42.42 GB | +6.5 GB |
+
+### Mechanism
+
+Same budget-incompatibility pattern as heads=8 (#4304): +21% per-epoch wall time → only 14/17 epochs fit → cosine LR never reaches floor (LR ≈ 7.7e-5 at termination vs LR=0 for baseline). All 4 splits regress uniformly (+0.99 to +4.02). Model was still actively improving at cutoff (best_ep=14 = last epoch).
+
+### Decision
+
+Closed — val=50.60 > programme best 47.59. Tanjiro reassigned to **Lookahead-Lion β2=0.999 at α=0.7 (#4356)** — HP probe in the new (k=5, α=0.7) regime.
+
+## 2026-05-17 06:00 — PR #4286: Lookahead-Lion + mlp_ratio=3 ← CLOSED (canonical FFN-width frontier closure; W&B rate-limit-close)
+
+- Branch: `willowpai2i48h1-thorfinn/lookahead-lion-mlp-ratio-3`
+- Student: willowpai2i48h1-thorfinn
+- W&B runs: `hxdbvwhd` (CANONICAL, val=48.63, best_ep=16, finished), `w792xwgs` (bit-identical rerun, val=48.6302), `zlfepycf` (failed), `4blvxpug` (running redundant rerun); group `lookahead_lion_capacity`
+- Hypothesis: Increase Transolver FFN width from mlp_ratio=2 → 3.
+
+### Results (W&B-verified; rate-limit-close pattern, 0 PR comments)
+
+| Metric | Value | Δ vs new baseline (47.59, PR #4269) |
+|---|---|---|
+| val_avg/mae_surf_p | **48.6302** | **+1.04 regress** |
+| test_avg/mae_surf_p | **46.3702** | **−0.12 (essentially tie on test)** |
+| best_epoch | **16** (just below T_max=17 floor) | −1 |
+| epoch_time_s | 114 (+5% vs baseline) | — |
+| n_params | 827K (+30% vs baseline 635K) | — |
+| gpu_mem_peak | 39.16 GB | +3.3 GB |
+
+### Frontier finding — different mode from heads=8 / depth=6
+
+mlp_ratio=3 is the **gentlest architectural up-arm tested**:
+- Only +5% epoch cost (114s vs 109s) — well within budget
+- best_epoch=16, only 1 short of cosine floor
+- Test essentially **ties baseline** (46.37 vs 46.49 — within noise floor)
+- Val regresses by only +1.04 — small, consistent across two finished runs (bit-identical)
+
+This is NOT a budget-incompatibility story like heads=8 (+36%) or depth=6 (+21%). It's a **mild capacity-not-helpful** story: extra FFN width adds ~30% params without commensurate generalization benefit. The model can almost reach cosine floor and still doesn't beat baseline.
+
+### Architectural portfolio status (round-20)
+
+| Arm | Δ val vs new baseline | epoch cost | Root cause |
+|---|---|---|---|
+| heads=8 (#4304) | +9.11 | +36% | Budget-cut at ep12 |
+| depth=6 (#4294 THIS round) | +3.01 | +21% | Budget-cut at ep14 |
+| mlp_ratio=3 (#4286 THIS PR) | +1.04 | +5% | Mild capacity-not-helpful, ep16 |
+| slice_num=96 (fern #4323) | TBD | TBD | In flight |
+| slice_num=32 (frieren #4325) | TBD | TBD | In flight |
+
+### h=192 is back in play
+
+VRAM data point: mlp_ratio=3 used 39.16 GB at h=128. h=192 with mlp_ratio=2 should fit ~45-55 GB — comfortable within 96GB. Previous gating constraint resolved. Pipelining for future round.
+
+### Decision
+
+Closed — val=48.63 > programme best 47.59. Thorfinn reassigned to **Lookahead-Lion k=4 at α=0.7 (#4355)** — k-frontier gap-fill between k=3 and k=5 in the new α regime.
+
 ## 2026-05-17 05:00 — PR #4269: Lookahead-Lion α=0.7 at k=5 ← MERGED — NEW PROGRAMME BEST (val=47.5894)
 
 - Branch: `willowpai2i48h1-askeladd/lookahead-lion-alpha-sweep`

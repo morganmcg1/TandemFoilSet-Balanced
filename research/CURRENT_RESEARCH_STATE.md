@@ -1,7 +1,7 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 05:00
-- **Launch:** willow-pai2i-48h-r1 (round 19 — Lookahead-Lion era; **NEW PROGRAMME BEST val=47.5894** (PR #4269, α=0.7 merged); **5 architectural arms in flight**; **α-bowl minimum probe (α=0.8) in flight**; **3-seed canonical for new best in flight**)
+- **Date:** 2026-05-17 06:00
+- **Launch:** willow-pai2i-48h-r1 (round 20 — Lookahead-Lion era; **NEW PROGRAMME BEST val=47.5894** (PR #4269, α=0.7 merged); **architectural up-arms all regressed** (heads=8 / depth=6 / mlp_ratio=3 closed); **2 architectural slice_num arms + 5 HP probes in flight**)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN)
 - **Latest direction from human team:** None (no open issues scoped to this launch)
@@ -66,36 +66,49 @@ Monotone descending: α=0.3 < α=0.5 < α=0.7. α-bowl minimum not yet found. α
 | **LR (cfg.lr)** | CLOSED (#4265): cfg.lr=3e-4 → +1.44. Lion LR landscape SHARPER than AdamW | LR=5e-4 is near-optimal |
 | **3-seed canonical** | IN PROGRESS: seeds 1+2 running (#4344, #4345); seed=0 val=47.59 | Paper-ready noise floor pending |
 
-## Plateau Protocol → Architectural Portfolio (5 arms in flight)
+## Plateau Protocol → Architectural Portfolio (3/5 up-arms CLOSED; capacity-up direction looks dead)
 
-The architectural portfolio covers 5 orthogonal capacity dimensions. **Note: heads=8 (#4304) was closed as budget-incompatible** — 36% per-epoch overhead exhausts the 30-min budget before reaching the cosine floor.
+| Architectural arm | PR | Dim varied | Direction | Status | Δ val vs new baseline |
+|---|---|---|---|---|---|
+| ~~Attention heads~~ | ~~#4304 nezuko~~ | ~~n_heads~~ | ~~4 → 8~~ | **CLOSED** (budget-cut ep12, +36% cost) | +9.11 |
+| ~~Depth~~ | ~~#4294 tanjiro~~ | ~~n_layers~~ | ~~5 → 6~~ | **CLOSED** (budget-cut ep14, +21% cost) | +3.01 |
+| ~~FFN width~~ | ~~#4286 thorfinn~~ | ~~mlp_ratio~~ | ~~2 → 3~~ | **CLOSED** (mild capacity-not-helpful, ep16, +5% cost) | +1.04 |
+| Slices (up) | #4323 fern | slice_num | 64 → 96 | Running | TBD |
+| Slices (down) | #4325 frieren | slice_num | 64 → 32 | Running | TBD |
 
-| Architectural arm | PR | Dim varied | Direction | Status |
-|---|---|---|---|---|
-| FFN width | #4286 thorfinn | mlp_ratio | 2 → 3 | Running |
-| Depth | #4294 tanjiro | n_layers | 5 → 6 | Running |
-| ~~Attention heads~~ | ~~#4304 nezuko~~ | ~~n_heads~~ | ~~4 → 8~~ | **CLOSED** (budget incompatible, +36% epoch time) |
-| Slices (up) | #4323 fern | slice_num | 64 → 96 | Running |
-| Slices (down) | #4325 frieren | slice_num | 64 → 32 | Running |
+**Key insight emerging from architectural data:** Capacity-up is hostile across heads / depth / mlp_ratio at the current (h=128, T_max=17, 30-min budget). The regression magnitude tracks the per-epoch cost overhead almost monotonically — +36%/+21%/+5% maps to +9.11/+3.01/+1.04 val. Even mlp_ratio=3 (which reached ep16, the smallest budget tax) couldn't beat baseline.
 
-**4 active architectural arms.** Note: heads is effectively dead at h=128 with 30-min budget (same root cause as pre-Lion slice_num=128 regression). To reopen heads, must first scale h (width arm must win first).
+**Implication:** With the cosine schedule tightly tuned to baseline epoch count, architectural up-changes that increase epoch cost are effectively budget-bound. To reopen the capacity dimension, we need EITHER (a) a longer wall-clock budget [not allowed], OR (b) a faster training recipe that frees epochs [research direction]. The slice_num arms (#4323 +50% slices, #4325 −50% slices) test a **different capacity axis**: slice count restructures attention without proportional FFN/depth cost.
 
-## Active WIP experiments (round 19)
+### h=192 is unblocked (gated insight from thorfinn's VRAM data)
+
+mlp_ratio=3 used 39.16 GB at h=128. h=192 with mlp_ratio=2 should fit ~45-55 GB — comfortable within 96 GB. Previous gating constraint (uncertain VRAM) resolved. **Pipelining h=192 for the next idle round** — note: h=192 historically won in PR #3562 (early round), so it's not a fresh idea but worth re-testing under the new Lookahead-Lion + α=0.7 regime.
+
+## Active WIP experiments (round 20)
 
 | PR | Student | Hypothesis | Status | Priority |
 |----|---------|-----------|--------|----------|
-| #4343 | alphonse | **Lookahead-Lion α=0.8 at k=5 — push α-bowl minimum probe** | **NEW (round 19)** | **Winner candidate if val<47.59** |
-| #4344 | askeladd | **Lookahead-Lion α=0.7 seed=1 (3-seed canonical of new best)** | **NEW (round 19)** | Paper-facing canonical |
-| #4345 | nezuko | **Lookahead-Lion α=0.7 seed=2 (3-seed canonical of new best)** | **NEW (round 19)** | Paper-facing canonical |
-| #4325 | frieren | slice_num=32 (architectural — slice count DOWN) | Running | 4th architectural arm |
-| #4323 | fern | slice_num=96 (architectural — slice count UP) | Running | 3rd architectural arm |
+| #4356 | tanjiro | **Lookahead-Lion β2=0.999 at α=0.7 — corrected high-β2 direction** | **NEW (round 20)** | **Winner candidate** |
+| #4355 | thorfinn | **Lookahead-Lion k=4 at α=0.7 — gap-fill between k=3 and k=5** | **NEW (round 20)** | **Winner candidate** |
+| #4345 | nezuko | Lookahead-Lion α=0.7 seed=2 (3-seed canonical of new best) | Running | Paper-facing canonical |
+| #4344 | askeladd | Lookahead-Lion α=0.7 seed=1 (3-seed canonical of new best) | Running | Paper-facing canonical |
+| #4343 | alphonse | Lookahead-Lion α=0.8 at k=5 — push α-bowl minimum probe | Running | Winner candidate if val<47.59 |
+| #4325 | frieren | slice_num=32 (architectural — capacity-light slice count) | Running | 2 architectural arms remaining |
+| #4323 | fern | slice_num=96 (architectural — richer latent basis) | Running | 2 architectural arms remaining |
 | #4310 | edward | Lookahead-Lion k=7 (find Lion k-curve right edge — winner candidate) | Running | If val<47.59, NEW programme best |
-| #4294 | tanjiro | Lookahead-Lion + depth=6 (architectural — transformer depth) | Running | 2nd architectural arm |
-| #4286 | thorfinn | Lookahead-Lion + mlp_ratio=3 (architectural — FFN width) | Running | 1st architectural arm |
 
 **All 8 students active. Zero idle. Single-arm policy in force.**
 
-## Round-19 events (this round)
+## Round-20 closures (architectural up-arms exhausted; capacity-up dead at current budget)
+
+- **#4294 tanjiro (depth=6)** CLOSED: val=50.60 / test=48.98 (+3.01/+2.97 vs new baseline). best_ep=14 (timeout-cut at +21% epoch cost). Same pattern as heads=8 (#4304). All 4 splits regress uniformly — fewer effective annealing epochs hurts everywhere; not "capacity helps OOD." Tanjiro reassigned to **β2=0.999 at α=0.7 (#4356)**.
+- **#4286 thorfinn (mlp_ratio=3)** CLOSED via W&B rate-limit-close: val=48.63 / test=46.37 (+1.04/−0.12 vs new baseline). best_ep=16 (just below cosine floor). **Test essentially TIES baseline** (within noise floor). Gentlest architectural up-arm tested; not budget-cut but still no win. Thorfinn reassigned to **k=4 at α=0.7 (#4355)**.
+
+### Architectural up-direction verdict
+
+Three of three completed up-arms regressed; magnitude tracks per-epoch cost. With T_max=17 cosine tightly fit to baseline budget, capacity-up arms hit a wall. Remaining slice_num arms (#4323, #4325) test a different axis. **For future rounds**: faster training recipes or longer schedule would unlock capacity dimension.
+
+## Round-19 events
 
 ### NEW PROGRAMME BEST: PR #4269 merged (val=47.5894 / test=46.0098)
 
@@ -150,24 +163,25 @@ Lookahead-Lion α=0.7 at k=5 beats α=0.5 by −0.38 val, −0.48 test (same see
 
 ### Priority 1 (Immediate — IN FLIGHT)
 
+- **β2=0.999 at α=0.7** (tanjiro #4356, NEW round 20) — corrected high-β2 direction at new α winner
+- **k=4 at α=0.7** (thorfinn #4355, NEW round 20) — gap-fill in k frontier between k=3 (48.20) and k=5 (47.59)
 - **α=0.8 probe** (alphonse #4343) — α-bowl not yet bottomed; monotone at k=5 so far; if it wins, push further to 0.9
 - **3-seed canonical α=0.7** (askeladd #4344, nezuko #4345) — paper-facing noise floor for new programme best
 - **k=7 probe** (edward #4310) — whether k-curve right-shift extends to k=7; winner candidate if val<47.59
 
-### Priority 2 (Architectural — IN FLIGHT)
+### Priority 2 (Slice architecture — IN FLIGHT)
 
-- **mlp_ratio=3** (thorfinn #4286) — wider FFN; pair with depth to find compositional gain
-- **depth=6** (tanjiro #4294) — deeper net
 - **slice_num=96** (fern #4323) — richer latent attention basis
-- **slice_num=32** (frieren #4325) — capacity-light
+- **slice_num=32** (frieren #4325) — capacity-light slice count
 
 ### Priority 3 (Next idle-round candidates)
 
-- **Combined architectural compound** — if any of {mlp_ratio=3, depth=6, slice_num∈{32,96}} win, compose them
-- **Lookahead-Lion + h=192** — hidden-dim scale-up (gated on #4286 VRAM data); heads=8 is dead at h=128 but could reopen at h=192 (d_head would be 24 at heads=8 vs 32 now)
-- **Lion β2 INCREASE** (β2 ∈ {0.995, 0.999}) — #4264 confirmed direction is UP from 0.99; small but real headroom
-- **k=8 or k=9** — if k=7 wins, natural continuation
-- **α × k composition** — if α=0.7 is confirmed optimal at k=5, test (k=7, α=0.7) and (k=5, α=0.7) compound to lock in both dimensions
+- **Lookahead-Lion + h=192 (mlp_ratio=2)** — VRAM gating resolved (#4286 gave 39.16 GB at h=128 mlp_ratio=3 → h=192 mlp_ratio=2 estimated 45-55 GB, well within 96 GB). Historically won in PR #3562; re-test under (k=5, α=0.7) regime
+- **k=6 at α=0.7** — natural follow-up if k=4 wins (filling k=5 → k=7 gap)
+- **α=0.9 at k=5** — if alphonse's α=0.8 wins, push frontier further
+- **α=0.7 at k=3** — confirm effective-pull-rate framing transfers to a different k (predict α/k=0.23 → likely worse than α=0.5 at k=3 which gave α/k=0.17 = bowl minimum)
+- **Loss reformulation:** physics-informed continuity-equation constraint, pressure-relative normalization, per-region weighting
+- **Compounding winning HP knobs** — when α=0.7 + β2=0.999 + k=4 land, test their compound (if all three win)
 
 ### Priority 4 (Loss reformulation — escalation tier 2)
 
