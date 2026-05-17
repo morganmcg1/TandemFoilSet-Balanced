@@ -17,8 +17,11 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import math
+import multiprocessing as mp
 import os
+import random
 import subprocess
 import time
 from dataclasses import asdict, dataclass
@@ -537,6 +540,217 @@ class Lion(torch.optim.Optimizer):
 
 
 # ---------------------------------------------------------------------------
+# GeoMix camber interpolation (Chen 2024, arXiv:2407.10681)
+# ---------------------------------------------------------------------------
+#
+# Synthesize within-domain samples by linearly interpolating training pairs
+# that share (domain, AoA bin, Re bin) but have different camber-M values.
+# Goal: bridge the geom_camber_rc OOD gap (front-foil M=6-8 in raceCar tandem
+# is held out; train has M=2-5 and M=9 — interpolation between the bracketing
+# camber values would synthesize M∈[5,9] samples that "look like" the OOD).
+#
+# Locality constraint: only pair within the same (domain, AoA-bin, Re-bin).
+# Topology constraint: per-node linear interpolation requires matching mesh
+# size and node ordering. In this dataset mesh size is essentially unique per
+# sample within raceCar tandem and cruise, so most candidate pairs cannot be
+# mixed. Index-build phase records the (very low) feasible-neighbor counts
+# per domain; runtime path increments a "topology_skip" counter if a chosen
+# neighbor's node count doesn't match.
+
+# Foil-1 camber M lives at x[:, 15] (program.md: dims 15-17 are NACA1).
+# Front-foil camber is the OOD-attack axis for geom_camber_rc.
+GEOMIX_CAMBER_DIM = 15
+# Discretization bins for AoA (radians) and log(Re). Tight enough to enforce
+# "similar flow conditions" but loose enough that we still find neighbors.
+GEOMIX_AOA_BIN_RAD = math.radians(2.0)  # 2° AoA buckets
+GEOMIX_LOGRE_BIN = 0.5                   # ~ ln(1.65) — about 50% Re resolution
+
+
+def build_geomix_index(
+    train_ds, splits_dir: str | Path, k: int = 5,
+) -> tuple[dict[int, list[int]], dict[str, int]]:
+    """Per-sample k-nearest-camber-M neighbors within (domain, AoA-bin, Re-bin).
+
+    Only includes neighbors with **matching mesh node count** (linear
+    interpolation requires same-topology meshes — node i must correspond to
+    the same physical location in both samples). Returns the neighbor index
+    and per-domain counts of "mixable" samples for diagnostics.
+    """
+    splits_dir = Path(splits_dir)
+    with open(splits_dir / "meta.json") as f:
+        meta = json.load(f)
+    domain_groups = meta["domain_groups"]
+    idx_to_domain: dict[int, str] = {}
+    for name, idxs in domain_groups.items():
+        for i in idxs:
+            idx_to_domain[i] = name
+
+    # Load per-sample metadata: (domain, AoA1, log Re, camber M1, mesh size).
+    # Only loads x[0] of each file via the standard SplitDataset path.
+    print(f"Building GeoMix index over {len(train_ds)} train samples...")
+    t0 = time.time()
+    meta_rows: list[tuple[int, str, float, float, float, int]] = []
+    for i in range(len(train_ds)):
+        s = torch.load(train_ds.files[i], weights_only=True)
+        x0 = s["x"][0]
+        meta_rows.append((
+            i,
+            idx_to_domain.get(i, "unknown"),
+            float(x0[14]),                  # AoA foil 1 (rad)
+            float(x0[13]),                  # log Re
+            float(x0[GEOMIX_CAMBER_DIM]),   # camber M1 normalized
+            int(s["x"].shape[0]),           # mesh node count
+        ))
+    print(f"  metadata loaded in {time.time()-t0:.1f}s")
+
+    # Group by (domain, AoA bin, Re bin)
+    groups: dict[tuple, list[tuple[int, float, int]]] = {}
+    for i, dom, aoa, log_re, camber, n_nodes in meta_rows:
+        aoa_bin = round(aoa / GEOMIX_AOA_BIN_RAD)
+        re_bin = round(log_re / GEOMIX_LOGRE_BIN)
+        groups.setdefault((dom, aoa_bin, re_bin), []).append((i, camber, n_nodes))
+
+    # Per-sample neighbor list: candidates with matching node count, sorted by
+    # |ΔM_camber|, top-k.
+    neighbor_idx: dict[int, list[int]] = {i: [] for i, *_ in meta_rows}
+    for group in groups.values():
+        for i, camber, n_nodes in group:
+            cands = [
+                (j, c) for (j, c, nj) in group
+                if j != i and nj == n_nodes
+            ]
+            cands.sort(key=lambda t: abs(t[1] - camber))
+            neighbor_idx[i] = [j for j, _ in cands[:k]]
+
+    # Diagnostics: per-domain counts of samples with at least one feasible
+    # (same-shape, same-bin) neighbor.
+    mixable_per_domain: dict[str, int] = {}
+    total_per_domain: dict[str, int] = {}
+    for i, dom, *_ in meta_rows:
+        total_per_domain[dom] = total_per_domain.get(dom, 0) + 1
+        if neighbor_idx.get(i):
+            mixable_per_domain[dom] = mixable_per_domain.get(dom, 0) + 1
+    for dom in total_per_domain:
+        n_mix = mixable_per_domain.get(dom, 0)
+        n_tot = total_per_domain[dom]
+        print(f"  {dom}: {n_mix}/{n_tot} samples have ≥1 feasible neighbor "
+              f"(same-shape, same AoA/Re bin)")
+
+    diag = {
+        f"mixable_{dom}": mixable_per_domain.get(dom, 0)
+        for dom in total_per_domain
+    }
+    diag.update({
+        f"total_{dom}": total_per_domain[dom] for dom in total_per_domain
+    })
+    return neighbor_idx, diag
+
+
+def _make_geomix_counters() -> dict[str, mp.Value]:
+    return {
+        "n_calls":         mp.Value("q", 0, lock=True),
+        "n_mix_attempt":   mp.Value("q", 0, lock=True),
+        "n_mix_exec":      mp.Value("q", 0, lock=True),
+        "n_no_neighbor":   mp.Value("q", 0, lock=True),
+        "n_topology_skip": mp.Value("q", 0, lock=True),
+        "sum_lam":         mp.Value("d", 0.0, lock=True),
+        "sum_delta_x_l2":  mp.Value("d", 0.0, lock=True),
+        "sum_delta_y_l2":  mp.Value("d", 0.0, lock=True),
+        "sum_delta_camber":mp.Value("d", 0.0, lock=True),
+    }
+
+
+def _reset_geomix_counters(counters: dict[str, mp.Value]) -> None:
+    for v in counters.values():
+        with v.get_lock():
+            v.value = 0
+
+
+def _read_geomix_counters(counters: dict[str, mp.Value]) -> dict[str, float]:
+    out: dict[str, float] = {}
+    for k, v in counters.items():
+        with v.get_lock():
+            out[k] = v.value
+    return out
+
+
+class GeoMixDataset(torch.utils.data.Dataset):
+    """Wraps a SplitDataset with within-domain camber interpolation.
+
+    With probability ``p_mix``, picks one of the precomputed k same-domain
+    same-(AoA,Re)-bin same-mesh-size neighbors of sample idx, draws λ ~
+    Beta(α, α), and returns (λ x_s + (1-λ) x_n, λ y_s + (1-λ) y_n, surf_s).
+    The shared multiprocessing counters track mix attempts/executions and
+    Δ-statistics so the train loop can verify mixing actually fires.
+    """
+
+    def __init__(self, base_ds, neighbor_idx, p_mix=0.15, alpha=2.0, counters=None):
+        self.base_ds = base_ds
+        self.neighbor_idx = neighbor_idx
+        self.p_mix = p_mix
+        self.alpha = alpha
+        self.counters = counters if counters is not None else _make_geomix_counters()
+
+    def __len__(self):
+        return len(self.base_ds)
+
+    @torch.no_grad()
+    def __getitem__(self, idx):
+        x_s, y_s, surf_s = self.base_ds[idx]
+
+        with self.counters["n_calls"].get_lock():
+            self.counters["n_calls"].value += 1
+
+        # Decide attempt — use stdlib random (cheap; per-worker RNG state).
+        if random.random() >= self.p_mix:
+            return x_s, y_s, surf_s
+
+        nbrs = self.neighbor_idx.get(idx, [])
+        if not nbrs:
+            with self.counters["n_no_neighbor"].get_lock():
+                self.counters["n_no_neighbor"].value += 1
+            return x_s, y_s, surf_s
+
+        with self.counters["n_mix_attempt"].get_lock():
+            self.counters["n_mix_attempt"].value += 1
+
+        nbr_idx = int(nbrs[random.randrange(len(nbrs))])
+        x_n, y_n, surf_n = self.base_ds[nbr_idx]
+
+        if x_n.shape[0] != x_s.shape[0]:
+            # Topology mismatch — neighbor index *should* filter these out,
+            # but guard at runtime in case the index was bypassed.
+            with self.counters["n_topology_skip"].get_lock():
+                self.counters["n_topology_skip"].value += 1
+            return x_s, y_s, surf_s
+
+        lam = random.betavariate(self.alpha, self.alpha)
+        x_mix = lam * x_s + (1.0 - lam) * x_n
+        y_mix = lam * y_s + (1.0 - lam) * y_n
+
+        # Per-element L2 (so larger meshes don't dominate)
+        n_elem_x = max(x_s.numel(), 1)
+        n_elem_y = max(y_s.numel(), 1)
+        delta_x = float((x_mix - x_s).norm() / math.sqrt(n_elem_x))
+        delta_y = float((y_mix - y_s).norm() / math.sqrt(n_elem_y))
+        delta_camber = abs(float(x_s[0, GEOMIX_CAMBER_DIM]) - float(x_n[0, GEOMIX_CAMBER_DIM]))
+
+        with self.counters["n_mix_exec"].get_lock():
+            self.counters["n_mix_exec"].value += 1
+        with self.counters["sum_lam"].get_lock():
+            self.counters["sum_lam"].value += lam
+        with self.counters["sum_delta_x_l2"].get_lock():
+            self.counters["sum_delta_x_l2"].value += delta_x
+        with self.counters["sum_delta_y_l2"].get_lock():
+            self.counters["sum_delta_y_l2"].value += delta_y
+        with self.counters["sum_delta_camber"].get_lock():
+            self.counters["sum_delta_camber"].value += delta_camber
+
+        # surf_s and surf_n share topology by construction; either works.
+        return x_mix, y_mix, surf_s
+
+
+# ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
 
@@ -566,6 +780,10 @@ class Config:
     lion_lr: float = 1e-4  # Lion lr; canonical: AdamW_lr / 3..10
     lion_wd: float = 1e-3  # Lion wd; canonical: AdamW_wd * 3..10
     use_qk_norm: bool = False  # ViT-22B-style LayerNorm(head_dim) on Q and K before SDPA
+    use_geomix: bool = False  # GeoMix: linearly interpolate same-domain same-(AoA,Re)-bin pairs by camber M
+    geomix_p: float = 0.15  # per-sample mix probability
+    geomix_alpha: float = 2.0  # Beta(α, α) distribution for λ — α=2 → mode at 0.5
+    geomix_k: int = 5  # number of nearest-camber neighbors to draw from
 
 
 cfg = sp.parse(Config)
@@ -578,15 +796,38 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
+# GeoMix: precompute per-sample same-domain same-(AoA,Re)-bin same-mesh-size
+# nearest-camber-M neighbor index, then wrap the train dataset.
+geomix_diag: dict[str, int] = {}
+geomix_counters: dict | None = None
+train_ds_for_loader = train_ds
+if cfg.use_geomix and not cfg.debug:
+    neighbor_idx, geomix_diag = build_geomix_index(train_ds, cfg.splits_dir, k=cfg.geomix_k)
+    geomix_counters = _make_geomix_counters()
+    train_ds_for_loader = GeoMixDataset(
+        train_ds, neighbor_idx,
+        p_mix=cfg.geomix_p, alpha=cfg.geomix_alpha, counters=geomix_counters,
+    )
+elif cfg.use_geomix and cfg.debug:
+    # In debug mode train_ds.files was truncated to 6 — neighbor groups would
+    # be empty; still wrap so the path is exercised, but most samples will
+    # fall through unmixed.
+    neighbor_idx, geomix_diag = build_geomix_index(train_ds, cfg.splits_dir, k=cfg.geomix_k)
+    geomix_counters = _make_geomix_counters()
+    train_ds_for_loader = GeoMixDataset(
+        train_ds, neighbor_idx,
+        p_mix=cfg.geomix_p, alpha=cfg.geomix_alpha, counters=geomix_counters,
+    )
+
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
 if cfg.debug:
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
+    train_loader = DataLoader(train_ds_for_loader, batch_size=cfg.batch_size,
                               shuffle=True, **loader_kwargs)
 else:
     sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
+    train_loader = DataLoader(train_ds_for_loader, batch_size=cfg.batch_size,
                               sampler=sampler, **loader_kwargs)
 
 val_loaders = {
@@ -656,6 +897,7 @@ run = wandb.init(
         "scheduler": "linear_warmup_then_cosine",
         "optimizer": "lion" if cfg.use_lion else "adamw",
         "lion_betas": (0.9, 0.99) if cfg.use_lion else None,
+        "geomix_diag": geomix_diag,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -682,6 +924,11 @@ for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
         break
+
+    # Reset GeoMix counters at the start of each epoch so per-epoch rates
+    # reflect *this* epoch, not lifetime totals.
+    if geomix_counters is not None:
+        _reset_geomix_counters(geomix_counters)
 
     t0 = time.time()
     model.train()
@@ -773,6 +1020,31 @@ for epoch in range(MAX_EPOCHS):
         for diag_key, diag_val in blk.attn._diag.items():
             log_metrics[f"qk_diag/layer_{layer_idx}/{diag_key}"] = diag_val
 
+    # GeoMix per-epoch diagnostics: mix rate, λ stats, Δ stats.
+    geomix_print = ""
+    if geomix_counters is not None:
+        gm = _read_geomix_counters(geomix_counters)
+        n_calls = max(gm["n_calls"], 1)
+        n_mix = gm["n_mix_exec"]
+        mix_rate = n_mix / n_calls
+        log_metrics["geomix/n_calls"] = gm["n_calls"]
+        log_metrics["geomix/n_mix_attempt"] = gm["n_mix_attempt"]
+        log_metrics["geomix/n_mix_exec"] = n_mix
+        log_metrics["geomix/n_no_neighbor"] = gm["n_no_neighbor"]
+        log_metrics["geomix/n_topology_skip"] = gm["n_topology_skip"]
+        log_metrics["geomix/mix_rate"] = mix_rate
+        if n_mix > 0:
+            log_metrics["geomix/mean_lam"] = gm["sum_lam"] / n_mix
+            log_metrics["geomix/mean_delta_x_l2"] = gm["sum_delta_x_l2"] / n_mix
+            log_metrics["geomix/mean_delta_y_l2"] = gm["sum_delta_y_l2"] / n_mix
+            log_metrics["geomix/mean_delta_camber"] = gm["sum_delta_camber"] / n_mix
+        geomix_print = (
+            f" geomix[rate={mix_rate:.3f} "
+            f"exec={int(n_mix)}/{int(gm['n_calls'])} "
+            f"no_nbr={int(gm['n_no_neighbor'])} "
+            f"topo_skip={int(gm['n_topology_skip'])}]"
+        )
+
     wandb.log(log_metrics)
 
     tag = ""
@@ -790,7 +1062,7 @@ for epoch in range(MAX_EPOCHS):
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p={avg_surf_p:.4f}{tag}{geomix_print}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
