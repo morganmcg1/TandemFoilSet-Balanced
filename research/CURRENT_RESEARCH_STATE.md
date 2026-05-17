@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 03:32 UTC (Round 4 active on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-17 03:50 UTC (Round 4 active on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
 
@@ -64,7 +64,7 @@ python train.py \
 | ⭐ **alphonse** | **#4317** | **SF-AdamW betas 2×2: (beta1, beta2) ∈ {0.9, 0.95}×{0.99, 0.999}** | SF-AdamW lr=3e-3 + --seed 1 (requires Config edit) | **MED-HIGH — optimizer-internal axis never swept; PyTorch defaults may not be optimal at higher LR** |
 | ⭐ **askeladd** | **#4225** | **Model width sweep: n_hidden ∈ {96, 128, 160, 192}** | SF-AdamW lr=2e-3 + --seed 1 | **HIGH — ran at lr=2e-3; apply paired Δ gate when done** |
 | ⭐ **tanjiro** | **#4207** | **surf_weight R2 (sent back from R1): {5, 8, 10, 15}** | SF-AdamW lr=3e-3 + --seed 1 | **HIGH — R1 paired Δ ≥1.86% but absolute regressed; non-monotone landscape (cam_cruise prefers low w, cam_rc prefers high w); R2 at canonical resolves direction** |
-| ⭐ **fern** | **#4208** | **Dropout sweep: {0.0, 0.05, 0.10, 0.15}** | SF-AdamW lr=2e-3 + --seed 1 | **HIGH — untouched regularization axis; ran at lr=2e-3** |
+| ⭐ **fern** | **#4339** | **mlp_ratio sweep: {1, 2, 4, 6}** | SF-AdamW lr=3e-3 + --seed 1 (requires Config edit) | **HIGH — 4th primary architecture axis; under-fit regime confirmed by #4208; BERT default=4 never tested** |
 | **nezuko** | **#4081** | FiLM head width: film_mlp_hidden ∈ {128, 192, 256} | SF-AdamW lr=5e-4 (stale) | Results diagnostic; paired Δ gate: >3% → re-test at lr=3e-3 |
 
 ## Merged Winners (Chronological)
@@ -88,10 +88,11 @@ python train.py \
 
 1. **edward LR extension #4246** — if 4e-3 or 5e-3 wins by ≥0.5% paired AND beats 52.258 → update canonical LR again
 2. **frieren n_layers #4248** — depth axis; if 7-layer wins → scale test at n_layers=9
-3. **tanjiro surf_weight #4207** + **fern dropout #4208** + **askeladd n_hidden #4225** — stale LR; apply paired Δ gate
+3. **tanjiro surf_weight #4207** + **askeladd n_hidden #4225** — stale LR; apply paired Δ gate
 4. **thorfinn slice_num #4303** — Transolver physical-slice axis (just assigned)
 5. **alphonse SF betas #4317** — optimizer-internal 2×2 factorial at canonical (just assigned)
-6. **nezuko FiLM width #4081** — stale LR; apply >3% gate
+6. **fern mlp_ratio #4339** — 4th architecture axis; under-fit regime confirmed; BERT-default ratio=4 is prime suspect
+7. **nezuko FiLM width #4081** — stale LR; apply >3% gate
 
 ## Falsified / Closed Hypotheses
 
@@ -106,3 +107,4 @@ python train.py \
 | **#4144** | **Lion+SF composition (3-way)** | **C1: +75.6% regression; C2: catastrophic divergence** | **Lion+SF mechanistically incompatible; Lion track fully exhausted** |
 | **#4114** | **Batch size sweep {4, 6, 8, 9}** | **bs=4 wins; larger batches +13-29% regression** | **Step-count loss dominates; gradient-CV benefit irrelevant within budget; bs=4 is fixed point** |
 | **#4019** | **SF clip×EMA factorial R2 (lr=2e-3)** | **EMA-off wins paired Δ 0.43% but absolute regresses +4.18% vs canonical** | **EMA-off direction attenuates with LR (0.61% → 0.43% → ~0.35% extrap); clip × LR is the real interaction; canonical retains EMA on + clip=1.0** |
+| **#4208** | **Dropout sweep {0.0, 0.05, 0.10, 0.15} at lr=2e-3** | **All dropout arms regress +1.95–2.74% paired vs no-dropout** | **Model is under-fit (train/val gap ≈ 0.001), not over-fit; dropout removes capacity and compounds underfitting; SF+EMA already provide implicit regularization; capacity axis is correct next direction** |

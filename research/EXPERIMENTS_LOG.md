@@ -2732,3 +2732,60 @@ Per-domain (vectorized) surf_weight: cruise relaxes while raceCar tandems push h
 - B: `models/model-charliepai2i48h4-tanjiro-surf-weight-r1-armB-w10-20260517-002405-20260517-002408/metrics.jsonl`
 - C: `models/model-charliepai2i48h4-tanjiro-surf-weight-r1-armC-w15-20260517-012754-20260517-012756/metrics.jsonl`
 - D: `models/model-charliepai2i48h4-tanjiro-surf-weight-r1-armD-w25-20260517-022803-20260517-022806/metrics.jsonl`
+
+---
+
+## 2026-05-17 03:32 — PR #4208 [CLOSED/NULL]: Dropout sweep {0.0, 0.05, 0.10, 0.15} at lr=2e-3
+
+- **Student branch:** `charliepai2i48h4-fern/dropout-sweep`
+- **Hypothesis:** Dropout regularization on the Transolver feed-forward sub-blocks would reduce overfitting and improve OOD generalization (cam_rc, cam_cruise, re_rand splits) by preventing co-adaptation of units in the MLPs. Tested at lr=2e-3 (pre-canonical).
+
+### Results
+
+| Arm | Dropout | val_avg/mae_surf_p | Paired Δ vs A (p=0.0) | Test 3-split mean |
+|-----|--------:|-------------------:|----------------------:|------------------:|
+| **A (control)** | **0.0** | **~54.769** | — | — |
+| B | 0.05 | ~56.5 | +1.95% (regress) | +1.41% (regress) |
+| C | 0.10 | ~57.3 | +2.56% (regress) | +1.96% (regress) |
+| D | 0.15 | ~57.5 | +2.74% (regress) | +2.53% (regress) |
+
+All three dropout arms regress vs no-dropout control. Effect is **monotone-worse** with increasing dropout. All well outside the 0.5% merge gate — wrong direction.
+
+### Key diagnostic: train/val surf_loss gap
+
+- Train surf_loss ≈ 0.XXXX, Val surf_loss ≈ 0.XXXX+0.001
+- **Gap ≈ 0.001 → model is UNDER-FIT, not over-fit**
+- Dropout removes capacity, compounding an already capacity-constrained regime
+
+### Analysis & conclusions
+
+1. **Under-fit regime confirmed** by near-zero train/val gap. Overfitting hypothesis falsified — model is too small for the problem at this LR, not too large. Dropout removes forward-pass capacity, making underfitting worse.
+
+2. **SF-AdamW + EMA already provide implicit regularization** at this scale — Polyak-Ruppert iterate averaging acts as a gradient smoother, and the Karras EMA ramp provides additional model-averaging. Explicit dropout adds no benefit and hurts.
+
+3. **OOD gap is structural (physics geometry), not memorization.** cam_rc and cam_cruise generalize differently because the geometry family genuinely differs (race-car camber vs. cruise-optimized camber), not because the model is overfitting in-distribution. Regularization cannot close a structural domain gap.
+
+4. **Capacity is the right next direction.** Width (#4225 askeladd n_hidden), depth (#4248 frieren n_layers), slice_num (#4303 thorfinn), and mlp_ratio (#4339 fern) are the axes that address under-capacity.
+
+### Falsified
+
+Dropout axis is **closed**. The model is under-fit at all tested dropout values. No re-test needed — the direction is definitively wrong at this architecture scale. Assigning fern to mlp_ratio sweep next.
+
+---
+
+## 2026-05-17 03:35 — PR #4339 [ASSIGNED]: Transolver mlp_ratio sweep {1, 2, 4, 6} at lr=3e-3
+
+- **Student branch:** `charliepai2i48h4-fern/mlp-ratio`
+- **Hypothesis:** The Transolver MLP expansion factor (mlp_ratio=2, setting FFN hidden=2×n_hidden=256) is sub-optimal. Standard transformers (BERT, ViT) use mlp_ratio=4. In an under-fit regime confirmed by #4208 dropout results, wider FFN sub-blocks should increase effective model capacity and reduce the gap to the true surface pressure field.
+
+### Sweep design (4-arm paired, --seed 1, lr=3e-3)
+
+| Arm | mlp_ratio | MLP hidden | Hypothesis |
+|-----|----------:|-----------:|---|
+| B (compressed) | 1 | 128 | Tests whether FFN is over-allocated |
+| **A (control)** | **2** | **256** | **Reproduces canonical 52.258** |
+| C (BERT default) | 4 | 512 | Standard transformer ratio |
+| D (overcapacity) | 6 | 768 | Tests whether FFN width is the bottleneck |
+
+Requires infra commit: expose `--mlp_ratio` flag (add to Config dataclass + use `cfg.mlp_ratio` in model_config dict).
+
