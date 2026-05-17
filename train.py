@@ -459,6 +459,7 @@ class Config:
     ema_decay: float = 0.999
     compile_mode: str = ""  # empty = no compile (baseline behavior)
     slice_num: int = 64
+    point_subsample_keep_rate: float = 1.0  # 1.0 = no augmentation; <1.0 = drop non-surface points each step
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -536,6 +537,10 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
 
+if cfg.point_subsample_keep_rate < 1.0:
+    print(f"[augmentation] point_subsample keep_rate={cfg.point_subsample_keep_rate} (non-surface only)")
+_subsample_log_steps_remaining = 10  # log dropped-point stats for the first 10 steps
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -554,6 +559,23 @@ for epoch in range(MAX_EPOCHS):
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        # Point subsampling augmentation — training only. Drops a random subset
+        # of non-surface (volume) points each step so the model sees a different
+        # point-cloud sample of the same CFD field. Surface points are always
+        # kept (they dominate the surf_weight=25 loss).
+        if cfg.point_subsample_keep_rate < 1.0:
+            drop_threshold = 1.0 - cfg.point_subsample_keep_rate
+            rand = torch.rand_like(mask, dtype=torch.float32)
+            keep = is_surface | (rand > drop_threshold)
+            new_mask = mask & keep
+            if _subsample_log_steps_remaining > 0:
+                vol_before = int((mask & ~is_surface).sum().item())
+                vol_after = int((new_mask & ~is_surface).sum().item())
+                dropped = vol_before - vol_after
+                print(f"[augmentation] step={n_batches+1} vol_before={vol_before} vol_after={vol_after} dropped={dropped} ({dropped/max(vol_before,1):.3f})")
+                _subsample_log_steps_remaining -= 1
+            mask = new_mask
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
