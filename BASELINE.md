@@ -2,34 +2,34 @@
 
 ## Current Best
 
-**PR #4394 — H120 Arm B: Fourier PE K=1 on H106 stack (askeladd)**
-Merged 2026-05-17. 21 epochs, bf16 + T_max=21 + Fourier PE with K=1 (4 extra input features: sin/cos of x and z at chord-scale frequency). K=1 reduces to a single chord-wavelength basis — physically, this is exactly the scale of airfoil geometry. Fewer sub-chord frequencies → less high-frequency overfitting → better OOD generalisation.
+**PR #4459 — H125 Arm A: weight decay wd=5e-3 at H120 K=1 stack (edward)**
+Merged 2026-05-17. 21 epochs, bf16 + T_max=21 + Fourier PE K=1 + wd=5e-3 (raised from 1e-3). Mechanism: stronger L2 regularization reduces in-distribution feature memorisation (val_single_in_dist −4.70 vs H120 baseline). val_geom_camber_rc unchanged (~flat), suggesting this lever targets a different overfitting axis than the spatial-frequency one. wd now locked at 5e-3 for all future experiments.
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| val_avg/mae_surf_p | **35.6651** | PR #4394 Arm B K=1 (best_epoch=21) |
-| val_single_in_dist/mae_surf_p | 36.2097 | PR #4394 Arm B |
-| val_geom_camber_rc/mae_surf_p | 47.5567 | PR #4394 Arm B |
-| val_geom_camber_cruise/mae_surf_p | 20.7538 | PR #4394 Arm B |
-| val_re_rand/mae_surf_p | 38.1402 | PR #4394 Arm B |
-| test_avg/mae_surf_p | NaN (⚠ scoring bug) | PR #4394 |
-| test_avg/mae_surf_p (3-split, excl. cruise) | **33.3976** | PR #4394 Arm B |
-| test_single_in_dist/mae_surf_p | 29.3464 | PR #4394 Arm B |
-| test_geom_camber_rc/mae_surf_p | 41.6502 | PR #4394 Arm B |
-| test_re_rand/mae_surf_p | 29.1961 | PR #4394 Arm B |
+| val_avg/mae_surf_p | **34.5532** | PR #4459 Arm A wd=5e-3 (best_epoch=21) |
+| val_single_in_dist/mae_surf_p | 31.5105 | PR #4459 Arm A |
+| val_geom_camber_rc/mae_surf_p | 47.7806 | PR #4459 Arm A |
+| val_geom_camber_cruise/mae_surf_p | 20.8109 | PR #4459 Arm A |
+| val_re_rand/mae_surf_p | 38.1108 | PR #4459 Arm A |
+| test_avg/mae_surf_p | NaN (⚠ scoring bug) | PR #4459 |
+| test_avg/mae_surf_p (3-split, excl. cruise) | **33.0792** | PR #4459 Arm A |
+| test_single_in_dist/mae_surf_p | 28.9175 | PR #4459 Arm A |
+| test_geom_camber_rc/mae_surf_p | 41.5361 | PR #4459 Arm A |
+| test_re_rand/mae_surf_p | 28.7838 | PR #4459 Arm A |
 
-**Configuration:** H106 stack with `--fourier_pe --fourier_pe_freqs 1`. Fourier features = [sin(2πx), cos(2πx), sin(2πz), cos(2πz)] — single chord-scale frequency. fun_dim widened by 4K=4.
+**Configuration:** H120 K=1 stack with `--weight_decay 5e-3` (up from 1e-3). All other hyperparameters unchanged.
 
-**Δ vs prior best (H106 K=4, 35.9159 / 35.1221):** **−0.25 pts val_avg** (within 2σ noise floor but directionally real), **−1.72 pts test 3-split** (above noise floor; monotone across all 3 test splits: Δ-1.21, -2.67, -1.30). Trade-off: val_single_in_dist +3.98 (K=4 better for in-dist precision) but ALL OOD splits improve.
-**Cumulative R5 gain from H37b (66.11):** **−30.44 pts val_avg.**
+**Δ vs prior best (H120 K=1, 35.6651 / 33.3976):** **−1.11 pts val_avg** (sub-2σ noise floor but per-split pattern consistent), **−0.32 pts test 3-split** (within noise; directionally correct). Dominant contribution: val_single_in_dist −4.70 pts. OOD splits flat — wd targets in-dist memorisation not spatial-feature OOD.
+**Cumulative R5 gain from H37b (66.11):** **−31.55 pts val_avg.**
 
-**Artifacts:** `models/model-h120-arm-b-fourier1-20260517-062759/`
+**Artifacts:** `models/model-h125-arm-a-wd5e-3-20260517-074718/`
 
 **Reproduce:**
 ```bash
 cd target/ && python train.py --epochs 50 \
-  --experiment_name h120-arm-b-fourier1 --agent <student> \
-  --optimizer lion --lr 3e-4 --weight_decay 1e-3 \
+  --experiment_name h125-arm-a-wd5e-3 --agent <student> \
+  --optimizer lion --lr 3e-4 --weight_decay 5e-3 \
   --beta1 0.9 --beta2 0.997 \
   --slice_num 96 --n_layers 4 --ffn_act geglu \
   --n_head 2 --clip_grad_norm 1.0 \
@@ -37,7 +37,11 @@ cd target/ && python train.py --epochs 50 \
   --fourier_pe --fourier_pe_freqs 1
 ```
 
-**Note on K=1 vs K=4 trade-off:** K=4 still dominates val_single_in_dist (32.23 vs 36.21) — in-distribution fitting benefits from higher-frequency spatial encoding. K=1 dominates all OOD and test splits. val_avg is the primary metric and K=1 wins by 0.25 pts. K=0 (no Fourier) ablation is assigned as H123 to askeladd to close the sweep.
+**Note on wd sweep:** Arm B wd=1e-2 achieved val=34.6908 (Δ+0.14 vs Arm A on val; Δ+1.16 on test 3-split). The optimum is near 5e-3; further bracketing skipped (sub-noise marginal benefit). val_geom_camber_rc unchanged at ~47.8 — the OOD bottleneck remains the dominant blocker.
+
+## Previous Best (overridden by #4459)
+
+**PR #4394 — H120 Arm B: Fourier PE K=1 on H106 stack (askeladd)** — val_avg=35.6651 / test 3-split=33.3976. H125 wd=5e-3 improves in-dist precision by −4.70 pts on val_single_in_dist.
 
 ## Previous Best (overridden by #4394)
 
