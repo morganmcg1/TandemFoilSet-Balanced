@@ -1,5 +1,37 @@
 # SENPAI Research Results
 
+## 2026-05-17 09:30 — #4437 #4408 CLOSED (Findings #51-52: σ_T22 calibrated, Lion β2 axis closed); fern→#4507 (R13 H93 spec_norm-input), frieren→#4508 (R13 H94 n_fourier)
+
+### #4437 fern — R13 H87: Multi-seed BL replication at T_max=22 (CLOSED — Finding #51)
+
+| Seed | run | val_avg | test_avg |
+|------|-----|---------|----------|
+| default | 1neonugr (BL) | 49.75 | 42.89 |
+| 42 | 8dk4iz9o | 52.28 | 44.71 |
+| 2026 | 3yejdq4x | 54.29 | 45.99 |
+
+3-seed mean: val 52.11, test 44.53. σ_val ≈ 1.86, σ_test ≈ 1.27.
+
+**Finding #51**: σ_T22 ≈ 1.86 val / 1.27 test (slightly noisier than σ_T20=1.70). BL `1neonugr` (49.75) at z=-1.27σ from mean — seed-lucky. True T_max=22 mean ~52.1. Merge-threshold update: gains below 2 val from BL are likely noise-floor; gains ≥3 val above BL are robust signal. Student ran duplicate seed=42 arms (unnecessary).
+
+New assignment: fern → #4507 (R13 H93 spec_norm INPUT at T_max=22).
+
+---
+
+### #4408 frieren — R13 H82: Lion β2 {0.95, 0.995} at T_max=22 (CLOSED — Finding #52)
+
+| Arm | β2 | run | val_avg | test_avg | Δ val vs BL |
+|-----|----|-----|---------|----------|---|
+| BL | 0.99 | 1neonugr | 49.75 | 42.89 | — |
+| A | 0.95 | c0b23lww | 60.98 | 52.65 | **+11.23** ✗ (catastrophic) |
+| B | 0.995 | 0pp7ts6p | 56.21 | 47.77 | **+6.46** ✗ |
+
+**Finding #52**: Lion β2 axis closed at T_max=22. β2=0.99 robustly optimal. β2=0.95 catastrophic (too-noisy gradient variance); β2=0.995 significant regression (too-slow variance update). Combined with Finding #44, **Lion optimizer-state hyperparameters fully pinned across all substrates**: β1=0.9, β2=0.99. Student ran duplicate β2=0.95 arms.
+
+New assignment: frieren → #4508 (R13 H94 n_fourier=8 {σ=5, σ=10} at T_max=22).
+
+---
+
 ## 2026-05-17 09:15 — #4434 #4436 CLOSED (Findings #49-50: Huber β and wd compositions fail@T_max=22); alphonse→#4503 (R13 H91 Huber β-down), edward→#4505 (R13 H92 spec_norm)
 
 ### #4434 alphonse — R13 H85: Huber β {0.10, 0.15} at T_max=22 (CLOSED — Finding #49)

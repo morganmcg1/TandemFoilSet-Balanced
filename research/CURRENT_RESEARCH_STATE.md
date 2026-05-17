@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-17 (~09:15 UTC) — #4434 #4436 CLOSED (Findings #49-50: Huber β and wd compositions fail@T_max=22). alphonse→#4503 (R13 H91), edward→#4505 (R13 H92). All 8 students staffed.
+- **Date:** 2026-05-17 (~09:30 UTC) — #4437 #4408 CLOSED (Findings #51-52: σ_T22=1.86, Lion β2 axis closed). fern→#4507 (R13 H93 spec_norm-in), frieren→#4508 (R13 H94 n_fourier). All 8 students staffed. ~4.5h left in launch.
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
@@ -51,14 +51,14 @@ Key mechanism: Lower cosine-endpoint LR at T_max=22 (~1.24e-4 within 14 epochs v
 
 | PR | Student | Hypothesis | Status | Substrate |
 |----|---------|------------|--------|-----------|
-| **#4503** | **alphonse** | **R13 H91: Huber β downward {0.03, 0.04} at T_max=22 (L1-direction per student hint)** | **Just assigned** | T_max=22 — Huber β downward |
-| **#4505** | **edward** | **R13 H92: spec_norm output at T_max=22 (close Finding #13 at new substrate)** | **Just assigned** | T_max=22 — spec_norm axis |
-| **#4495** | **askeladd** | **R13 H90: ls upward {2e-4, 3e-4} at T_max=22 (faster residual ramp)** | In flight | T_max=22 — ls upward axis |
-| **#4470** | **tanjiro** | **R13 H88: batch_size {2, 8} at T_max=22 (fresh axis, never swept)** | In flight | T_max=22 — batch-size axis |
-| **#4471** | **thorfinn** | **R13 H89: lr {1.5e-4, 1.7e-4} at T_max=22 (downward probe, 5-pt grid)** | In flight | T_max=22 — lr axis |
-| **#4437** | **fern** | **R13 H87: Multi-seed BL replication at T_max=22 (σ calibration — CRITICAL)** | In flight | T_max=22 — σ calibration |
-| **#4420** | **nezuko** | **R13 H84: surf_weight {15, 20} at T_max=22** | In flight | T_max=22 — loss-weighting axis |
-| **#4408** | **frieren** | **R13 H82: Lion β2 {0.95, 0.995} at T_max=22** | In flight (GPU 100%) | T_max=22 — optimizer-state axis |
+| **#4507** | **fern** | **R13 H93: spec_norm INPUT {pi=1, pi=3} at T_max=22** | **Just assigned** | T_max=22 — spec_norm input |
+| **#4508** | **frieren** | **R13 H94: n_fourier=8 {σ=5, σ=10} at T_max=22** | **Just assigned** | T_max=22 — n_fourier axis |
+| **#4503** | **alphonse** | **R13 H91: Huber β downward {0.03, 0.04} at T_max=22** | In flight | T_max=22 — Huber β downward |
+| **#4505** | **edward** | **R13 H92: spec_norm OUTPUT {pi=1, pi=3} at T_max=22** | In flight | T_max=22 — spec_norm output |
+| **#4495** | **askeladd** | **R13 H90: ls upward {2e-4, 3e-4} at T_max=22** | In flight | T_max=22 — ls upward |
+| **#4470** | **tanjiro** | **R13 H88: batch_size {2, 8} at T_max=22** | In flight | T_max=22 — batch-size |
+| **#4471** | **thorfinn** | **R13 H89: lr {1.5e-4, 1.7e-4} at T_max=22** | In flight | T_max=22 — lr downward |
+| **#4420** | **nezuko** | **R13 H84: surf_weight {15, 20} at T_max=22** | In flight | T_max=22 — surf_weight |
 
 **All 8 students at T_max=22 substrate.** R13 in full swing.
 
@@ -82,6 +82,8 @@ Key mechanism: Lower cosine-endpoint LR at T_max=22 (~1.24e-4 within 14 epochs v
 
 | PR | Student | Result | Note |
 |----|---------|--------|------|
+| #4437 | fern | 3-seed σ-calib at T_max=22: seeds 42/2026/default → mean 52.11, σ_val=1.86. **Finding #51**: BL seed-lucky (z=-1.27σ). Merge threshold: ≥3 val above BL = robust. | CLOSED |
+| #4408 | frieren | Lion β2 {0.95, 0.995}: β2=0.95 +11.23, β2=0.995 +6.46. **Finding #52**: β2 axis closed — β2=0.99 optimal; Lion optimizer-state fully pinned. | CLOSED |
 | #4434 | alphonse | Huber β {0.10, 0.15} at T_max=22: +2.69/+2.21 val. **Finding #49**: Huber β upward fails — cruise inverts. Downward probe in flight (#4503). | CLOSED |
 | #4436 | edward | wd {2e-3, 3e-3} at T_max=22: +3.63/+2.27 val. **Finding #50**: wd upward fails — cruise inverts. Spec_norm orthogonal in flight (#4505). | CLOSED |
 | #4419 | askeladd | ls {5e-5, 1e-5} at T_max=22: +3.10/+4.48 val. **Finding #48**: ls smaller direction inverts at T_max=22 — faster residual ramp needed under truncation. Upward probe in flight (#4495). | CLOSED |
@@ -103,7 +105,7 @@ Key mechanism: Lower cosine-endpoint LR at T_max=22 (~1.24e-4 within 14 epochs v
 | #4231 | tanjiro | LR recalibration: lr=1.7e-4 directional winner at old substrate. Test regresses vs new BL. **Finding #32**: LR finding for follow-up at new BL → #4315. | CLOSED |
 | #4214 | frieren | EMA@layer_scale+T_max=20: timeout-truncated. **Finding #28**: layer_scale stabilises ema=0.999 but slow. | CLOSED |
 
-## Key findings (cumulative, 50)
+## Key findings (cumulative, 52)
 
 1. **FiLM on log(Re)** contributes −4.35 val / −4.56 test under n_fourier=0.
 2. **EMA(0.997)** contributes +4.4 val on top of Lion.
@@ -143,6 +145,8 @@ Key mechanism: Lower cosine-endpoint LR at T_max=22 (~1.24e-4 within 14 epochs v
 36. **lr=1.5e-4 is a SHARP local minimum at T_max=24+clip+no-ls**: all wider LR arms ({1.3, 1.7, 2.0}×1e-4) regress ≥2.2 val. Finding #22 (clip shifts lr optimum to 2e-4 at T_max=14) does NOT generalize to T_max=24; elevated late-schedule LR at T_max=24 already provides effective high-LR. LR axis fully closed at old substrate.
 37. **T_max=22 is the new optimum — first sub-50 val, camber_cruise regression fixed**: lower cosine-endpoint LR (~1.24e-4 at epoch 14) vs T_max=20 (~1.34e-4) gives the small-gradient cruise domain better convergence. Win is broad-based (all 4 val splits, 3 of 4 test). T_max=16 regresses (+1.97 val) confirming the mechanism: higher time-averaged LR (more T_max) is beneficial IF the endpoint LR is simultaneously lower. Safe range with ls: T_max ∈ [20, 22]; T_max=24 diverges (Finding #33). Follow-up: T_max=23 cliff-edge probe (#4372).
 38. **EMA axis closed at new BL substrate** (T_max=20+ls+clip+lr=2e-4): ema=0.995 regresses +1.48 val, ema=0.999 catastrophically bad +6.46 val (worst on ALL 4 splits). Root cause: 13-epoch wall-clock budget means ema=0.999's long averaging window is dominated by early-training weights — starvation-bottlenecked, not stability-bottlenecked. Layer_scale does NOT allow ema=0.999 to compete within this budget. EMA axis robustly closed across all 3 substrates (Findings #28+#34+#38): ema=0.997 is the optimum everywhere.
+52. **Lion β2 axis closed at T_max=22** (Finding #52, frieren #4408): β2=0.95 catastrophic (+11.23 val), β2=0.995 regresses (+6.46 val). Combined with Finding #44 (β1 axis), **Lion optimizer-state fully pinned**: β1=0.9, β2=0.99 optimal across all substrates. n_fourier axis test in flight (#4508).
+51. **σ_T22 ≈ 1.86 val / 1.27 test** (Finding #51, fern #4437): 3-seed mean val 52.11, test 44.53. BL `1neonugr` (49.75) at z=-1.27σ from mean — seed-lucky. Merge-threshold update: <2 val gain = noise, ≥3 val = robust. Slightly noisier than σ_T20=1.70 (Finding #45).
 50. **wd upward composition fails at T_max=22** (Finding #50, edward #4436): wd=2e-3 +3.63 val, wd=3e-3 +2.27 val. cruise inverts (+4.09/+2.79 — opposite of Finding #42). T_max=22 already absorbed the regularization budget that wd=2e-3 was providing. 4th consecutive meta-finding: T_max=20 directional wins don't compose at T_max=22. Spec_norm orthogonal axis in flight (#4505).
 49. **Huber β upward composition fails at T_max=22** (Finding #49, alphonse #4434): β=0.10 +2.69 val, β=0.15 +2.21 val. cruise inverts (+2.94/+2.59 — opposite of Finding #43). Mechanism: T_max=22 higher mean lr × wider Huber L2 region = over-emphasis on small residuals. β=0.05 correctly matches T_max=22. Student hint: β smaller direction may work → downward probe in flight (#4503).
 48. **ls smaller-direction inverts at T_max=22** (Finding #48, askeladd #4419): ls=5e-5 +3.10 val, ls=1e-5 +4.48 val. Arm-vs-arm: ls=1e-4 > ls=5e-5 > ls=1e-5. camber_rc regression worsens monotonically with smaller ls (+3.06, +5.09 val). Root cause: smaller ls slows residual ramp; under T_max=22's 13-epoch truncation, residual capacity comes online too slowly. Opposite direction (ls={2e-4, 3e-4}) now in flight (#4495) — 'faster residual ramp' mechanism.
