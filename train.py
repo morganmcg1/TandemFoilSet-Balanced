@@ -49,6 +49,34 @@ from data import (
 from soap import SOAP
 
 # ---------------------------------------------------------------------------
+# Input augmentation
+# ---------------------------------------------------------------------------
+
+# Index of log(Re) in the X_DIM=24 input feature vector. NeRF-style sin/cos
+# bands of this scalar give the MLP explicit multi-frequency access to
+# Reynolds-dependent multi-scale flow structure (Tancik et al., NeurIPS 2020).
+LOG_RE_INDEX = 13
+
+
+def add_log_re_sinusoidal(
+    x_norm: torch.Tensor, x_raw: torch.Tensor, num_freqs: int
+) -> torch.Tensor:
+    """Append sin/cos embedding of raw log(Re) to the normalized input.
+
+    Frequencies are ``pi * 2^k`` for ``k in [0, num_freqs)``. We read log-Re
+    from the *raw* (pre-normalization) ``x`` so frequencies live in physical
+    log-Re units; the resulting 2*num_freqs sin/cos channels are already in
+    [-1, 1] and need no extra normalization stats.
+    """
+    if num_freqs <= 0:
+        return x_norm
+    log_re = x_raw[:, :, LOG_RE_INDEX:LOG_RE_INDEX + 1]  # (B, N, 1)
+    freqs = 2.0 ** torch.arange(num_freqs, device=x_norm.device, dtype=x_norm.dtype) * torch.pi
+    angles = log_re * freqs.view(1, 1, -1)  # (B, N, num_freqs)
+    return torch.cat([x_norm, torch.sin(angles), torch.cos(angles)], dim=-1)
+
+
+# ---------------------------------------------------------------------------
 # EMA helper
 # ---------------------------------------------------------------------------
 
@@ -291,7 +319,7 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, log_re_freqs: int = 0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -311,6 +339,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            x_norm = add_log_re_sinusoidal(x_norm, x, log_re_freqs)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
@@ -475,6 +504,8 @@ class Config:
     use_bf16: bool = False   # bfloat16 autocast for forward+loss; default off for reproducibility
     slice_num: int = 64      # PR #4296: Transolver PhysicsAttention slice_num (canonical 64)
     n_head: int = 4          # PR #4348: Transolver PhysicsAttention heads (n_hidden must be divisible)
+    log_re_freqs: int = 0    # NeRF-style sinusoidal embedding for log-Re (0 = disabled) — PR #3415
+    wandb_tag: str | None = None  # extra W&B tag appended to the run — PR #3415
 
 
 cfg = sp.parse(Config)
@@ -514,7 +545,7 @@ val_loaders = {
 
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    fun_dim=X_DIM - 2 + 2 * cfg.log_re_freqs,  # +2*F for log-Re sin/cos augmentation (PR #3415)
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -578,7 +609,7 @@ run = wandb.init(
     project=os.environ.get("WANDB_PROJECT"),
     group=cfg.wandb_group,
     name=cfg.wandb_name,
-    tags=[cfg.agent] if cfg.agent else [],
+    tags=([cfg.agent] if cfg.agent else []) + ([cfg.wandb_tag] if cfg.wandb_tag else []),
     config={
         **asdict(cfg),
         "model_config": model_config,
@@ -626,6 +657,7 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
+        x_norm = add_log_re_sinusoidal(x_norm, x, cfg.log_re_freqs)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=cfg.use_bf16):
             pred = model({"x": x_norm})["preds"]
@@ -676,7 +708,7 @@ for epoch in range(MAX_EPOCHS):
     eval_model = ema.ema_model if ema is not None else model
     eval_model.eval()
     split_metrics = {
-        name: evaluate_split(eval_model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(eval_model, loader, stats, cfg.surf_weight, device, cfg.log_re_freqs)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -748,7 +780,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.log_re_freqs)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
