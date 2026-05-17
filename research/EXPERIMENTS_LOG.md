@@ -2023,3 +2023,93 @@ Note: both #4186 and #4155 were trained on the **old pre-SF baseline** since the
 | #4397 | thorfinn | n_hidden=144 — softer +12.5% capacity step (budget-feasible) | architecture |
 | #4398 | frieren | gradient clipping max_grad_norm=1.0 — fresh untested stability axis | optim |
 | #4399 | tanjiro | Asymmetric FFN: mlp_ratio=3 on last block only — capture cruise gain, preserve depth | architecture |
+
+## 2026-05-17 07:00 — R28 BATCH: MAJOR WIN (grad_clip +6.8%), noise recalibration, 7 new assignments
+
+---
+
+## 2026-05-17 07:00 — PR #4398 — Gradient Clipping max_norm=1.0 *** MERGED WIN ***
+
+- **Branch:** `charliepai2i48h1-frieren/grad-clip-1p0`
+- **Hypothesis:** Fresh untested stability axis. bf16 + GEGLU + 983k params may produce large gradient outliers.
+- **Results:**
+
+| Metric | Baseline (36.13) | **Grad Clip (33.68)** | Δ |
+|--------|-----------------|----------------------|---|
+| val_avg/mae_surf_p | 36.13 | **33.6757** | **−2.45 (−6.8%)** |
+| test_avg/mae_surf_p | 31.97 | **29.6535** | **−2.32 (−7.3%)** |
+| val_single_in_dist | 36.67 | **31.858** | **−4.81** |
+| val_geom_camber_rc | 48.15 | 48.254 | +0.10 (unchanged) |
+| val_geom_camber_cruise | 21.37 | **17.771** | **−3.60** |
+| val_re_rand | 38.34 | **36.820** | **−1.52** |
+
+- **Metrics path:** `models/model-charliepai2i48h1-frieren-grad-clip-1p0-20260517-055140/metrics.jsonl`
+- **Critical diagnostic — gradient norms:** Pre-clip mean 25–70, p50 20–64, p99 100–177, max up to 262. Clip activated 374–375/375 steps every epoch (~100% activation rate). Max_norm=1.0 is NOT an outlier safety net; it's a near-deterministic step-size cap.
+- **THE HIDDEN BOTTLENECK:** The entire stack was training with gradient norms 20–250 per step throughout all rounds. SF AdamW's second-moment EMA was being whacked by extreme outliers constantly, destabilizing the adaptive step size for the entire training duration.
+- **rc-split exception**: Only +0.10 improvement. While all other splits gained 1.5–4.8 pts, rc is unaffected. This conclusively separates "gradient instability" from "rc-split structural failure" — they're independent problems.
+- **Decision:** MERGED — 6.8% improvement, −5σ from 3-seed mean. New baseline val=33.68.
+
+---
+
+## 2026-05-17 07:00 — PR #4342 — 3-seed baseline confirmation (CLOSED — analysis)
+
+- **Branch:** `charliepai2i48h1-askeladd/3-seed-baseline-confirmation`
+- **Hypothesis:** Calibrate single-seed variance of PR #4282 (val=36.13).
+- **Results (3 seeds on pre-grad-clip stack):**
+
+| | seed-1 | seed-2 | seed-3 | **mean** | **std** |
+|--|--------|--------|--------|---------|---------|
+| val_avg | 37.43 | 37.67 | 36.51 | **37.20** | **0.62** |
+| test_avg | 33.02 | 32.10 | 31.91 | **32.34** | **0.60** |
+
+- **CRITICAL FINDING:** Single-seed variance is σ=0.62 pts — NOT ±5-10 pts as BASELINE.md stated. PR #4282's val=36.13 was 1.7σ below the 3-seed mean of 37.20 — a lucky seed draw. Decision threshold recalibrated: 2σ clear-win = 1.2 pts, clear-regression = 1.2 pts above current baseline.
+- **IMPACT:** Multiple recently-closed experiments that landed near 36.13 were within noise rather than genuine regressions. E.g., edward lr=7.5e-4 (36.54 = 0.5σ above mean = tie), fern asym FFN (36.76 = 0.6σ above mean = tie).
+- **Decision:** CLOSED (not a win). Insights incorporated into BASELINE.md.
+
+---
+
+## 2026-05-17 07:00 — PR #4381 — drop_path p=0.1 (CLOSED — clear regression)
+
+val=42.23 (+6.10 = +17% above old baseline 36.13, +25% above new baseline 33.68). ALL splits regressed 4-7 pts. Drop_path is too aggressive at p=0.1 for n_layers=5 (equivalent to ~drop_path=0.5 in a 20-layer ViT in relative disruption terms). RC-split specifically got worse (+6.75 pts) — confirming rc failure is structural/capacity, not regularization. **Block-level structural reg axis CLOSED at p=0.1.** Student correctly self-diagnosed.
+
+---
+
+## 2026-05-17 07:00 — PR #4364 — surf_weight {15, 20} (CLOSED — upward direction regression)
+
+| | sw=10 (base) | sw=15 | sw=20 |
+|--|-------------|-------|-------|
+| val_avg | 36.13 | 36.81 (+0.68) | 37.12 (+0.99) |
+
+Monotone upward regression. Shared encoder under-fits volume features at higher surface weight; rc-split (+1.49, +1.53) and re_rand (+1.55) degraded. Only cruise improved (−0.53, −1.33). Upward direction CLOSED. Downward probe {5, 7} assigned to fern on grad-clip stack (#4444).
+
+---
+
+## 2026-05-17 07:00 — PR #4399 — Asymmetric FFN last-block (CLOSED — pre-clip; retesting on new stack)
+
+val=36.75 (+0.62 vs old baseline 36.13, +3.07 vs new baseline 33.68). **But**: val=36.75 is within noise of old baseline (σ=0.62, so +0.62 = +1σ). Cruise split validated: −3.7% improvement (20.59 vs 21.37). Code implementation confirmed: non-uniform block widths compile cleanly. **Retesting on grad-clip stack (tanjiro #4442)** — all other splits may improve with stable gradients.
+
+---
+
+## 2026-05-17 07:00 — PR #4397 — n_hidden=144 (CLOSED — pre-clip; retesting on new stack)
+
+val=36.80, 32 epochs reached (55s/epoch). **Decisive trajectory:** final epoch Δ = −0.743 (steepest descent of the entire run). Extrapolation: epoch 33 would have crossed 36.13. Compute-bound, not capacity-failure. Cruise already won (−0.27) through instability. **Retesting on grad-clip stack (thorfinn #4441)** — stable gradients should accelerate convergence and improve budget efficiency.
+
+---
+
+## 2026-05-17 07:00 — PR #4314 — lr sweep {3e-4, 7.5e-4} (CLOSED — pre-clip; retesting on new stack)
+
+Old stack: lr=3e-4 val=38.51 (+6.6%), lr=7.5e-4 val=36.54 (+1.1% vs 36.13 old baseline, within noise; test −1.4% improved). The optimal LR on the unstable stack is fundamentally different from optimal LR on stable stack. **Retesting on grad-clip stack (edward #4443, {6e-4, 7.5e-4} arms).**
+
+---
+
+### R28 New Assignments (7 students — all on grad-clip stack)
+
+| PR | Student | Hypothesis | Theme |
+|----|---------|------------|-------|
+| #4440 | frieren | 3-seed confirmation of new grad-clip stack | validation |
+| #4441 | thorfinn | n_hidden=144 + grad_clip — capacity push on stable stack | architecture |
+| #4442 | tanjiro | Asymmetric FFN last-block + grad_clip — retest cruise gain | architecture |
+| #4443 | edward | lr sweep {6e-4, 7.5e-4} on grad-clip stack | optim |
+| #4444 | fern | surf_weight {5, 7} downward on grad-clip stack | loss |
+| #4445 | nezuko | grad_clip rate {0.5, 2.0} — explore max_norm axis | optim |
+| #4446 | askeladd | EMA decay {0.995, 0.999} retest on grad-clip stack | optim |
