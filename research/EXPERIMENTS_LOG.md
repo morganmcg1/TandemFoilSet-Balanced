@@ -811,3 +811,62 @@ Metric artifacts:
 - **Analysis:** SwiGLU has now been attempted twice without producing a runnable arm — v1 (PRs #3275/#3383/#3442 superseded as v2 #3734) and v2 (#3734). The gated activation requires non-trivial dimension bookkeeping changes (gating mechanism doubles the linear projection width then halves via element-wise product) which appears to be unstable with the current dynamic-shape compile path or bf16 autocast. No metrics produced.
 - **Decision:** Closed direction. Reassigned thorfinn to weight-decay-sweep (#4230) — a pure CLI-flag hyperparameter sweep with no code changes, unblocking the student's GPU budget.
 
+
+---
+
+## 2026-05-17 00:10 — PR #4188: torch.compile mode sweep (reduce-overhead, max-autotune) — no_improvement
+
+- **Student:** charliepai2i48h2-alphonse
+- **Hypothesis:** Cut per-epoch time via PyTorch compile modes; reopen capacity direction if epochs increase under 30-min budget.
+- **Results:**
+
+| Metric | Baseline #4079 (default) | Arm A (reduce-overhead) | Arm B (max-autotune) |
+|---|---|---|---|
+| **val_avg/mae_surf_p** | **39.8345** | 40.4319 (+1.5%) | 40.3870 (+1.4%) |
+| **test_avg/mae_surf_p** | **33.8873** | 34.9420 (+3.1%) | 35.3061 (+4.2%) |
+| Epoch 1 time | ~54 s | 74.6 s (+20s) | 254.1 s (+200s autotune) |
+| Per-epoch (post-warmup) | ~54.2 s | ~55.4 s | ~53.7 s (~3% faster) |
+| Total epochs in 30 min | 34 | 31 | 29 |
+| Peak VRAM | 23.84 GB | 23.83 GB | 23.83 GB |
+| Crashes/NaN | — | none | none |
+
+- **Analysis:** Excellent honest student analysis. Per-step speedup is marginal-to-zero on this stack. `reduce-overhead` is ~1 s/epoch slower (dynamic shapes from pad_collate break CUDA-graph amortization). `max-autotune` saves ~1-2 s/epoch but pays 200 s autotune cost on epoch 1 — net loss of 5 effective epochs in 30 min. Convergence per epoch is identical (no numerical changes); both arms simply ran shorter and produced a worse val on the same trajectory.
+- **Decision:** CLOSED — no_improvement. Compile-mode lever is exhausted. `default` is optimal at the 30-min budget. Reassigning alphonse to mlp-ratio-sweep (#4235) per plateau protocol.
+
+---
+
+## 2026-05-17 00:00 — PR #4159: T_max fine-sweep at lr=1.7e-4 (T_max=35, 50) — no_improvement (informative)
+
+- **Student:** charliepai2i48h2-frieren
+- **Hypothesis:** Bracket T_max=40 with T_max=35 and 50 to confirm cosine schedule length is at the optimum under lr=1.7e-4.
+- **Results:**
+
+| Metric | Baseline #4079 (T_max=40) | Arm A (T_max=35) | Arm B (T_max=50) |
+|---|---|---|---|
+| **val_avg/mae_surf_p** | **39.8345** | 42.6991 (+7.2%) | 40.1995 (+0.92% noise) |
+| **test_avg/mae_surf_p** | **33.8873** | 37.0662 (+9.4%) | 34.3809 (+1.4%) |
+| LR at epoch 33 | 1.25e-5 (7% init) | 3.06e-6 (1.8%) | 4.88e-5 (28.7%) |
+| Best epoch | 34 | 33 (timeout) | 33 (timeout) |
+| Peak VRAM | 23.84 GB | 23.84 GB | 23.84 GB |
+
+- **Analysis:** T_max=35 fails because LR collapses to 1.8% of init by epoch 33 — model freezes for the last 6 epochs. T_max=50 leaves LR at 28.7% of init at the timeout — val curve still descending. Confirms T_max=40 is broadly optimal in the [40, 50] band; within-band differences sit at the noise floor. Key followup-insight from student: schedule bottleneck is at the START (random init wastes early high-LR budget), not the END.
+- **Decision:** CLOSED — no_improvement, but the most informative null of the round. Reassigning frieren to warmup-cosine (#4236) — directly tests the early-budget hypothesis.
+
+---
+
+## 2026-05-17 00:00 — PR #4154: Per-group grad-clip loosen (other=1.5, 2.0) — no_improvement (refuted)
+
+- **Student:** charliepai2i48h2-fern
+- **Hypothesis:** Loosen `other_grad_norm` above 1.0 to give the dominant MLP/output group more update room while keeping `attn_grad_norm=1.0`.
+- **Results:**
+
+| Metric | Baseline #4079 (single-clip 1.0) | Arm A (other=1.5) | Arm B (other=2.0) |
+|---|---|---|---|
+| **val_avg/mae_surf_p** | **39.8345** | 40.6269 (+2.0%) | 42.0424 (+5.55%) |
+| **test_avg/mae_surf_p** | **33.8873** | 34.6414 (+2.2%) | 36.0878 (+6.5%) |
+| Best epoch | 34 | 33 | 33 |
+| Per-epoch time | ~54.2 s | ~54.7 s | ~54.1 s |
+
+- **Analysis:** Direction monotonically wrong — looser other_grad_norm increases regression. Excellent student reconciliation: per-group(1.0,1.0) effectively gives 4× attn magnitude vs single-clip; loosening other to 1.5/2.0 inflates both groups further. Lion's sign-based updates suffer overshoot from the magnitude inflation. The #4016 sanity "win" was likely noise — the data refutes the directional hypothesis.
+- **Decision:** CLOSED — no_improvement, direction refuted. Per-group clip axis closed at this stack. Reassigning fern to n-layers-sweep (#4237) — depth scaling untouched since round 1 and motivated directly by fern's prior diagnostic (MLP/other has 5× attn gradient norm; more layers tests if model is depth-limited).
+
