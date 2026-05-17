@@ -136,21 +136,32 @@ class PhysicsAttention(nn.Module):
         return self.to_out(out_x)
 
 
+def _make_norm(hidden_dim: int, use_rmsnorm: bool, rmsnorm_eps: float) -> nn.Module:
+    if use_rmsnorm:
+        return nn.RMSNorm(hidden_dim, eps=rmsnorm_eps)
+    return nn.LayerNorm(hidden_dim)
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 use_rmsnorm=False, rmsnorm_scope="all", rmsnorm_eps=1e-6):
         super().__init__()
         self.last_layer = last_layer
-        self.ln_1 = nn.LayerNorm(hidden_dim)
+        # Pre-block norms (always RMSNorm when use_rmsnorm=True regardless of scope).
+        self.ln_1 = _make_norm(hidden_dim, use_rmsnorm, rmsnorm_eps)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
         )
-        self.ln_2 = nn.LayerNorm(hidden_dim)
+        self.ln_2 = _make_norm(hidden_dim, use_rmsnorm, rmsnorm_eps)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
         if self.last_layer:
-            self.ln_3 = nn.LayerNorm(hidden_dim)
+            # Output-head norm: only swap if scope="all" (Arm A). For scope="pre_only" (Arm B),
+            # keep LayerNorm so we can test if RMSNorm is safe outside the residual stream.
+            use_head_rms = use_rmsnorm and rmsnorm_scope == "all"
+            self.ln_3 = _make_norm(hidden_dim, use_head_rms, rmsnorm_eps)
             self.mlp2 = nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
@@ -169,7 +180,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 use_rmsnorm=False, rmsnorm_scope="all", rmsnorm_eps=1e-6):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -190,6 +202,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                use_rmsnorm=use_rmsnorm, rmsnorm_scope=rmsnorm_scope, rmsnorm_eps=rmsnorm_eps,
             )
             for i in range(n_layers)
         ])
@@ -203,6 +216,8 @@ class Transolver(nn.Module):
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, (nn.LayerNorm, nn.BatchNorm1d)):
             nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+        elif isinstance(m, nn.RMSNorm):
             nn.init.constant_(m.weight, 1.0)
 
     def forward(self, data, **kwargs):
@@ -459,6 +474,9 @@ class Config:
     ema_decay: float = 0.999
     compile_mode: str = ""  # empty = no compile (baseline behavior)
     slice_num: int = 64
+    use_rmsnorm: bool = False
+    rmsnorm_scope: str = "all"  # "all" = Arm A (also output-head); "pre_only" = Arm B (pre-block only)
+    rmsnorm_eps: float = 1e-6
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -503,10 +521,16 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    use_rmsnorm=cfg.use_rmsnorm,
+    rmsnorm_scope=cfg.rmsnorm_scope,
+    rmsnorm_eps=cfg.rmsnorm_eps,
 )
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
+n_rms = sum(1 for m in model.modules() if isinstance(m, nn.RMSNorm))
+n_ln = sum(1 for m in model.modules() if isinstance(m, nn.LayerNorm))
+print(f"Norms — RMSNorm: {n_rms}, LayerNorm: {n_ln}  (use_rmsnorm={cfg.use_rmsnorm}, scope={cfg.rmsnorm_scope})")
 if cfg.compile_mode:
     _mode = cfg.compile_mode if cfg.compile_mode != "default" else None
     model = torch.compile(model, mode=_mode, dynamic=True)
@@ -528,9 +552,21 @@ with open(model_dir / "config.yaml", "w") as f:
         **asdict(cfg),
         "model_config": model_config,
         "n_params": n_params,
+        "n_rmsnorm": n_rms,
+        "n_layernorm": n_ln,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     }, f, sort_keys=True)
+
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "startup",
+    "n_params": n_params,
+    "n_rmsnorm": n_rms,
+    "n_layernorm": n_ln,
+    "use_rmsnorm": cfg.use_rmsnorm,
+    "rmsnorm_scope": cfg.rmsnorm_scope,
+    "rmsnorm_eps": cfg.rmsnorm_eps,
+})
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
