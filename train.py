@@ -310,7 +310,27 @@ def _pointwise_loss(pred, y_norm, loss_type: str):
     raise ValueError(f"Unknown loss_type: {loss_type!r}")
 
 
-def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_type: str = "l1", use_bf16: bool = False) -> dict[str, float]:
+def _surface_loss(err: torch.Tensor, surf_mask: torch.Tensor, alpha: float) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Variance-aware composite surface loss (Hanna et al. 2412.13993).
+
+    Per-node scalar errors `e_i = sum_c err[i, c]` (channel-summed) — one scalar
+    per surface mesh node, matching the paper's per-collocation-point view.
+    Returns (composite, mean_component, std_component). At alpha=1.0 this
+    reproduces the original mean-reduction surf_loss exactly: original is
+    sum_{i,c} err[i,c] / n_valid_surf, and so is `e.mean()` here.
+    """
+    per_node = (err * surf_mask.unsqueeze(-1)).sum(dim=-1)  # [B, N], channel-summed
+    e = per_node[surf_mask]                                  # [n_valid_surf]
+    if e.numel() == 0:
+        zero = err.sum() * 0.0  # graph-connected zero scalar
+        return zero, zero, zero
+    e_mean = e.mean()
+    e_std = e.std(unbiased=False) if e.numel() > 1 else err.sum() * 0.0
+    composite = alpha * e_mean + (1.0 - alpha) * e_std
+    return composite, e_mean, e_std
+
+
+def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_type: str = "l1", use_bf16: bool = False, variance_loss_alpha: float = 1.0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -355,10 +375,8 @@ def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_typ
                 (err * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
-            surf_loss_sum += (
-                (err * surf_mask.unsqueeze(-1)).sum()
-                / surf_mask.sum().clamp(min=1)
-            ).item()
+            surf_composite, _surf_mean, _surf_std = _surface_loss(err, surf_mask, variance_loss_alpha)
+            surf_loss_sum += surf_composite.item()
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
@@ -566,6 +584,9 @@ class Config:
     lion_lr: float = 1e-4  # Lion lr; canonical: AdamW_lr / 3..10
     lion_wd: float = 1e-3  # Lion wd; canonical: AdamW_wd * 3..10
     use_qk_norm: bool = False  # ViT-22B-style LayerNorm(head_dim) on Q and K before SDPA
+    # Hanna et al. 2412.13993: variance-aware composite. alpha=mean weight; (1-alpha)=std weight.
+    # alpha=1.0 → pure mean (baseline). 0.8 = paper-recommended balance. Applied only to surface loss.
+    variance_loss_alpha: float = 1.0
 
 
 cfg = sp.parse(Config)
@@ -721,7 +742,7 @@ for epoch in range(MAX_EPOCHS):
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        surf_loss, surf_mean, surf_std = _surface_loss(err, surf_mask, cfg.variance_loss_alpha)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -732,6 +753,8 @@ for epoch in range(MAX_EPOCHS):
         wandb.log({
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
+            "train/surf_mean": surf_mean.item(),
+            "train/surf_std": surf_std.item(),
             "global_step": global_step,
         })
 
@@ -746,7 +769,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type, cfg.use_bf16)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type, cfg.use_bf16, cfg.variance_loss_alpha)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -820,7 +843,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type, cfg.use_bf16)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type, cfg.use_bf16, cfg.variance_loss_alpha)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
