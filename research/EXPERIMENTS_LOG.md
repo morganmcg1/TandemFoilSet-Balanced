@@ -5,6 +5,34 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-17 09:45 — PR #4448 (charliepai2i48h5-alphonse): lr=8e-4 + wd=0.001 compound on n=10 stack — MERGED (NEW BEST val=55.001)
+
+- branch: `charliepai2i48h5-alphonse/lr8e4-wd001-n10-compound`
+- hypothesis: lr=8e-4 + wd=0.001 compound on n=10+δ=0.10+slice=32 stack may beat new best (#4349) — arm-2 solo lr=8e-4 found best-ever test in #4330
+
+| arm | lr | wd | val_avg | Δ vs #4349 (55.250) | test_avg | best_ep | clip_frac |
+|-----|-----|-----|---------|---------------------|----------|---------|-----------|
+| **arm-1 (WINNER)** | **8e-4** | **0.001** | **55.001** | **-0.45% ✓** | **47.946** | **20/22 (NON-TIMEOUT)** | **0.957** |
+| arm-2 | 7e-4 | 0.001 | 55.860 | +1.10% ✗ | N/A | 22/22 | — |
+
+Per-split test arm-1: single=51.626(-0.63%✓), rc=60.718(-0.05%✓), cruise=31.954(+2.52%✗), re_rand=47.486(+2.13%✗)
+
+- metric artifacts: `models/model-bf16-layerscale-bs2-n10-d010-slice32-lr8e4-wd001-20260517-074609/metrics.jsonl`, `models/model-bf16-layerscale-bs2-n10-d010-slice32-lr7e4-wd001-20260517-085312/metrics.jsonl`
+
+**Analysis and conclusions:**
+
+arm-1 (lr=8e-4 + wd=0.001) is the first non-timeout-bound result to beat the current best. best_epoch=20/22 means the model genuinely converged before hitting the epoch limit — the cosine schedule had reached near-floor LR by ep20, and the model stopped improving. This is a qualitatively different regime from prior timeout-bound wins.
+
+clip_frac=0.957 at convergence confirms the optimizer is working in the healthy, non-saturated range (cf. 0.965+ was saturation territory). The lr=8e-4 step-size, when paired with wd=0.001 regularization, appears to have found a better basin on the n=10 stack than lr=7e-4 on n=8.
+
+Improvement: val -0.45% (55.001 vs 55.250). Test slight regression (+0.74%) — cruise and re_rand test splits regress while single and rc improve. The val improvement is real and this PR compounds cleanly onto the n=10 lineage.
+
+arm-2 (lr=7e-4+wd=0.001) regression confirms wd=0.001 alone does not compound on lr=7e-4+n=10; the lr=8e-4 + wd interaction is the key mechanism.
+
+**Key open question**: Does lr=8e-4 or lr=9e-4 continue to improve on n=10 stack? Does the same hold on n=8 stack? tanjiro #4424 testing lr push on n=8; next step for alphonse: lr=9e-4 ± wd on n=10.
+
+---
+
 ## 2026-05-17 08:30 — PR #4439 (charliepai2i48h5-frieren): sw bracket {11, 13} on new best stack — CLOSED (sw lever does not transfer to n=8+lr=7e-4)
 
 - branch: `charliepai2i48h5-frieren/sw-bracket-n8-stack`

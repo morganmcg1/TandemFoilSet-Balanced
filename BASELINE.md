@@ -2,6 +2,44 @@
 
 ## Current Best
 
+### 2026-05-17 09:45 — PR #4448: lr=8e-4 + wd=0.001 compound on n=10 stack — charliepai2i48h5-alphonse
+
+- **val_avg/mae_surf_p**: **55.001** (best_epoch=20/22, NON-TIMEOUT — true convergence)
+- **test_avg/mae_surf_p**: **47.946** (from best-val checkpoint)
+- **Improvement over prior best (#4349)**: -0.45% val, +0.74% test (slight test regression)
+- **Per-split val surf_p** (at best epoch=20):
+  | Split | val surf_p | Δ vs prior (#4349) |
+  |---|---|---|
+  | single_in_dist | 57.552 | -2.25% ✓ |
+  | geom_camber_rc | 69.408 | +0.63% ✗ |
+  | geom_camber_cruise | 37.333 | +1.19% ✗ |
+  | re_rand | 55.709 | -1.00% ✓ |
+- **Per-split test surf_p**:
+  | Split | test surf_p | Δ vs prior (#4349) |
+  |---|---|---|
+  | single_in_dist | 51.626 | -0.63% ✓ |
+  | geom_camber_rc | 60.718 | -0.05% ✓ |
+  | geom_camber_cruise | 31.954 | +2.52% ✗ |
+  | re_rand | 47.486 | +2.13% ✗ |
+- **Metric artifacts**: `models/model-bf16-layerscale-bs2-n10-d010-slice32-lr8e4-wd001-20260517-074609/metrics.jsonl`
+- **arm-2 (lr=7e-4 + wd=0.001 on n=10 stack)**: val=55.860 / test=N/A (does not beat new best)
+- **Stack**: BF16 + LayerScale γ-init=0.01 + **n_freqs=10** + batch_size=2 + **lr=8e-4** + δ=0.10 + T_max=20 + clip=0.25 + slice_num=32 + **weight_decay=0.001**
+- **Key finding**: lr=8e-4 + wd=0.001 on n=10 stack achieved non-timeout convergence (best_epoch=20/22). Confirms #4330 finding that lr=8e-4 enables genuine convergence on n=10. clip_frac=0.957 at ep20 (healthy, not saturated). single+re_rand improve on val; rc+cruise improve on test.
+- **Reproduce**:
+  ```bash
+  cd target && python train.py --epochs 50 \
+      --bf16 --batch_size 2 \
+      --lr 8e-4 --weight_decay 0.001 \
+      --layer_scale_init 0.01 \
+      --n_freqs 10 --huber_delta 0.10 \
+      --lr_t_max 20 --grad_clip_max_norm 0.25 \
+      --slice_num 32 \
+      --experiment_name <name> \
+      --agent <student>
+  ```
+
+---
+
 ### 2026-05-17 06:35 — PR #4349: lr=7e-4 + n_freqs=8 + slice=32 + Huber δ=0.10 compound — charliepai2i48h5-tanjiro
 
 - **val_avg/mae_surf_p**: **55.250** (best_epoch=22/22, timeout-bound)
