@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-17 ~01:10 UTC
+- **Last updated:** 2026-05-17 ~02:00 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
 - **Most recent direction from human researcher team:** None (no open issues at 01:10 UTC)
 
@@ -46,21 +46,24 @@ Total improvement since raw seed: **−60.3%** on val.
 | PR | Student | Hypothesis | On baseline | Status |
 |----|---------|-----------|-------------|--------|
 | **#4249** | **nezuko** | Lookahead + β2=0.95 compound | NEW Lookahead baseline | WIP — HIGHEST PRIORITY (β2 specifically improved camber_rc) |
-| **#4250** | **askeladd** | Lookahead + slice=16 compound | NEW Lookahead baseline | WIP — does slice=16's camber_rc benefit persist under Lookahead? |
 | **#4251** | **edward** | Lookahead + lr=1e-3 | NEW Lookahead baseline | WIP — tests if Lookahead stability enables higher LR |
-| **#4151** | **thorfinn** | Lookahead + LLRD=0.85 (3rd rebase) | NEW Lookahead baseline | WIP — running LLRD+Lookahead; awaiting terminal result |
-| **#4266** | **alphonse** | Lookahead k-bracket sweep (k=3 vs k=10) | NEW Lookahead baseline | WIP — NEW: characterizes optimal k; k=5 from paper defaults, not swept |
-| **#4267** | **fern** | Physics-consistent AoA rotation aug ±5° | NEW Lookahead baseline | WIP — NEW: targets camber_rc; #4163 closed (±15° inconsistent); this is fully coupled rotation |
-| **#4219** | **tanjiro** | AdamW β1=0.95 (slower momentum) | Old alphonse baseline | WIP — if positive vs old baseline, retest on Lookahead stack |
-| **#4204** | **frieren** | Per-sample surf-loss reweighting by peak \|p\| (α=1.0) | Old alphonse baseline | WIP — if positive vs old baseline, retest on Lookahead stack |
+| **#4151** | **thorfinn** | Lookahead + LLRD=0.95 (gentler decay, retest) | NEW Lookahead baseline | WIP — SENT BACK after LLRD=0.85 result mixed (val −0.59%, test +0.88%); testing gentler decay |
+| **#4266** | **alphonse** | Lookahead k-bracket sweep (k=3 vs k=10) | NEW Lookahead baseline | WIP — characterizes optimal k; k=5 from paper defaults, not swept |
+| **#4267** | **fern** | Physics-consistent AoA rotation aug ±5° | NEW Lookahead baseline | WIP — targets camber_rc; fully coupled rotation (positions+velocities+AoA scalar) |
+| **#4283** | **askeladd** | Lookahead + slice=16 + β2=0.95 triple compound | NEW Lookahead baseline | WIP — NEW: motivated by #4250 closure (slice=16 owns camber_rc); unexplored 3-axis cell |
+| **#4284** | **tanjiro** | weight_decay sweep (5e-4, 1e-3) | NEW Lookahead baseline | WIP — NEW: post-AdamW EMA closure; fresh axis under Lookahead |
+| **#4204** | **frieren** | Per-sample surf-loss reweighting by peak \|p\| (α=1.0) | Old alphonse baseline | WIP — actively training (GPU 97%); if positive, retest on Lookahead |
 
-**Key note**: #4219, #4204 were submitted against OLD alphonse baseline (56.426). Even if they beat the OLD baseline, they need retesting against the NEW Lookahead baseline (54.299) before merging.
+**Key note**: #4204 was submitted against OLD alphonse baseline (56.426). Even if it beats the OLD baseline, it needs retesting against the NEW Lookahead baseline (54.299) before merging.
 
-## Round 18/19 closures
+## Round 18/19/20 closures
 
 | PR | Student | Hypothesis | val | Action |
 |----|---------|-----------|-----|--------|
 | ✓ **#4142** | **nezuko** | **Lookahead k=5 α=0.5 (rebased)** | **54.299** | ✓ **MERGED — NEW BASELINE** |
+| ✗ #4250 | askeladd | Lookahead + slice=16 compound | 54.645 | ✗ Closed — val_avg substitutive (+0.65%), BUT val_geom_camber_rc=66.52 BEST EVER; slice=16 owns camber_rc resolution mechanism. Reassigned to triple compound |
+| ✗ #4219 | tanjiro | AdamW β1=0.95 (slower momentum) | 60.51 | ✗ Closed — bracket closure; β1 axis fully characterized; default 0.9 optimal; β1 vs β2 asymmetric directions confirmed |
+| ↻ #4151 | thorfinn | LLRD=0.85 + Lookahead | 53.98 / test 53.34 | ↻ SENT BACK — val win 0.59% within noise, test regressed 0.88%; retest with LLRD=0.95 (gentler) |
 | ✗ #4226 | fern | Per-channel surf weights (p=2.0, Ux=0.5, Uy=0.5) | 57.476 | ✗ Closed — camber_rc REGRESSED +4.76%; shared-latent damage from velocity down-weighting |
 | ✗ #4162 | alphonse | β2=0.95 + slice=8 compound | 55.304 (best seed), 57.09 (3-seed mean) | ✗ Closed — 3-seed mean doesn't beat either baseline; nezuko #4249 tests this compound under Lookahead |
 | ✗ #4218 | askeladd | AGC λ=0.01 | 56.52 | ✗ Closed — neutral val, worse test; clips load-bearing gradient signal |
@@ -106,10 +109,13 @@ Two active experiments directly targeting camber_rc:
 
 Priority order:
 1. **#4249 nezuko Lookahead+β2=0.95**: highest compound probability (β2 specifically improved camber_rc)
-2. **#4250 askeladd Lookahead+slice=16**: directly tests if slice=16's camber_rc benefit persists
-3. **#4151 thorfinn LLRD+Lookahead**: LLRD −1.75% on old stack; if orthogonal, triple compound viable
-4. **#4267 fern AoA rotation aug ±5°**: first physics-consistent data aug; targets camber_rc
-5. **#4266 alphonse k-bracket**: characterizes Lookahead axis for paper; may find k=3/10 is better than k=5
+2. **#4283 askeladd Lookahead+slice=16+β2=0.95 triple**: motivated by #4250's camber_rc=66.52 best-ever; tests if slice+β2 compound under Lookahead
+3. **#4267 fern AoA rotation aug ±5°**: first physics-consistent data aug; targets camber_rc
+4. **#4151 thorfinn LLRD=0.95+Lookahead**: gentler decay retest; either merges or closes LLRD axis
+5. **#4266 alphonse Lookahead k-bracket**: characterizes Lookahead k for paper; may find k=3 or k=10 better than k=5
+6. **#4284 tanjiro weight_decay sweep**: fresh axis after AdamW EMA closure
+7. **#4251 edward Lookahead+lr=1e-3**: bolder bet; Lookahead stability may unlock higher LR
+8. **#4204 frieren per-sample reweight**: on OLD baseline; needs Lookahead retest if positive
 
 ## Operational notes
 

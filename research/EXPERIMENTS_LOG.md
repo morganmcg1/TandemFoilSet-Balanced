@@ -1,5 +1,76 @@
 # SENPAI Research Results
 
+## 2026-05-17 ~02:00 UTC — Round 20: 2 closures (#4250 slice=16, #4219 β1=0.95), 1 send-back (#4151), 2 new assignments (#4283, #4284)
+
+### Closed: PR #4250 (askeladd) — Lookahead + slice=16 (β2=0.999)
+
+Run `fbd72tqh`: val_avg=54.6451 (+0.65% vs new Lookahead baseline 54.30), test_3split=53.1654 (+0.54%). Substitutive at val_avg level.
+
+**BUT key finding**: val_geom_camber_rc=66.520 is the **BEST EVER recorded on this branch** (better than alphonse's 67.13 and Lookahead's 68.75). Mechanism confirmed: slice=16's camber_rc benefit is **architecture-resolution-driven, not optimizer-driven** — it helps camber_rc whether paired with β2=0.999, β2=0.95, or Lookahead.
+
+Per-split decomposition:
+| Split | Lookahead+slice=16 (this) | Lookahead+slice=8 (#4142) | Δ vs slice=8 |
+|---|---|---|---|
+| val_single_in_dist | 65.501 | 63.937 | +2.4% (worse) |
+| val_geom_camber_rc | **66.520** | 68.753 | **−3.25%** (BEST) |
+| val_geom_camber_cruise | 34.118 | 31.954 | +6.78% (worse) |
+| val_re_rand | 52.441 | 52.552 | −0.21% (neutral) |
+
+slice=16's cruise penalty (+6.8%) eats into the camber_rc gain → net val_avg regression. Two orthogonal-by-split mechanisms (Lookahead helps cruise/in-dist; slice=16 helps camber_rc) cannot be both selected via slice alone. Closed; reassigned askeladd to the unexplored triple compound (#4283).
+
+### Closed: PR #4219 (tanjiro) — AdamW β1=0.95 on slice=16+β2=0.95
+
+Run `6t0jjils`: val_avg=60.5072 (+4.08 vs new baseline 56.4260), test_3split=58.4046 (+3.07). Failure-mode #1 triggered. β1 axis fully bracketed at default 0.9.
+
+**Paper-quality asymmetry confirmed end-to-end**:
+- β2 fast (0.95) wins big (alphonse #4067 — original baseline win)
+- β1 faster (0.85) hurts (+1.22 vs default 0.9)
+- β1 slower (0.95) hurts MORE (+4.08 vs default 0.9) ← THIS RESULT
+- Default β1=0.9 sits at a sharp local optimum
+
+**Mechanism**: gradient norm std went from 5.56 (β1=0.85) → 4.61 (β1=0.95), a 17% smoother trajectory. But smoothness ≠ optimization quality. β1=0.95's 14-step momentum half-life lags too far behind real gradient direction at convergence on a 17-epoch budget.
+
+Per-split signature: val_single_in_dist (easy split) regressed most (+6.89) — same fingerprint as β1=0.85 (+11.78%). BOTH directions away from β1=0.9 hurt the same split most. The default is at a sharp local minimum; moving in either direction pushes momentum out of alignment with per-batch gradient signal at convergence.
+
+AdamW EMA appendix story complete: β2 needs fast adaptation (matches 17-epoch horizon), β1 already at sweet spot at default 0.9 (textbook Kingma/Ba holds here). Asymmetric direction preference is the paper-worthy mechanism finding. Closed.
+
+### Sent back: PR #4151 (thorfinn) — LLRD=0.85 + Lookahead
+
+Run `fiwtqoos`: val_avg=53.9766 (−0.59% vs new baseline 54.30), test_3split=53.3417 (+0.88% vs baseline 52.88). **Mixed result**: val improves but test regresses, both within single-seed noise (~3 val units fleet-wide).
+
+Student's sub-linear-compounding analysis is the right read: Lookahead anchoring increases depth-0 grad magnitude (15.44 mean vs 9.00 in plain AdamW). LLRD's 0.85 multiplier (×0.52 at depth 0) over-throttles when Lookahead is already doing variance reduction at slow-weight level. Mechanistic prediction: gentler LLRD (0.95) would let more gradient through and recover the test regression.
+
+Sent back for `--llrd_decay 0.95` retest on Lookahead. Decision criteria:
+- val < 54.30 AND test < 53.5 → MERGE
+- val ∈ [54.30, 55.50] OR test > 53.5 → CLOSE LLRD axis
+- val > 55.50 → CLOSE cleanly
+
+### New assignments — Round 20
+
+| PR | Student | Hypothesis | Mechanism |
+|----|---------|-----------|-----------|
+| **#4283** | **askeladd** | Lookahead + slice=16 + β2=0.95 triple compound | Motivated directly by #4250 closure: slice=16 owns camber_rc resolution. Adding β2=0.95 (also targets camber_rc on old stack) + Lookahead's cruise/re_rand wins → if orthogonal on individual splits, val_avg may finally improve. Unexplored 3-axis cell. |
+| **#4284** | **tanjiro** | weight_decay sweep (5e-4, 1e-3) on Lookahead baseline | Post AdamW-EMA closure: weight_decay is the next unexplored optimizer scalar. Default 1e-4 never swept on this task; never re-examined under Lookahead. Lookahead's implicit regularization may interact non-obviously with explicit wd. |
+
+**askeladd #4283 rationale**: combines all three winning mechanisms (Lookahead variance reduction + slice=16 token resolution + β2 fast 2nd-moment EMA). nezuko #4249 tests Lookahead+β2=0.95 at slice=8; this is the slice=16 variant. Together they isolate slice effect under full optimizer stack.
+
+**tanjiro #4284 rationale**: regularization × implicit-regularization interaction. Zhang et al. (Lookahead) noted Lookahead "complements explicit regularization" without sweep on CFD surrogates. Two arms (5e-4, 1e-3) characterize the wd axis under Lookahead.
+
+### GPU utilization
+8/8 students busy as of ~02:00 UTC.
+
+### Open Lookahead-stack stack (in-flight)
+- **#4249 nezuko**: Lookahead+β2=0.95+slice=8 (highest priority)
+- **#4283 askeladd**: Lookahead+slice=16+β2=0.95 (new triple)
+- **#4151 thorfinn**: Lookahead+LLRD=0.95 (gentler retest)
+- **#4266 alphonse**: Lookahead k-bracket (k=3, k=10)
+- **#4267 fern**: AoA rotation aug ±5°
+- **#4284 tanjiro**: weight_decay sweep
+- **#4251 edward**: Lookahead+lr=1e-3
+- **#4204 frieren**: per-sample reweight on OLD baseline (actively training)
+
+---
+
 ## 2026-05-17 ~01:10 UTC — 2 closures (#4226 per-channel, #4162 β2+slice=8) + 2 new assignments (#4266 k-bracket, #4267 AoA aug)
 
 ### Closed: PR #4226 (fern) — per-channel surf weights (Ux=0.5, Uy=0.5, p=2.0) on slice=16+β2=0.95
