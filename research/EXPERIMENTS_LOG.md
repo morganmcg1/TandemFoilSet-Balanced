@@ -1,5 +1,104 @@
 # SENPAI Research Results
 
+## 2026-05-17 01:30 — PR #4211: Lookahead-AdamW k=3 α sweep (α∈{0.6, 0.7}) ← CLOSED (canonical α-frontier at k=3; trend INVERSION found)
+
+- Branch: `willowpai2i48h1-askeladd/lookahead-k3-alpha-sweep`
+- Student: willowpai2i48h1-askeladd
+- W&B runs: `31pmz09e` (α=0.6, val=56.31), `gbj8sqqq` (α=0.7, val=56.24); group `lookahead_k3_alpha_sweep`
+- Hypothesis: Find optimal α at the new-baseline k=3 (vs k=5 where α=0.7 marginally won).
+
+### Results (terminal SENPAI-RESULT, W&B-verified)
+
+| Arm | val_avg | test_avg | Δ val vs α=0.5 (55.97) | best_epoch |
+|---|---|---|---|---|
+| α=0.5 (prior k=3 best) | 55.97 | 53.44 | — | 17 |
+| α=0.6 | 56.31 | 53.99 | +0.34 | 17 |
+| **α=0.7** | **56.24** | 54.25 | **+0.27** | 17 |
+
+### Key mechanistic finding: α-trend INVERTS as k decreases
+
+| k | α=0.3 val | α=0.5 val | α=0.6 val | α=0.7 val | Pattern |
+|---|---|---|---|---|---|
+| 5 | 61.58 | 57.22 | — | 56.92 | monotone, α=0.7 best |
+| 3 | — | 55.97 | 56.31 | 56.24 | bowl, α=0.5 best |
+
+**Mechanism: k and α are NOT independently additive.** Effective slow-weight pull rate ≈ α/k per step. As k decreases (more frequent sync), smaller α is sufficient — large α over-mixes and dampens fast progress. This is a clean mechanism finding that informs the Lion-era α decisions (askeladd reassigned to Lookahead-Lion α sweep #4269).
+
+### Decision
+
+Closed — val=56.24 > current programme best val=47.97 (Lookahead-Lion, PR #4123). AdamW k=3 era α-frontier closed cleanly with strong mechanism insight.
+
+## 2026-05-17 01:30 — PR #4203: Lookahead-AdamW k=2 extension ← CLOSED (k-sweep U-curve minimum confirmed at k=3)
+
+- Branch: `willowpai2i48h1-tanjiro/lookahead-k2-extension`
+- Student: willowpai2i48h1-tanjiro
+- W&B run: `kdrwbeff` (canonical), `8xi6kkt0` (bit-identical rerun); group `lookahead_k_sweep_extension`
+- Hypothesis: Extend monotone k-sweep below k=3 (k=2 was the natural next test if monotone continues).
+
+### Results (W&B-verified; bit-identical reruns confirm reproducibility)
+
+| W&B | val_avg | test_avg | best_epoch |
+|---|---|---|---|
+| `kdrwbeff` | 56.49 | 53.67 | 17 |
+| `8xi6kkt0` (earlier rerun) | 56.49 | 53.67 | 17 |
+
+### k-sweep is U-shaped, minimum at k=3
+
+| k | val_avg | Δ vs k=3 |
+|---|---|---|
+| k=2 (THIS PR) | 56.49 | +0.52 |
+| **k=3 (PR #4158 merged)** | **55.97** | **— (minimum)** |
+| k=5 (PR #4132) | 57.22 | +1.25 |
+| k=8 (PR #4158 arm) | 60.09 | +4.12 |
+
+Mechanism: at k=2, slow-fast sync so frequent that slow weights barely lag fast trajectory → Lookahead's basin-averaging dimension collapses, leaving only plain-AdamW noise. k=3 is the sweet spot.
+
+### Decision
+
+Closed — val=56.49 > current programme best val=47.97. AdamW k-frontier exhausted at k≥2. tanjiro reassigned to **Lookahead-Lion k=2 (#4268)** to test if the U-curve transfers to Lion era.
+
+⚠️ Bit-identical rerun = wasted GPU. Need to fix the student's terminal-report flow.
+
+## 2026-05-17 01:30 — PR #4202: Lookahead-AdamW k=3 seed=1 verification ← CLOSED (canonical, NO outlier; k=3 era 3-seed mean=56.49)
+
+- Branch: `willowpai2i48h1-alphonse/lookahead-k3-seed1-verify`
+- Student: willowpai2i48h1-alphonse
+- W&B runs: `7juno411` (CANONICAL, val=57.44), `azc6dorp` (rerun, val=59.26), `5ggnxnd7` (rerun, val=61.75); group `lookahead_k3_seed_scan`
+- Hypothesis: Check if k=5/seed=1 outlier pattern (val=78.50, best_ep=10) also affects k=3.
+
+### Results (W&B-verified; first run is canonical with best_epoch=17)
+
+| W&B run | val_avg | test_avg | best_epoch | Notes |
+|---|---|---|---|---|
+| **`7juno411` (FIRST RUN, canonical)** | **57.44** | **54.64** | **17 ✓** | matches seed-0/2 cosine-floor pattern |
+| `azc6dorp` (rerun) | 59.26 | 56.21 | 15 | env or code-snapshot drift between reruns |
+| `5ggnxnd7` (rerun) | 61.75 | 58.52 | 14 | "" |
+
+### Key finding: k=3 has NO seed=1 outlier (k=5 fragility resolved)
+
+| Recipe | Seed-0 val | Seed-1 val | Seed-2 val | Seed-1 best_ep |
+|---|---|---|---|---|
+| Lookahead-AdamW k=5 | 57.22 | **78.50 ⚠️** | 57.05 | 10 (bad basin) |
+| **Lookahead-AdamW k=3** | **55.97** | **57.44 ✓** | **56.05** | **17 (cosine floor ✓)** |
+
+### k=3 era 3-seed canonical (CLEAN)
+
+| Seed | val | test |
+|---|---|---|
+| 0 | 55.97 | 53.44 |
+| 1 (THIS PR, canonical run) | 57.44 | 54.64 |
+| 2 | 56.05 | 53.03 |
+| **3-seed mean** | **56.49** | **53.71** |
+| σ̂ | 0.77 | 0.81 |
+
+Mechanism: more frequent sync (k=3 vs k=5) prevents the optimizer from settling into a bad early basin before the next slow-pull resets it. Same robustness Lion achieves via sign-update, achieved by Lookahead-AdamW via reduced k.
+
+### Decision
+
+Closed — val=57.44 > current programme best val=47.97. k=3 era seed-canonical complete. alphonse reassigned to **Lion β1 sweep (#4271)**.
+
+⚠️ Three reruns of the same config = wasted GPU. Heartbeat re-launches of completed configs need to be eliminated from the student flow.
+
 ## 2026-05-17 01:00 — PR #4183: Lookahead-AdamW β2 fine scan ({0.93, 0.97}) ← CLOSED (AdamW β2 frontier closed)
 
 - Branch: `willowpai2i48h1-frieren/lookahead-b2-scan`

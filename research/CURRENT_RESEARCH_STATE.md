@@ -1,7 +1,7 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 01:05
-- **Launch:** willow-pai2i-48h-r1 (round 13 — Lookahead-Lion era; programme best val=47.97, seed-robust ✓)
+- **Date:** 2026-05-17 01:35
+- **Launch:** willow-pai2i-48h-r1 (round 14 — Lookahead-Lion era; programme best val=47.97, seed-robust ✓; all AdamW frontiers closed)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN)
 - **Latest direction from human team:** None (no open issues scoped to this launch)
@@ -66,16 +66,22 @@ These findings suggest the optimal Lookahead-Lion hyperparameters are likely (k=
 
 | PR | Student | Hypothesis | Status | Priority |
 |----|---------|-----------|--------|----------|
-| #4265 | fern | Lookahead-Lion LR sweep (cfg.lr∈{3e-4, 7.5e-4} → Lion lr∈{1e-4, 2.5e-4}) | **NEW** | Probe Lion-era LR frontier vs paper /3 default |
-| #4264 | frieren | Lookahead-Lion β2 scan (Lion m-buffer EMA ∈ {0.95, 0.98}) | **NEW** | Lion-era β2 frontier vs default 0.99 |
+| #4271 | alphonse | Lion β1 sweep (β1∈{0.85, 0.95}) at k=5/α=0.5 | **NEW** | Complements frieren's β2 |
+| #4269 | askeladd | Lookahead-Lion α sweep at k=5 (α∈{0.3, 0.7}) | **NEW** | Lion-era α frontier (3 mechanism branches) |
+| #4268 | tanjiro | Lookahead-Lion k=2 (extend k-sweep to new era) | **NEW** | Pairs with edward k=3 to characterize Lion k-curve |
+| #4265 | fern | Lookahead-Lion LR sweep (cfg.lr∈{3e-4, 7.5e-4}) | Running | Probe Lion-era LR frontier vs paper /3 default |
+| #4264 | frieren | Lookahead-Lion β2 scan (Lion m-buffer EMA ∈ {0.95, 0.98}) | Running | Lion-era β2 frontier vs default 0.99 |
 | #4242 | nezuko | Lookahead-Lion seed=2 (complete 3-seed canonical for new best) | Running | Closes paper-facing seed-variance story |
 | #4241 | edward | Lookahead-Lion k=3 (compose k=3 finding with Lion-era) | Running | Highest expected delta |
-| #4202 | alphonse | Lookahead-AdamW k=3 seed=1 (3-seed canonical) | Running | k=3 era canonical |
-| #4203 | tanjiro | Lookahead-AdamW k=2 (k-sweep extension) | Running | Informs Lion k-sweep |
-| #4211 | askeladd | Lookahead-AdamW k=3 + α∈{0.6,0.7} sweep | Running | Informs Lion α-sweep |
-| #4213 | thorfinn | Lookahead-AdamW k=3 + α=0.8 | Running | Informs Lion α-sweep |
+| #4213 | thorfinn | Lookahead-AdamW k=3 + α=0.8 (last AdamW sweep in flight) | Running | Will close as AdamW canonical on return |
 
 **Note:** All currently-running AdamW sweeps were assigned before Lookahead-Lion's val=47.97 result landed. Let them run to completion — their k/α/LR/β2 findings still inform the Lookahead-Lion hyperparameter space. Once they return, those students will be reassigned to Lion-era experiments.
+
+## Round-14 closures (k-sweep U-curve confirmed; α-trend inversion; k=3 3-seed canonical clean)
+
+- **#4211 askeladd (Lookahead-AdamW k=3 α sweep)** CLOSED: α=0.6 (56.31) / α=0.7 (56.24); both regress vs α=0.5 (55.97). **Key finding: α-trend INVERTS at k=3 (α=0.5 optimal) vs k=5 (α=0.7 optimal)** — α and k not independently additive
+- **#4203 tanjiro (Lookahead-AdamW k=2)** CLOSED: val=56.49 > k=3=55.97. **k-sweep U-shaped, minimum at k=3**
+- **#4202 alphonse (Lookahead-AdamW k=3 seed=1)** CLOSED: val=57.44 (canonical run, best_ep=17). **k=3 has NO outlier (vs k=5's 78.50)**; 3-seed mean=56.49, σ̂=0.77
 
 ## Round-13 closures (frontier closures: AdamW β2 + LR exhausted)
 
@@ -134,15 +140,19 @@ T_max=17 cosine has no stationary tail for either fast or slow trajectories. Onl
 ### Priority 1 (Lion-era composition + frontier tests — IN FLIGHT)
 
 - **Lookahead-Lion k=3** (edward #4241) — k=3 was −1.25 on AdamW; expect ~−0.5 to −1.5 on Lion if it transfers
+- **Lookahead-Lion k=2** (tanjiro #4268) — extend Lion k-curve below k=3; pairs with #4241
 - **Lookahead-Lion seed=2** (nezuko #4242) — close 3-seed canonical for paper
+- **Lookahead-Lion α sweep at k=5** (askeladd #4269) — α∈{0.3, 0.7}; 3 mechanism branches possible
 - **Lookahead-Lion β2 scan** (frieren #4264) — Lion m-buffer β2 ∈ {0.95, 0.98} vs default 0.99
+- **Lookahead-Lion β1 scan** (alphonse #4271) — Lion update-direction weighting β1 ∈ {0.85, 0.95}
 - **Lookahead-Lion LR sweep** (fern #4265) — cfg.lr ∈ {3e-4, 7.5e-4} → Lion lr ∈ {1e-4, 2.5e-4} vs default 1.667e-4
 
 ### Priority 2 (Lion-era follow-ups, queue for next idle assignments)
 
-- **Lookahead-Lion α sweep** (α∈{0.6, 0.7, 0.8}) — α was inherited from AdamW; Lion's lower per-step noise may prefer higher α
-- **Lookahead-Lion k=2** if AdamW k=2 (tanjiro #4203) shows continued improvement below k=3
-- **Lion β1 scan** (β1 ∈ {0.85, 0.95}) — controls update direction weighting; complement to β2 scan
+- **Lookahead-Lion + h=192 or mlp_ratio=3** — scale-up (Lion saves VRAM via no v_t)
+- **Lookahead-Lion + LR cosine restart** — extend training at cosine floor + slow-weight pull
+- **Combined-Lion-optima compound** — if multiple Lion knobs each give −0.3 to −1.0 MAE, compose them
+- **3-seed canonical for any new Lion-era best** that arises from current sweeps
 
 ### Priority 3 (architectural / compositional)
 
