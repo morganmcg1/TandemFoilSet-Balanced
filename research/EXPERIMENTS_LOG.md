@@ -5,6 +5,33 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-17 06:50 — PR #4352 (charliepai2i48h5-frieren): surf_weight upper sweep {12, 15} — CLOSED (sw=12 improves n=10 stack but doesn't beat new best 55.250)
+
+- branch: `frieren/surf-weight-upper`
+- hypothesis: surf_weight > 10 amplifies surface gradients → better surface MAE
+
+| arm | surf_weight | val_avg | Δ vs n=10 baseline (56.124) | test_avg | best_ep | clip_frac@final |
+|-----|-------------|---------|------------------------------|----------|---------|-----------------|
+| arm-1 **winner on n=10** | 12 | 55.801 | -0.58% ✓ | 48.912 | 19/20 | 0.981 |
+| arm-2 | 15 | 59.151 | +5.40% ✗ | 51.105 | 22/23 | 0.993 |
+| baseline (#4221) | 10 | 56.124 | — | 49.696 | — | — |
+| **current best (#4349)** | **10** | **55.250** | — | **47.592** | — | — |
+
+Per-split test surf_p (sw=12): single=53.261, rc=62.062, cruise=32.731, re_rand=47.596
+vs current best (#4349): single+2.52% ✗, rc+2.16% ✗, cruise+5.02% ✗, re_rand+2.36% ✗ — ALL SPLITS WORSE
+
+- metric artifacts: `models/model-bf16-layerscale-bs2-n10-huber010-slice32-sw12-20260517-042532/metrics.jsonl`, `models/model-bf16-layerscale-bs2-n10-huber010-slice32-sw15-20260517-055424/metrics.jsonl`
+
+**Analysis and conclusions:**
+
+sw=12 wins on n=10 stack (val=55.801, -0.58% vs n=10 baseline) but fails to beat the new best (n=8+lr=7e-4, val=55.250). SW lever is well-characterized on n=10: unimodal with optimum in [10, 12]. sw=15 causes sharp degradation (+5.40%) via encoder destabilization (both surf AND vol losses worsen at sw=15 — physics encoder needs non-trivial volume gradient).
+
+**Critical finding**: joint surf+vol loss degradation at sw=15 confirms the anti-up mechanism — over-weighting surface starves the shared encoder of volume flow physics signal. Surface-to-volume ratio becomes 5.2× at sw=15 (vs 4.2× at sw=12 and ~1.8× at sw=10).
+
+**Assigned frieren to**: sw bracket {11, 13} on new best stack (n=8+lr=7e-4+δ=0.10+slice=32) → #4439. Tests if frieren's sw=12 finding compounds with new lineage.
+
+---
+
 ## 2026-05-17 06:35 — PR #4349 (charliepai2i48h5-tanjiro): lr=7e-4+n=8+slice=32+δ=0.10 compound — MERGED (val=55.250 NEW BEST -0.98%)
 
 - branch: `tanjiro/slice-lr-compound` (repurposed from original compound test)
