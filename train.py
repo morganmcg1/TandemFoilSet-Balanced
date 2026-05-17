@@ -534,6 +534,7 @@ class Config:
     use_lion: bool = False  # use Lion optimizer (sign-of-momentum) instead of AdamW
     lion_lr: float = 1e-4  # Lion lr; canonical: AdamW_lr / 3..10
     lion_wd: float = 1e-3  # Lion wd; canonical: AdamW_wd * 3..10
+    n_head: int = 4  # number of attention heads; d_head = n_hidden / n_head
 
 
 cfg = sp.parse(Config)
@@ -569,7 +570,7 @@ model_config = dict(
     out_dim=3,
     n_hidden=cfg.n_hidden,
     n_layers=5,
-    n_head=4,
+    n_head=cfg.n_head,
     slice_num=64,
     mlp_ratio=cfg.mlp_ratio,
     output_fields=["Ux", "Uy", "p"],
