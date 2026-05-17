@@ -571,6 +571,7 @@ class Config:
     use_lion: bool = False
     lookahead_k: int = 5
     lookahead_alpha: float = 0.5
+    n_layers: int = 5
 
 
 cfg = sp.parse(Config)
@@ -610,7 +611,7 @@ model_config = dict(
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=128,
-    n_layers=5,
+    n_layers=cfg.n_layers,
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
@@ -831,6 +832,9 @@ if best_metrics:
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
         "total_train_minutes": total_time,
+        "gpu_mem_peak_gb": (
+            torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+        ),
     })
 
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
