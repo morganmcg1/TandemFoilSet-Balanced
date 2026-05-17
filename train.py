@@ -141,6 +141,25 @@ class GeGLUMlp(nn.Module):
         return self.fc_out(self.fc_main(x) * self.act(self.fc_gate(x)))
 
 
+def drop_path(x: torch.Tensor, drop_prob: float = 0.0, training: bool = False) -> torch.Tensor:
+    """Per-sample stochastic depth (Huang et al. 2016, ECCV).
+
+    Standard timm idiom: at train time, zero the residual contribution with
+    probability ``drop_prob`` per sample (independent across the batch) and
+    scale the kept residuals by ``1/(1-drop_prob)`` so the expected value is
+    unchanged. At eval (or when ``drop_prob == 0.0``) this is identity.
+    """
+    if drop_prob == 0.0 or not training:
+        return x
+    keep_prob = 1.0 - drop_prob
+    shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+    # bernoulli_ avoids bf16 quantization artifacts that arise with
+    # ``keep_prob + torch.rand(..., dtype=bfloat16)`` near the 1.0 boundary.
+    random_tensor = x.new_empty(shape).bernoulli_(keep_prob)
+    random_tensor.div_(keep_prob)
+    return x * random_tensor
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -199,11 +218,12 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 use_swiglu=False, use_geglu=False):
+                 use_swiglu=False, use_geglu=False, drop_path_rate=0.0):
         super().__init__()
         if use_swiglu and use_geglu:
             raise ValueError("use_swiglu and use_geglu are mutually exclusive")
         self.last_layer = last_layer
+        self.drop_path_rate = drop_path_rate
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
@@ -225,8 +245,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = fx + drop_path(self.attn(self.ln_1(fx)), self.drop_path_rate, self.training)
+        fx = fx + drop_path(self.mlp(self.ln_2(fx)), self.drop_path_rate, self.training)
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -339,12 +359,20 @@ class Transolver(nn.Module):
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
-                 use_swiglu=False, use_geglu=False):
+                 use_swiglu=False, use_geglu=False,
+                 drop_path_rates: list[float] | None = None):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
+        if drop_path_rates is None:
+            drop_path_rates = [0.0] * n_layers
+        if len(drop_path_rates) != n_layers:
+            raise ValueError(
+                f"drop_path_rates length {len(drop_path_rates)} != n_layers {n_layers}"
+            )
+        self.drop_path_rates = list(drop_path_rates)
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -361,6 +389,7 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 use_swiglu=use_swiglu, use_geglu=use_geglu,
+                drop_path_rate=self.drop_path_rates[i],
             )
             for i in range(n_layers)
         ])
@@ -572,6 +601,7 @@ class Config:
     lion_b2: float = 0.99  # Lion beta2; default matches historical baseline
     lookahead_k: int = 5
     lookahead_alpha: float = 0.5
+    drop_path: float = 0.0  # max stochastic-depth rate at deepest block (linear schedule from 0 at block 0)
 
 
 cfg = sp.parse(Config)
@@ -606,12 +636,23 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+_n_layers = 5
+if cfg.drop_path > 0.0:
+    # Linear schedule: block i gets (i / (n_layers - 1)) * drop_path_max.
+    # Block 0 → 0.0, deepest block → cfg.drop_path. Standard "increasing per
+    # depth" rule from Huang et al. 2016.
+    _drop_path_rates = [
+        i / (_n_layers - 1) * cfg.drop_path for i in range(_n_layers)
+    ]
+else:
+    _drop_path_rates = [0.0] * _n_layers
+
 model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=128,
-    n_layers=5,
+    n_layers=_n_layers,
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
@@ -619,9 +660,11 @@ model_config = dict(
     output_dims=[1, 1, 1],
     use_swiglu=cfg.use_swiglu,
     use_geglu=cfg.use_geglu,
+    drop_path_rates=_drop_path_rates,
 )
 
 model = Transolver(**model_config).to(device)
+print(f"DropPath schedule (per block): {_drop_path_rates}")
 n_params = sum(p.numel() for p in model.parameters())
 n_ffn_params = sum(
     p.numel() for n, p in model.named_parameters()
@@ -704,6 +747,8 @@ run.summary["lion_b2"] = cfg.lion_b2
 run.summary["lookahead_k"] = cfg.lookahead_k
 run.summary["lookahead_alpha"] = cfg.lookahead_alpha
 run.summary["lookahead_on"] = _lookahead_on
+run.summary["drop_path_max"] = cfg.drop_path
+run.summary["drop_path_schedule"] = list(_drop_path_rates)
 
 # Rolling buffer for per-step train losses to compute volatility (window=100).
 _train_loss_window: deque[float] = deque(maxlen=100)
