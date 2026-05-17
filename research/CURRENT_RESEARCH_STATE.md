@@ -73,7 +73,7 @@ If 4+ of these regress, plateau breaks through researcher-agent's fresh angles (
 | PR | Student | Hypothesis | Priority | Expected |
 |----|---------|------------|----------|---------|
 | **#4123** | askeladd | **H123: Fourier K=0 ablation + K=1 scale=0.5** | TOP (close freq sweep) | K=0: ~35-36 |
-| **#4452** | alphonse | **H124: EMA τ=0.999/0.9995 at K=1** | HIGH | ~35.0-35.4 |
+| **#4509** | alphonse | **H132: DSDF Fourier K=1 (combined+ablation)** | HIGH (OOD input repr, applies H120 mech to DSDF) | ~34.5-35.5 |
 | **#4459** | edward | **H125: wd sweep {5e-3, 1e-2} at K=1** | HIGH (direct anti-overfit) | ~34.5-35.5 |
 | **#4460** | frieren | **H126: FFN dropout {0.1, 0.2} at K=1** | HIGH (no dropout currently) | ~34.5-35.5 |
 | **#4462** | nezuko | **H127: n_hidden {96, 112} at K=1** | HIGH (smaller direction never tested) | ~34.8-36.0 |
@@ -91,7 +91,8 @@ If 4+ of these regress, plateau breaks through researcher-agent's fresh angles (
 | n_hidden | 🔬 H127 smaller direction {96, 112} | 128 (locked direction) | Never tested smaller |
 | Mixup | ❌ Literal Mixup closed (H129: variable mesh, H55 repeat). Condition-only variant deferred. | none | Mesh identity violation |
 | LE+TE dual coords | 🔬 H131 active | none | OOD-targeted input repr; Texas A&M arXiv 2412.09399 |
-| EMA weight averaging | 🔬 H124 active | none | Different from SWA (closed) |
+| EMA weight averaging | ❌ Schedule-incompat (H124: τ=0.999 ties, τ=0.9995 catastrophic) | none | Same family as SWA/Lookahead — cosine→0 eliminates convergence noise EMA needs |
+| DSDF Fourier features | 🔬 H132 active (K=1 combined + DSDF-only ablation) | none | Applies H120 K=1 mechanism to signed-distance channels |
 | Lookahead wrapper | ❌ Schedule-incompat (H122) | none | Cosine→0 prevents late-epoch polish |
 | LR (Lion) | ✅ 3e-4 LOCKED | 3e-4 | — |
 | Schedule T_max | 🔬 H128 testing T_max=24 + compile | 37.26 (H99 at T_max=21) | — |

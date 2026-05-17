@@ -2721,3 +2721,31 @@ Researcher-agent (cycle 45 ideas file) ranked H-B (LE+TE dual coords) as #2 hypo
 **Rationale:** Global mesh-frame coordinates shift with camber; LE/TE-relative coordinates are stable within chord-length scaling. Texas A&M arXiv 2412.09399 shows significant OOD generalization gains from dual-frame encoding on NACA airfoils. Low implementation risk (pure input augmentation, no PhysicsAttention changes). fun_dim widened by 4 (Arm A) or 8 (Arm B, per-foil).
 
 **8 WIP remaining (H123-H128, H130, H131), 0 idle.**
+
+---
+
+## 2026-05-17 — PR #4452: H124 EMA τ=0.999, 0.9995 at H120 K=1 (alphonse) — CLOSED, schedule incompat
+
+| Arm | τ | val_avg | Δ vs baseline 35.6651 | Notes |
+|-----|---|---------|----------------------|-------|
+| A | 0.999 | 36.0174 | +0.35 (0.4σ, within noise) | Half-life ~2 epochs; tracks live |
+| B | 0.9995 | 46.8446 | +11.18 (13σ) | Half-life ~3.7 epochs; shadow lags badly |
+
+Trajectory: Arm A epoch-by-epoch curve parallels live model with ~0.4 pts offset. Arm B at epoch 21 still tracking ~epoch 13-14 live state (catch-up tax unpaid).
+
+**Mechanism (same family as H121 SWA, H122 Lookahead):** EMA's benefit lives in averaging away noise in the converged regime. Cosine T_max=21 → η→0 at the final epoch, eliminating the convergence-region noise EMA needs. The shadow's catch-up tax is paid out of a 21-epoch budget that ends at convergence.
+
+**Status: CLOSED. EMA lever closed for this schedule.** Implementation gated behind `--ema_decay > 0`; available cheaply for any future stack with longer/flatter training.
+
+---
+
+## 2026-05-17 — Cycle 45 pre-launch continued: H132 DSDF Fourier features (alphonse, #4509)
+
+Researcher-agent's #3 ranked hypothesis (H-C). Applies the proven H120 K=1 Fourier mechanism to a different input channel family.
+
+**Arm A:** Coord K=1 + DSDF K=1 (combined, expected compound win)
+**Arm B:** DSDF K=1 only (ablation — does DSDF Fourier subsume coord Fourier?)
+
+**Rationale:** DSDF channels (x[..., 4:11]) encode 7-dim signed distance to surface segments — inherently camber-sensitive. Currently enter model as raw scalars; non-linear chord-scale lifting via sin/cos may discriminate camber differences in slice attention. Adds 14 features (2×K×7) at K=1. Independent of all 7 in-flight hyperparameter levers and of H131 (LE/TE coords) — can compound with both.
+
+**8 WIP remaining (H123, H125-H128, H130-H132), 0 idle.**
