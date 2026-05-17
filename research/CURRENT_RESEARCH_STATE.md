@@ -1,7 +1,7 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 13:00
-- **Launch:** willow-pai2i-48h-r1 (round 27 — Lookahead-Lion era; **PROGRAMME ALL-TIME BEST val=45.7284 / test=44.5079** (PR #4402, k=6+β2=0.995+α=0.7); **3-seed canonical 46.95±1.20 val / 45.61±0.97 test (PAPER-READY)**; **α-LEFT shift confirmed at k=5+β2=0.995** (nezuko #4415 closed, Δ=−0.19 val); **k-bowl right CLOSED at k=7**, **β2 right CLOSED at 0.997 at both k=5 and k=6**, **α right CLOSED at α=0.75 at k=6**; **α-LEFT × k=6 + β2-LEFT × k=6 + LR/WD micro-probes + seed=3 in flight**)
+- **Date:** 2026-05-17 14:00
+- **Launch:** willow-pai2i-48h-r1 (round 28 — Lookahead-Lion era; **PROGRAMME ALL-TIME BEST val=45.7284 / test=44.5079 SEED=0** (PR #4402, k=6+β2=0.995+α=0.7); **4-seed canonical 46.77±0.52 SEM val / 45.34±0.48 SEM test (PAPER-READY)** — single-seed merge is −0.83σ lucky draw of seed=0; **α-LEFT × k=6 winner candidates + β2-LEFT bracketing + LR LEFT/RIGHT + WD LEFT/RIGHT in flight**)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN)
 - **Latest direction from human team:** None (no open issues scoped to this launch)
@@ -18,23 +18,31 @@ Beat the Transolver baseline on `val_avg/mae_surf_p` (lower is better). Paper-fa
 
 Win threshold: **val < 45.7284**. Prior best: val=46.8383 (PR #4373, k=5).
 
-### 3-seed canonical of NEW programme best (COMPLETE — round-26; PAPER-READY)
+### 4-seed canonical of NEW programme best (COMPLETE — round-28; PAPER-READY)
 
-| Seed | val_avg | test_avg | Source |
-|---|---|---|---|
-| 0 | **45.7284** | **44.5079** | PR #4402 MERGED (`ejacndhj`) |
-| 1 | 48.14 | 46.40 | PR #4428 closed (tanjiro) |
-| 2 | 46.99 | 45.95 | PR #4429 closed (thorfinn) |
-| **mean ± σ̂** | **46.95 ± 1.20** | **45.61 ± 0.97** | — |
-| 3 | TBD | TBD | **thorfinn #4457 in flight (round 26)** — tightens σ̂ to n=4 |
+| Seed | val_avg | test_avg | W&B | best_ep | Source |
+|---|---|---|---|---|---|
+| 0 | **45.7284** | **44.5079** | `ejacndhj` | 17 | PR #4402 MERGED |
+| 1 | 48.1367 | 46.3894 | `yqdvl3nr` | 17 | PR #4428 closed (round-26) |
+| 2 | 46.9893 | 45.9393 | `0sqdsm53` | 17 | PR #4429 closed (round-26) |
+| 3 | 46.2238 | 44.5338 | `gklk517h` | 17 | PR #4457 closed (round-28) |
+| **mean** | **46.7696** | **45.3426** | — | — | |
+| **σ̂_sample (ddof=1)** | **1.0487** | **0.9666** | — | — | |
+| **σ̂_mean (SEM)** | **0.5244** | **0.4833** | — | — | |
 
-### ⚠️ CRITICAL VARIANCE FINDING (round-26)
+### ⚠️ CRITICAL paper-facing finding (round-28)
 
-**3-seed σ̂ at NEW best (k=6+β2=0.995) is 1.20 val — 2.6× wider than the σ̂=0.46 at OLD best (k=5+β2=0.995).**
+**PR #4402's headline test=44.5079 is at −0.83σ_sample of the 4-seed test distribution** (44.51 vs μ=45.34, σ̂_sample=0.97). The population-level test claim is **45.34 ± 0.48 (SEM)**, not the single-seed merged baseline. The single-seed headline is a lucky-draw of seed=0.
 
-Mean improvement at k=5 → k=6 = 0.15 val on the 3-seed mean. Pooled σ̂_diff ≈ 0.74. **The k=5 → k=6 mean improvement is NOT statistically significant at p<0.05** (z ≈ 0.20). The single-seed win (45.73) is at ~−1σ of the k=6 distribution — partly seed luck. Headline stands per single-seed merge rule, but follow-ups should weight σ̂ when prioritizing.
+**For the paper, report BOTH:**
+1. Single-seed merged baseline: val 45.7284 / test 44.5079 (PR #4402, seed=0)
+2. n=4 canonical: val 46.77 ± 0.52 SEM / test 45.34 ± 0.48 SEM
 
-Mechanism speculation: at k=6, the inner trajectory takes one extra step before each Lookahead pull. That extra step amplifies the seed-dependent trajectory direction, increasing the variance of where the slow weights land. Longer m-buffer (β2=0.995) does NOT fully compensate at k=6 the way it does at k=5.
+The single-seed merge stands per single-seed merge rule, but reviewers will want the population claim. The single-seed result reflects what's possible with this compound; the canonical reflects expected performance.
+
+### Variance comparison: NEW best vs OLD best
+
+**σ̂_sample at NEW best (k=6+β2=0.995) is 1.05 val — 2.3× wider than σ̂=0.46 at OLD best (k=5+β2=0.995).** Mean improvement k=5 → k=6 (3-seed) = 0.15 val on val; pooled σ̂_diff ≈ 0.74; z ≈ 0.20 → NOT statistically significant. Mechanism: at k=6 the inner trajectory takes one extra step before each Lookahead pull, amplifying seed-dependent trajectory direction. Longer m-buffer (β2=0.995) does NOT fully compensate at k=6 the way it does at k=5.
 
 ### 3-seed canonical of PREVIOUS best k=5+β2=0.995 (COMPLETE — round-25)
 
@@ -115,30 +123,40 @@ At β2=0.995, α=0.7:
 
 **k-bowl bounded:** k=6 is the unique optimum at α=0.7 + β2=0.995. The super-additivity is LOCAL to k=6, not a broad "longer sync interval works under longer m-buffer" claim.
 
-## Active WIP experiments (round 27)
+## Active WIP experiments (round 28)
 
 | PR | Student | Hypothesis | Status | Priority |
 |----|---------|-----------|--------|----------|
-| #4475 | nezuko | **α=0.60 + k=6 + β2=0.995 (α-bowl LEFT-EDGE at new compound)** | NEW (round 27) | **Winner candidate (extends nezuko's α-LEFT shift)** |
-| #4472 | alphonse | **α=0.65 + k=6 + β2=0.995 (α-bowl LEFT-MIDDLE at new compound)** | NEW (round 27) | **Winner candidate (extends nezuko's α-LEFT shift)** |
-| #4473 | fern | **β2=0.993 + k=6 + α=0.7 (β2-bowl LEFT-edge at new compound, tighter than frieren #4431)** | NEW (round 27) | β2-bowl LEFT bracket |
+| #4482 | thorfinn | **--lion_wd 2e-4 + k=6 + β2=0.995 (WD RIGHT bracket at new compound)** | NEW (round 28) | WD-bowl RIGHT (mirrors tanjiro's LEFT) |
+| #4475 | nezuko | α=0.60 + k=6 + β2=0.995 (α-bowl LEFT-EDGE at new compound) | Running (round 27) | **Winner candidate** |
+| #4472 | alphonse | α=0.65 + k=6 + β2=0.995 (α-bowl LEFT-MIDDLE at new compound) | Running (round 27) | **Winner candidate** |
+| #4473 | fern | β2=0.993 + k=6 + α=0.7 (β2-bowl LEFT-edge tighter than frieren #4431) | Running (round 27) | β2-bowl LEFT |
 | #4455 | askeladd | cfg.lr=4e-4 + k=6 + β2=0.995 + α=0.7 (LR LEFT micro-probe) | Running (round 26) | LR-bowl LEFT |
 | #4456 | tanjiro | --lion_wd 5e-5 + k=6 + β2=0.995 (WD LEFT micro-probe) | Running (round 26) | WD-bowl LEFT |
-| #4457 | thorfinn | 3-seed canonical seed=3: k=6 + β2=0.995 + α=0.7 | Running (round 26) | Paper canonical (n=4) |
 | #4431 | frieren | β2=0.994 + k=6 + α=0.7 (β2-bowl left-edge at new k) | Running (round 25) | β2-bowl LEFT |
 | #4432 | edward | cfg.lr=7e-4 + k=6 + β2=0.995 (LR RIGHT bracket) | Running (round 25) | LR probe |
 
 **All 8 students active. Zero idle. Single-arm policy in force.**
 
-### Round-27 strategic theme: α-LEFT exploitation at NEW k=6 compound
+### Round-28 strategic theme: full lever bracketing + paper-canonical finalization
 
-Nezuko's PR #4415 (closed this round) confirmed the α-bowl shifts LEFT under β2=0.995 at k=5. The natural follow-up is to test whether this shift extends to the NEW k=6 compound. Two parallel probes:
-- **alphonse #4472**: α=0.65 + k=6 + β2=0.995 (α-bowl LEFT-MIDDLE at new compound — exactly nezuko's winning α value, applied to k=6)
-- **nezuko #4475**: α=0.60 + k=6 + β2=0.995 (α-bowl LEFT-EDGE at new compound — pushes further left)
+With n=4 canonical complete and PAPER-READY (45.34 ± 0.48 SEM test), round-28 finalizes the bracket on the WD lever:
+- **thorfinn #4482**: --lion_wd 2e-4 (WD RIGHT)
+- **tanjiro #4456 (in flight)**: --lion_wd 5e-5 (WD LEFT)
+- Default: 1e-4 (current winner)
 
-Combined with the closed RIGHT probes (#4430 α=0.75 closed within noise; #4402 α=0.70 winner), this fully maps the α-bowl at k=6+β2=0.995 over {0.60, 0.65, 0.70, 0.75}. **If alphonse or nezuko wins, we have a NEW programme best.** Mechanism is mechanistically aligned (smoother m-buffer + longer sync interval ⇒ less slow-pull needed).
+Combined, this is a 3-point WD bowl mapping at the new compound. If both flanks regress, WD=1e-4 is the bowl floor. If 2e-4 wins or 5e-5 wins, follow-up canonicalizes.
 
-Fern #4473 (β2=0.993) tightens the β2 LEFT bracket complementing frieren's #4431 (β2=0.994).
+### α-LEFT × k=6 candidates remain the headline winner candidates (round-27 dispatched)
+
+- alphonse #4472: α=0.65 + k=6 + β2=0.995
+- nezuko #4475: α=0.60 + k=6 + β2=0.995
+
+If either wins, we have a new programme best (mechanism: smoother m-buffer × longer sync ⇒ less slow-pull needed compounds across both dimensions).
+
+## Round-28 closures (1 closure)
+
+- **#4457 thorfinn (seed=3 canonical k=6+β2=0.995+α=0.7)** CLOSED: val=46.22 / test=44.53. n=4 canonical PAPER-READY at val 46.77±0.52 SEM / test 45.34±0.48 SEM. **CRITICAL: PR #4402's headline test=44.51 is at −0.83σ of population — single-seed merge is lucky-draw, not expected outcome.** Thorfinn reassigned to WD RIGHT bracket #4482.
 
 ## Round-27 closures (3 closures)
 

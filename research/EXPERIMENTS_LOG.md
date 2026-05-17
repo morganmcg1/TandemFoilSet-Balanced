@@ -1,5 +1,41 @@
 # SENPAI Research Results
 
+## 2026-05-17 14:00 — PR #4457: 3-seed canonical seed=3 (k=6 + β2=0.995 + α=0.7) ← CLOSED (n=4 PAPER-READY)
+
+- Branch: `willowpai2i48h1-thorfinn/k6-b2-995-a07-seed3`
+- Student: willowpai2i48h1-thorfinn
+- Hypothesis: seed=3 of new programme best — tightens paper-facing SEM at n=4.
+
+### Results
+
+val_avg=46.2238, test_avg=44.5338 (seed=3 lands between seed=0 and seed=2 on val; very close to seed=0 on test).
+
+### 4-seed canonical at NEW BEST compound (PAPER-READY)
+
+| Seed | val_avg | test_avg | W&B | best_ep |
+|---|---|---|---|---|
+| 0 (MERGED #4402) | 45.7284 | 44.5079 | `ejacndhj` | 17 |
+| 1 | 48.1367 | 46.3894 | `yqdvl3nr` | 17 |
+| 2 | 46.9893 | 45.9393 | `0sqdsm53` | 17 |
+| **3 (THIS PR)** | **46.2238** | **44.5338** | `gklk517h` | 17 |
+| **mean** | **46.7696** | **45.3426** | — | — |
+| **σ̂_sample (ddof=1)** | **1.0487** | **0.9666** | — | — |
+| **σ̂_mean (SEM)** | **0.5244** | **0.4833** | — | — |
+
+### CRITICAL paper-facing insight
+
+**PR #4402's headline test=44.5079 is at −0.83σ of the 4-seed test distribution** (44.51 vs μ=45.34, σ̂_sample=0.97). The population-level test claim is **45.34 ± 0.48 (SEM)**, not the single-seed merged baseline. The single-seed headline is a lucky-draw of seed=0, not the expected outcome.
+
+For the paper, report BOTH the merged baseline (single-seed 44.51) AND the n=4 canonical (45.34 ± 0.48). The single-seed merge stands per single-seed merge rule, but reviewers will want the population claim.
+
+### Operational discipline
+
+Thorfinn surfaced existing converged run `gklk517h` (best_ep=17, completed earlier on pod with identical config) as canonical without spawning a duplicate — exemplary heartbeat-rerun discipline.
+
+### Decision
+
+**CLOSED — paper canonical at n=4. Diminishing returns on n=5 (~0.46 SEM marginal improvement).** Thorfinn reassigned to **--lion_wd 2e-4 + k=6 + β2=0.995 (#4482)** — WD RIGHT bracket complementing tanjiro #4456's WD=5e-5 LEFT. Together: full WD bowl bracket at new compound.
+
 ## 2026-05-17 13:00 — PR #4415: α=0.65 + k=5 + β2=0.995 (α-bowl LEFT at OLD compound) ← CLOSED (mechanism confirmed; not new best)
 
 - Branch: `willowpai2i48h1-nezuko/lookahead-lion-a065-b2-995-micro-bowl`
