@@ -1,5 +1,66 @@
 # SENPAI Research Results
 
+## 2026-05-17 18:30 — PR #4521: --weight_decay 3e-3 (Lion ACTIVE WD MID) ← SENT BACK for 4-seed replication (FIRST POSSIBLE WIN since #4402)
+
+- Branch: `willowpai2i48h1-alphonse/wd3e3-k6-b2-995-a07`
+- Student: willowpai2i48h1-alphonse
+- Hypothesis: standard active Lion WD at the new compound; first proper bowl mapping after tanjiro #4456's fp32 no-op discovery.
+
+### Single-seed (seed=0) result
+
+| Metric | This run | #4402 baseline (seed=0, effective wd=0) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **45.4891** | 45.7284 | **−0.239** (best val in 22 closures) |
+| test_avg/mae_surf_p | **44.6397** | 44.5079 | +0.132 |
+
+### Analysis
+
+val improvement is **0.26× σ̂_sample (0.92)** — within single-seed noise. Test slightly regresses (+0.13). For paper-facing claims, test_avg/mae_surf_p is the headline metric — a val improvement that comes with test regression at single-seed could easily flip across seeds.
+
+### Decision
+
+**REQUESTED 4-SEED REPLICATION** (seeds 1, 2, 3, 4). Combined with already-completed seed=0, this gives a 5-seed canonical at wd=3e-3 directly comparable to the 5-seed canonical at effective-wd=0 (val 46.83±0.41 SEM / test 45.49±0.40 SEM).
+
+Decision logic on combined 5-seed:
+- val mean < 46.50 AND test mean < 45.20 → REAL WIN, merge as new baseline
+- val mean ∈ [46.50, 46.85] AND test mean ≤ 45.50 → mild win, possibly merge
+- val mean ≥ 46.85 OR test mean > 45.60 → not real, close
+
+This is the first val improvement in 22 closures — worth the ~2h seed-replication cost to verify reproducibility.
+
+---
+
+## 2026-05-17 18:30 — PR #4523: --weight_decay 1e-2 (Lion ACTIVE WD HIGH) ← CLOSED NEUTRAL
+
+- Branch: `willowpai2i48h1-frieren/wd1e2-k6-b2-995-a07`
+- Student: willowpai2i48h1-frieren
+- Hypothesis: standard transformer-range WD might find a regularization win.
+
+### Result
+
+val=46.7114 (sits on 5-seed canonical mean 46.83 ± 0.41 SEM, Δ −0.12 within SEM), test=45.5651 (sits on test canonical 45.49 ± 0.40 SEM, Δ +0.08 within SEM). Neutral on both axes.
+
+### Lion ACTIVE WD bowl mapping (round 31-32, single-seed)
+
+| wd | lr*wd | val (seed=0) | Δ vs #4402 | verdict |
+|---|---|---|---|---|
+| ≤ 1e-4 (no-op) | ≤ 1.67e-8 | 45.7284 | 0 (definition) | effective wd=0 |
+| 1e-3 (tanjiro #4518) | 1.67e-7 | TBD | — | in flight |
+| **3e-3 (alphonse #4521)** | **5.00e-7** | **45.49** | **−0.24** | **best single-seed; sent back for replication** |
+| **1e-2 (this PR #4523)** | **1.67e-6** | **46.71** | **+0.98** | **neutral / mild over-reg** |
+
+Single-seed bowl shape suggests mid-range (3e-3) is the sweet spot, with the 1e-2 endpoint starting to over-regularize. Tanjiro's 1e-3 result will fill in the low end of the bowl.
+
+### Mechanism reading for paper
+
+The Lookahead-Lion-β2=0.995-k=6 compound has **already optimized its implicit regularization** via smoothing dynamics. Explicit weight decay at standard transformer values (1e-2) is at best neutral. The 'right' active WD regime (if exists) appears narrow — likely 1e-3 to 3e-3 window. Pending replication verdict at 3e-3.
+
+### Decision
+
+CLOSED. Frieren reassigned to **Layer-wise LR decay (LLRD) decay=0.95 per Transolver block (#4562)** — different bold mechanism (per-block training dynamics).
+
+---
+
 ## 2026-05-17 18:00 — PR #4525: Cosine warm restarts (2 cycles T_0=8) ← CLOSED CATASTROPHIC (budget-incompatible)
 
 - Branch: `willowpai2i48h1-thorfinn/cosine-warm-restarts-k6-b2-995-a07`

@@ -1,7 +1,7 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 18:00
-- **Launch:** willow-pai2i-48h-r1 (round 32 — Lookahead-Lion era; **⚠️ PLATEAU PROTOCOL ACTIVE**; **PROGRAMME ALL-TIME BEST val=45.7284 / test=44.5079 SEED=0** (PR #4402); **5-seed canonical val=46.83±0.41 SEM / test=45.49±0.40 SEM (PAPER-READY)**; **⚠️ MAJOR FINDING (round-31): Lion WD has been an fp32 NO-OP at wd ≤ 1e-4 for the ENTIRE programme** (tanjiro #4456 bit-identical proof); **22 closures since merge, ZERO improvements**; **α-axis FULLY RESOLVED (static optimum, both schedule directions falsified); LR-axis FULLY RESOLVED (5e-4 sharp floor); warm restarts BUDGET-INFEASIBLE**; **8 bold-swing experiments in flight: 3 active-WD probes + Lookahead outer momentum + focal-loss + Huber + SWA-last-4 + joint (k=7,β2=0.9957)**)
+- **Date:** 2026-05-17 18:30
+- **Launch:** willow-pai2i-48h-r1 (round 32 — Lookahead-Lion era; **⚠️ PLATEAU PROTOCOL ACTIVE**; **PROGRAMME ALL-TIME BEST val=45.7284 / test=44.5079 SEED=0** (PR #4402); **5-seed canonical val=46.83±0.41 SEM / test=45.49±0.40 SEM (PAPER-READY)**; **⚠️ MAJOR FINDING (round-31): Lion WD has been an fp32 NO-OP at wd ≤ 1e-4 for the ENTIRE programme** (tanjiro #4456 bit-identical proof); **23 closures since merge, ZERO improvements**; **⚠️ FIRST POSSIBLE WIN: alphonse #4521 wd=3e-3 single-seed val=45.49 (Δ −0.24) — SENT BACK for 4-seed replication**; **α-axis FULLY RESOLVED; LR-axis FULLY RESOLVED; warm restarts BUDGET-INFEASIBLE; SWA/EMA doesn't compose with Lookahead**; **8 experiments in flight: wd=1e-3 + wd=3e-3-seed-replication + outer momentum + focal-loss + Huber + SWA-last-4 + LLRD + joint (k=7,β2=0.9957)**)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN)
 - **Latest direction from human team:** None (no open issues scoped to this launch)
@@ -166,16 +166,16 @@ If any of {1e-3, 3e-3, 1e-2} beats #4402, the entire programme has a new compoun
 
 | PR | Student | Hypothesis | Status | Priority |
 |----|---------|-----------|--------|----------|
-| #4547 | nezuko | **Huber loss δ=1.0** — loss-curvature reformulation (Lion m-buffer hard-example concentration) | NEW (round 32) | **Bold loss-mechanism swing** |
-| #4546 | thorfinn | **SWA uniform mean of slow_weights at ep {14,15,16,17}** — variance reduction in converged regime | NEW (round 32) | **Bold variance-reduction (distinct from fern #4500 EMA)** |
+| #4562 | frieren | **Layer-wise LR decay (LLRD) decay=0.95 per Transolver block** | NEW (round 32) | Bold per-block training dynamics |
+| #4547 | nezuko | **Huber loss δ=1.0** — loss-curvature reformulation (Lion m-buffer hard-example concentration) | NEW (round 32) | Bold loss-mechanism swing |
+| #4546 | thorfinn | **SWA uniform mean of slow_weights at ep {14,15,16,17}** — variance reduction in converged regime | NEW (round 32) | Bold variance-reduction (distinct from fern #4500 EMA) |
 | #4537 | fern | **Focal-loss per-node hardness weighting γ=1.0** on surface MAE | Running (round 31) | Bold loss reformulation |
 | #4536 | askeladd | **Lookahead OUTER momentum β_outer=0.5** on slow-step direction | Running (round 31) | Bold optimizer mechanism |
-| #4523 | frieren | **--weight_decay 1e-2** — Lion ACTIVE WD probe HIGH | Running (round 31) | First proper WD-bowl mapping |
-| #4521 | alphonse | **--weight_decay 3e-3** — Lion ACTIVE WD probe MID | Running (round 31) | First proper WD-bowl mapping |
-| #4518 | tanjiro | **--weight_decay 1e-3** — Lion ACTIVE WD probe LOW (their own finding) | Running (round 31) | First proper WD-bowl mapping |
+| **#4521** | **alphonse** | **--weight_decay 3e-3 SEED REPLICATION (seeds 1,2,3,4)** | **SENT BACK (round 32)** | **⚠️ FIRST POSSIBLE WIN since #4402 — verify reproducibility** |
+| #4518 | tanjiro | **--weight_decay 1e-3** — Lion ACTIVE WD probe LOW (their own finding) | Running (round 31) | First proper WD-bowl mapping LOW |
 | #4506 | edward | (k=7, β2=0.9957, α=0.7) JOINT shift — k×(1−β2)≈0.03 invariant | Running (round 30) | Bold joint-shift mechanism |
 
-**All 8 students active. Zero idle. Single-arm policy in force. 8 bold-swing axes in flight covering: WD (3), outer-momentum, focal-loss, Huber, SWA, joint k×β2.**
+**All 8 students active. Zero idle. Single-arm policy in force, except alphonse #4521 doing seed-replication (4 sequential runs ~2h total). 8 axes in flight: LLRD + Huber + SWA + focal-loss + outer-momentum + wd=3e-3 replication + wd=1e-3 + joint k×β2.**
 
 ### ⚠️ Round-29 strategic theme: PLATEAU PROTOCOL activated
 
@@ -189,6 +189,16 @@ If any of {1e-3, 3e-3, 1e-2} beats #4402, the entire programme has a new compoun
 - **seed=4 canonical (frieren #4498):** strengthens paper SEM from n=4 (0.48 test) to n=5 (~0.43 test). Low-risk paper-strengthening.
 
 If alphonse or fern wins, multi-seed it immediately. If both regress, escalate to: (1) per-region loss weighting, (2) Tiger/ScheduleFree optimizers, (3) cosine warm restarts, (4) data augmentation.
+
+## Round-32 active-WD outcomes (in flight + 1 sent-back + 1 closed)
+
+⚠️ **FIRST POSSIBLE WIN since #4402**: alphonse #4521 at wd=3e-3 returned val=45.4891 (Δ −0.24 vs #4402) on seed=0. Single-seed improvement is within σ̂ (26% of σ̂_sample=0.92) and test slightly regressed (+0.13). **Sent back for 4-seed replication (seeds 1,2,3,4)** — if combined 5-seed val mean < 46.50 AND test mean < 45.20, this is the new baseline.
+
+- **#4523 frieren (--weight_decay 1e-2)** CLOSED NEUTRAL: val=46.71 / test=45.57, both within 1 SEM of canonical mean. wd=1e-2 starting to over-regularize. Frieren reassigned to **LLRD decay=0.95 per Transolver block (#4562)**.
+- **#4521 alphonse (--weight_decay 3e-3)** SENT BACK: val=45.49 (best single-seed in 22 closures) but within noise; needs multi-seed verification. 4-seed replication assigned.
+- **#4518 tanjiro (--weight_decay 1e-3)** STILL IN FLIGHT: low end of WD bowl.
+
+Single-seed WD bowl shape so far: 0 → 1e-3 (TBD) → 3e-3 (best, val=45.49) → 1e-2 (over-reg, val=46.71). Mid-range (3e-3) is the sweet spot — pending tanjiro's 1e-3 result and alphonse's seed-replication.
 
 ## Round-32 closures (4 closures)
 
