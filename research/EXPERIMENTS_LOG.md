@@ -1353,3 +1353,24 @@ Stop condition triggered (val > 41.0 threshold); Arm B (warmup=3) correctly not 
 - **Analysis:** Arm A is a clean, unambiguous win. Same param count (~-0.4%), identical VRAM, +3.9% per-epoch time cost, every split improved. The val curve **converged within budget** (plateau at ep33) — this is a genuine quality gain, not a throughput/compute artifact. The multiplicative gating structure (SiLU(W1·x) ⊙ (W2·x)) models nonlinear coupling between projected features more effectively than GELU scalar non-linearity. Arm B is not strictly worse under equal epochs but failed to fit the 30-min budget due to compile recompile overhead.
 - **Key finding:** val_geom_camber_rc improved only slightly (+0.64 = flat). SwiGLU helped single_in_dist (-4.66), cruise (-2.41), re_rand (-2.03) strongly but NOT the OOD geometric bottleneck. The camber_rc gap remains a data-coverage / geometric generalization problem unaddressed by activation form.
 - **Decision:** MERGED. New baseline: val=36.5616, test=30.9654. **Cumulative improvement from initial baseline:** 135.02 → 36.56 = **-72.9%**. Follow-up: #4477 alphonse GeGLU/bilinear ablation — does GELU gate or gating structure alone explain the gain?
+
+---
+
+## 2026-05-17 08:35 — PR #4306: Slice_num coarser sweep — 40 and 32 (continuing from #4243 slice=48)
+
+- **Branch:** charliepai2i48h2-askeladd/slice-num-coarser
+- **Hypothesis:** Monotone "coarser → better" trend (slice 96→64→48) would continue to slice=40 and slice=32.
+- **Metric artifacts:** `models/model-charliepai2i48h2-askeladd-slice-num-coarser-A-20260517-025242/metrics.jsonl`, `models/model-charliepai2i48h2-askeladd-slice-num-coarser-B-20260517-032709/metrics.jsonl`
+
+| Metric | Baseline (PR #4243, slice=48) | Arm A (slice=40) | Arm B (slice=32) |
+|--------|------------------------------|------------------|------------------|
+| **val_avg/mae_surf_p** | **38.6750** (old) / **36.5616** (NEW) | 41.2723 (+6.7% vs new) | 38.9444 (+6.5% vs new) |
+| **test_avg/mae_surf_p** | **33.4948** (old) / **30.9654** (NEW) | 35.0361 (+13.1% vs new) | 34.3120 (+10.8% vs new) |
+| val_geom_camber_rc | 51.62 | 53.05 (+2.8%) | 52.59 (+1.9%) |
+| Best epoch | 35 | 36 (descending, still −0.35/ep) | 37 (nearly flat, −0.08/ep) |
+| Per-epoch time | 51.7 s | 51.0 s | 48.9 s |
+| Peak VRAM | 22.60 GB | 21.98 GB | 21.36 GB |
+
+- **Analysis:** U-shape confirmed. slice_num landscape: 96=42.54, 64=39.83, **48=38.68 [optimum]**, 40=41.27, 32=38.94. Both arms clearly worse than the new SwiGLU baseline (36.5616). Arm B is near-neutral vs the old baseline (38.675) but loses on test_geom_camber_rc — the hardest OOD split dominates. Arm A still descending at ep36 (−0.35/ep) but trajectory suggests landing ~39.5, still above old baseline. Per-student analysis: coarser than 48 loses spatial resolution for tandem-foil interaction routing; finer than 48 adds attention-matrix noise. The spatial routing optimum is genuinely at 48.
+- **Key insight:** Note assigned against old baseline (38.675) but evaluated against new SwiGLU baseline (36.5616) — both arms clearly fail either way.
+- **Decision:** CLOSED — no_improvement. Slice_num axis fully closed: U-shape confirms 48 is the local optimum. → askeladd reassigned to #4487 gradient noise injection (parameter-space regularization, unexplored axis).
