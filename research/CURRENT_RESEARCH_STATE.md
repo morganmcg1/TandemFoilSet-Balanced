@@ -1,25 +1,27 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-17 02:35
+- **Date:** 2026-05-17 02:50
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
 ## Current best
 
-- **PR #4103 (tanjiro, merged):** BF16 + LayerScale γ=0.01 + n_freqs=**10** + **batch_size=2** + **Huber δ=0.10** + T_max=20 + clip=0.25 (no EMA)
-- **val_avg/mae_surf_p: 56.92** | **test_avg/mae_surf_p: 49.32**
-- Per-split test surf_p: single=54.68, rc=61.34, cruise=32.89, re_rand=48.35
-- best_epoch=18/18 (timeout-bound, still descending)
-- **Cumulative improvement: -55.8% val from round-5 start (~128.69)**
+- **PR #4221 (thorfinn, merged):** BF16 + LayerScale γ=0.01 + n_freqs=**10** + **batch_size=2** + **Huber δ=0.10** + T_max=20 + clip=0.25 + **slice_num=32** (no EMA)
+- **val_avg/mae_surf_p: 56.124** | **test_avg/mae_surf_p: 49.696**
+- Per-split test surf_p: single=53.05, rc=62.68, cruise=33.96, re_rand=49.10
+- best_epoch=22/22 (timeout-bound, still descending; 4 extra epochs from 19% faster s/epoch)
+- **Note**: arm-2 (slice=48) test=48.578 beats both prior test baselines but was not merged (val winner criterion). Thorfinn now testing slice=40 middle bracket + slice=48+T_max=24 (#4298).
+- **Cumulative improvement: -56.4% val from round-5 start (~128.69)**
 
 **Also strong:** PR #4146 (val=57.11): bs=2+n=8+lr=7e-4 — test=49.24, all 4 splits improve. Different stack lineage, coexisting.
+**Unmerged arm-2 of #4221** (slice=48): val=56.555, test=**48.578** — best test ever seen. Now retested in thorfinn #4298.
 
 ## Two competing lineages
 
 | Lineage | Stack | val | test | Strength |
 |---|---|---|---|---|
 | A | bs=2+n=8+lr=7e-4 (#4146) | 57.11 | 49.24 | n=8 aliasing reduction + larger steps |
-| **B (current best)** | bs=2+n=10+δ=0.10 (#4103) | **56.92** | 49.32 | Tight Huber (L1-like) on late residuals |
+| **B (current best)** | bs=2+n=10+δ=0.10+slice=32 (#4221) | **56.124** | 49.696 | Tight Huber + smaller routing slots = more epochs |
 
 **4-way merger (both lineages)**: bs=2+n=8+lr=7e-4+δ=0.10 → **tanjiro #4220 arm-1 is testing this.**
 
@@ -27,7 +29,8 @@
 
 | PR | Method | val_avg | test_avg | Δ val |
 |---|---|---|---|---|
-| **#4103 (tanjiro, merged)** | **BF16 + LS + n10 + bs=2 + δ=0.10** | **56.92** | **49.32** | **-0.33%** |
+| **#4221 (thorfinn, merged)** | **BF16 + LS + n10 + bs=2 + δ=0.10 + slice=32** | **56.124** | **49.696** | **-1.40%** |
+| #4103 (tanjiro, merged) | BF16 + LS + n10 + bs=2 + δ=0.10 | 56.92 | 49.32 | -0.33% |
 | #4146 (alphonse, merged) | BF16 + LS + n8 + bs=2 + lr=7e-4 | 57.11 | 49.24 | -1.99% |
 | #4083 (alphonse, merged) | BF16 + LS + n8 + batch_size=2 | 58.27 | 51.12 | -3.96% |
 | #4026 (alphonse, merged) | BF16 + LS + n10 + batch_size=2 | 60.67 | 53.11 | -5.32% |
@@ -42,7 +45,7 @@
 | edward | #4289 | n_hidden capacity {160, 192} on new best (bs=2+n=10+δ=0.10) | wave-15 NEW (just assigned) |
 | fern | #4288 | EMA × δ=0.10 compound on new best (τ={0.998, 0.9995}) | wave-15 NEW (just assigned) |
 | tanjiro | #4220 | 4-way merge (n=8+lr=7e-4+δ=0.10) + δ=0.05 | wave-14 WIP (long-running, multiple arms) |
-| thorfinn | #4221 | slice_num lower bracket {32, 48} on new best | wave-14 WIP |
+| thorfinn | #4298 | slice_num refinement — slice=40 + slice=48+T_max=24 on new best | wave-15 NEW (just assigned) |
 | frieren | #4222 | lr=7e-4+clip=1.0 on bs=2+n=10+δ=0.10 (5-way compound) | wave-14 WIP |
 | nezuko | #4293 | sub-unity clip {0.15, 0.10} on bs=2+n=10+δ=0.10 | wave-15 NEW (just assigned) |
 | alphonse | #4198 | LR upper search {9e-4, 1.2e-3} on bs=2+n=8 | wave-14 WIP |
@@ -70,7 +73,7 @@
 - **δ=0.30 confirmed optimal for lineage A** (n=8+lr=7e-4). Settling this knob — closed edward #4199.
 - **n=8 × clip=1.0 SUBSTITUTES**: Do NOT combine. clip=1.0 on n=10, n=8 on clip=0.25.
 - **bs=1 ceiling found**: bs=2 is step-count optimum for 30-min budget.
-- **slice_num>64 fails hard**: routing softmax flattening. Testing {32, 48} with thorfinn.
+- **slice_num non-monotone**: slice>64 fails hard (routing softmax flattening). slice<64 improves via epoch-budget mechanism (slice=32: +4 epochs in 30 min → val=56.124 NEW BEST). Val/test winner split: slice=32 wins val, slice=48 wins test (best test=48.578 seen). Sweet spot likely between 32-48. Testing slice=40 + slice=48+T_max=24 in thorfinn #4298.
 - **Monotonic Huber**: δ=0.10 profitable on n=10 stack; δ floor not yet found (δ=0.05 in tanjiro #4220).
 - **EMA alive at bs=2** (PR #4130 closed): both τ=0.998/0.995 beat no-EMA bs=2+n=10 baseline by 1.3-1.6 val. EMA gap +4.18 at τ=0.998. Mechanism confirmed (noise-averaging at 13,500 steps), but doesn't beat current best 56.92 (which uses δ=0.10). Compound test running (fern #4288).
 - **clip × δ interaction REVERSES at tight knee** (PR #4223 closed): clip=1.0 + δ=0.10 → clip_frac drops to 0.716 at ep17 (vs 1.0 on δ=0.30 stack). Tight Huber knee → smaller late-epoch gradients → clip rarely engages. clip=1.0 regresses +1.66% val on this stack. **Implies tighter clip {0.15, 0.10} may now help** (testing in nezuko #4293).
@@ -79,7 +82,7 @@
 
 ## Key insights accumulated
 
-- **Current best stack**: BF16 + LS + n10 + bs=2 + δ=0.10 (val=56.92/test=49.32)
+- **Current best stack**: BF16 + LS + n10 + bs=2 + δ=0.10 + slice_num=32 (val=56.124/test=49.696)
 - **Alternative strong stack**: BF16 + LS + n8 + bs=2 + lr=7e-4 (val=57.11/test=49.24)
 - **δ=0.30 is optimal for lineage A** (n=8+lr=7e-4); **δ=0.10 for lineage B** (n=10)
 - **n=8 and clip=1.0 are substitutive**. Do NOT combine.
@@ -97,5 +100,5 @@
 - **LR warmup**: 5-epoch warmup on new best — untested.
 - **weight_decay sweep**: current 0.0001 default, never explored. {0.001, 0.01} possible.
 - **Per-domain loss weighting**: cruise responds to δ=0.15 distinctly (−2.75%). A domain-specific δ or surf_weight could exploit this.
-- **Lower slice_num {32, 48}**: thorfinn #4221 testing.
+- **slice_num=40 middle bracket + slice=48+T_max=24**: thorfinn #4298 testing (refining the slice=32 win).
 - **5-way compound (n=10+δ=0.10+lr=7e-4+clip=1.0)**: frieren #4222 testing.

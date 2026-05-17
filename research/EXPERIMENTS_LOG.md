@@ -5,6 +5,43 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-17 02:40 — PR #4221 (charliepai2i48h5-thorfinn): slice_num lower bracket {32, 48} on bs=2+n=10+δ=0.10 — MERGED (arm-1 slice=32 NEW BEST val=56.124)
+
+- branch: `thorfinn/slice-lower-bracket`
+- hypothesis: smaller slice_num (below baseline 64) speeds s/epoch → more updates → lower val via epoch budget boost. Reverse of slice=128/192 failure from PR #4131.
+
+| arm | slice_num | val_avg | test_avg | Δ val vs base | Δ test vs base | best_epoch | s/epoch | peak_mem |
+|-----|-----------|---------|----------|---------------|----------------|------------|---------|----------|
+| baseline (#4103) | 64 | 56.92 | 49.32 | — | — | 18/18 | 103 | 18.47 GB |
+| arm-1 (MERGED) | 32 | **56.124** | 49.696 | **-1.40%** | +0.76% ✗ | 22/22 | 83.9 | 15.37 GB |
+| arm-2 | 48 | 56.555 | **48.578** | -0.67% | **-0.74%** | 20/20 | 93.4 | 16.92 GB |
+
+- metric artifacts: `models/model-bf16-layerscale-bs2-n10-huber010-slice32-20260517-002449/metrics.jsonl`, `models/model-bf16-layerscale-bs2-n10-huber010-slice48-20260517-012358/metrics.jsonl`
+
+**Per-split test surf_p:**
+
+| arm | single | rc | cruise | re_rand |
+|-----|-------:|---:|-------:|--------:|
+| baseline (slice=64) | 54.68 | 61.34 | 32.89 | 48.35 |
+| arm-1 slice=32 | **53.05** | 62.68 | 33.96 | 49.10 |
+| arm-2 slice=48 | 53.65 | 61.86 | **31.42** | **47.39** |
+
+**Analysis and conclusions:**
+
+Hypothesis confirmed. Smaller slice_num below the current 64 baseline improves val via epoch-budget mechanism: slice=32 fits 22 epochs in 30 min (vs 18 at slice=64), arm-2 gets 20 epochs. Both beat val baseline — reversing the slice=128/192 direction from #4131.
+
+However the val/test winner split is significant: arm-1 (slice=32) wins val by -1.40% but its test is slightly worse (+0.76%). Arm-2 (slice=48) has the better test profile (-0.74%) with better generalization across cruise and re_rand splits. Mechanism: slice=32 may push routing into a topology that fits in-distribution geometry well but loses interpolation capacity for unseen camber/Re distributions.
+
+Both arms were still descending at timeout (best_epoch == total_epochs). Clip_frac@17 ≈ 0.99 for both — gradient clipping still active at this regime.
+
+**Merge rationale:** arm-1 (slice=32) is the val primary metric winner → merged. arm-2 slice=48 is assigned as follow-up to thorfinn.
+
+**Follow-up actions:**
+- Assign thorfinn slice=40 middle bracket (find sweet spot between arm-1 val win and arm-2 test win)
+- Consider slice=48 + longer T_max (lr_t_max=24) to match the actual epoch count
+
+---
+
 ## 2026-05-17 02:30 — PR #4223 (charliepai2i48h5-nezuko): clip=1.0 + surf_weight=5 on bs=2+n=10+δ=0.10 — CLOSED (both arms regress; clip × δ interaction reverses)
 
 - branch: `nezuko/clip-surf-compound`
