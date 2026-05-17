@@ -136,9 +136,20 @@ class PhysicsAttention(nn.Module):
         return self.to_out(out_x)
 
 
+class LayerScale(nn.Module):
+    """Per-channel learnable residual gating. Touvron 2021 (CaiT)."""
+    def __init__(self, dim: int, init_value: float = 1e-4):
+        super().__init__()
+        self.gamma = nn.Parameter(init_value * torch.ones(dim))
+
+    def forward(self, x):
+        return x * self.gamma
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 layer_scale_init: float = 0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -149,6 +160,8 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        self.ls1 = LayerScale(hidden_dim, init_value=layer_scale_init) if layer_scale_init > 0 else nn.Identity()
+        self.ls2 = LayerScale(hidden_dim, init_value=layer_scale_init) if layer_scale_init > 0 else nn.Identity()
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -157,8 +170,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = self.ls1(self.attn(self.ln_1(fx))) + fx
+        fx = self.ls2(self.mlp(self.ln_2(fx))) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -169,7 +182,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 layer_scale_init: float = 0.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -190,6 +204,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                layer_scale_init=layer_scale_init,
             )
             for i in range(n_layers)
         ])
@@ -459,6 +474,7 @@ class Config:
     ema_decay: float = 0.999
     compile_mode: str = ""  # empty = no compile (baseline behavior)
     slice_num: int = 64
+    layer_scale_init: float = 0.0   # LayerScale γ init; 0 = disabled
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -501,12 +517,16 @@ model_config = dict(
     n_head=4,
     slice_num=cfg.slice_num,
     mlp_ratio=2,
+    layer_scale_init=cfg.layer_scale_init,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
+n_ls_params = sum(p.numel() for n, p in model.named_parameters() if "gamma" in n)
+print(f"LayerScale: init={cfg.layer_scale_init}")
+print(f"  LayerScale γ params: {n_ls_params}")
 if cfg.compile_mode:
     _mode = cfg.compile_mode if cfg.compile_mode != "default" else None
     model = torch.compile(model, mode=_mode, dynamic=True)
@@ -622,7 +642,12 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
-    append_metrics_jsonl(metrics_jsonl_path, {
+    gamma_stats: dict[str, float] = {}
+    if cfg.layer_scale_init > 0:
+        for n, p in model.named_parameters():
+            if "gamma" in n:
+                gamma_stats[n] = float(p.detach().abs().mean().item())
+    epoch_record = {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
@@ -636,7 +661,10 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
-    })
+    }
+    if gamma_stats:
+        epoch_record["gamma_abs_mean"] = gamma_stats
+    append_metrics_jsonl(metrics_jsonl_path, epoch_record)
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
@@ -645,6 +673,9 @@ for epoch in range(MAX_EPOCHS):
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
+    if gamma_stats and (epoch + 1) % 5 == 0:
+        gamma_str = ", ".join(f"{n}={v:.4f}" for n, v in gamma_stats.items())
+        print(f"  γ |mean|: {gamma_str}")
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
