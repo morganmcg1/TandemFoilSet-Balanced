@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -351,6 +352,7 @@ def write_experiment_summary(
         "epochs_configured": cfg.epochs,
         "optimizer": "schedulefree.AdamWScheduleFree",
         "sf_warmup_steps": cfg.sf_warmup_steps,
+        "cosine_annealing": cfg.cosine_annealing,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -400,6 +402,7 @@ class Config:
     ema_decay: float = 0.997  # EMA decay for shadow model evaluated at val/test
     sf_warmup_steps: int = 200  # Schedule-Free linear LR warmup
     max_grad_norm: float = 1.0  # Gradient clipping max norm (set 0 to disable)
+    cosine_annealing: bool = False  # Add cosine LR annealing from lr to lr*0.05 over epochs
 
 
 cfg = sp.parse(Config)
@@ -462,6 +465,21 @@ optimizer = schedulefree.AdamWScheduleFree(
     warmup_steps=cfg.sf_warmup_steps,
 )
 print(f"Optimizer: schedulefree.AdamWScheduleFree warmup_steps={cfg.sf_warmup_steps}")
+
+# Optional cosine annealing on top of SF AdamW. Stepping once per epoch.
+# At init last_epoch=0 → lambda(0)=1.0 → lr stays at cfg.lr during epoch 1.
+# Step at the end of each epoch (outside optimizer.train()) so the next epoch
+# uses the decayed lr.
+if cfg.cosine_annealing:
+    cosine_lr_min_ratio = 0.05  # decay to 5% of peak
+    cosine_T_max = MAX_EPOCHS
+    def _cosine_lr(epoch: int) -> float:
+        e = min(epoch, cosine_T_max)
+        return cosine_lr_min_ratio + (1.0 - cosine_lr_min_ratio) * 0.5 * (1.0 + math.cos(math.pi * e / cosine_T_max))
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_cosine_lr)
+    print(f"Scheduler: cosine annealing lr={cfg.lr} → lr*{cosine_lr_min_ratio} over T_max={cosine_T_max}")
+else:
+    scheduler = None
 
 # dynamic=True is required: per-batch max_n varies (pad_collate), so static-shape
 # compile would recompile every batch. Compile model (not ema_model) — training loop
@@ -575,6 +593,7 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    current_lr = float(optimizer.param_groups[0]["lr"])
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -586,6 +605,7 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "grad_norm": grad_norm_stats,
+        "lr": current_lr,
     })
     if grad_norm_stats is not None:
         print(
@@ -594,12 +614,17 @@ for epoch in range(MAX_EPOCHS):
             f"{grad_norm_stats['n_steps']}"
         )
     print(
-        f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
+        f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB] lr={current_lr:.2e}  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
+
+    # Step LR scheduler at end of epoch (outside optimizer.train()) so the
+    # next epoch picks up the decayed lr from optimizer.param_groups[0]['lr'].
+    if scheduler is not None:
+        scheduler.step()
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
