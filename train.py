@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -45,6 +46,25 @@ from data import (
     load_test_data,
     pad_collate,
 )
+
+# ---------------------------------------------------------------------------
+# Fourier positional encoding (Tancik et al. 2020, NeurIPS)
+# ---------------------------------------------------------------------------
+
+
+def fourier_pos_enc(xy: torch.Tensor, K: int, sigma_max: float = 100.0) -> torch.Tensor:
+    """Per-coord sin/cos at K log-spaced frequencies in [1, sigma_max].
+
+    xy: [..., 2] raw (x, z) coordinates (pre-normalization preserves physical scale).
+    Returns: [..., 4K] features — concat over 2 coords × {sin, cos} × K frequencies.
+    """
+    freqs = torch.logspace(
+        0, math.log10(sigma_max), K, device=xy.device, dtype=xy.dtype
+    )  # [K]
+    angles = xy.unsqueeze(-1) * freqs  # [..., 2, K]
+    enc = torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)  # [..., 2, 2K]
+    return enc.reshape(*xy.shape[:-1], 4 * K)
+
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -325,7 +345,10 @@ class Transolver(nn.Module):
         # Condition values (Re, AoA, NACA, gap, stagger) are sample-level
         # constants stored per-node; node 0 is always real (padding appended
         # at the end by pad_collate) so we read the global condition from it.
-        cond = x[:, 0, 13:] if self.cond_dim > 0 else None
+        # Slice is bounded to cond_dim so appended features (e.g. Fourier
+        # positional encoding) past dim 13+cond_dim do not bleed into the
+        # conditioning signal.
+        cond = x[:, 0, 13:13 + self.cond_dim] if self.cond_dim > 0 else None
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx, cond=cond)
@@ -336,7 +359,16 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device, use_bf16: bool = False) -> dict[str, float]:
+def evaluate_split(
+    model,
+    loader,
+    stats,
+    surf_weight,
+    device,
+    use_bf16: bool = False,
+    fpe_K: int = 0,
+    fpe_sigma_max: float = 100.0,
+) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -357,8 +389,13 @@ def evaluate_split(model, loader, stats, surf_weight, device, use_bf16: bool = F
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            if fpe_K > 0:
+                fpe = fourier_pos_enc(x[..., :2], K=fpe_K, sigma_max=fpe_sigma_max)
+                x_input = torch.cat([x_norm, fpe], dim=-1)
+            else:
+                x_input = x_norm
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bf16):
-                pred = model({"x": x_norm})["preds"]
+                pred = model({"x": x_input})["preds"]
             # Loss and MAE accumulation in fp32 for stable reductions.
             pred = pred.float()
 
@@ -452,7 +489,15 @@ def write_experiment_summary(
     print(f"\nSaved experiment summary to {summary_path}")
 
 
-def collect_gate_stats(model: nn.Module, loader, stats: dict, device, use_bf16: bool = False) -> list[dict]:
+def collect_gate_stats(
+    model: nn.Module,
+    loader,
+    stats: dict,
+    device,
+    use_bf16: bool = False,
+    fpe_K: int = 0,
+    fpe_sigma_max: float = 100.0,
+) -> list[dict]:
     """One-batch GEGLU gate-activation health. Captures post-activation gate
     mean/std for each GEGLU module. Uses the first batch of ``loader``.
     """
@@ -480,8 +525,13 @@ def collect_gate_stats(model: nn.Module, loader, stats: dict, device, use_bf16: 
             for x, y, is_surface, mask in loader:
                 x = x.to(device, non_blocking=True)
                 x_norm = (x - stats["x_mean"]) / stats["x_std"]
+                if fpe_K > 0:
+                    fpe = fourier_pos_enc(x[..., :2], K=fpe_K, sigma_max=fpe_sigma_max)
+                    x_input = torch.cat([x_norm, fpe], dim=-1)
+                else:
+                    x_input = x_norm
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bf16):
-                    _ = model({"x": x_norm})
+                    _ = model({"x": x_input})
                 break
     finally:
         for h in handles:
@@ -581,6 +631,8 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     use_bf16: bool = False   # Enable bf16 mixed-precision via torch.autocast (H95)
     T_max: int = 15  # CosineAnnealingLR period; default preserves prior behavior
+    fpe_K: int = 0  # Fourier positional encoding: K log-spaced frequencies. 0 disables (H117)
+    fpe_sigma_max: float = 100.0  # FPE max frequency (log-spaced from 1.0)
 
 
 cfg = sp.parse(Config)
@@ -617,7 +669,9 @@ val_loaders = {
 
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    # fun_dim absorbs the 22 non-spatial input features plus, when FPE is on,
+    # 4*K extra Fourier coordinate features appended to the input.
+    fun_dim=X_DIM - 2 + 4 * cfg.fpe_K,
     out_dim=3,
     n_hidden=128,
     n_layers=cfg.n_layers,
@@ -688,8 +742,13 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        if cfg.fpe_K > 0:
+            fpe = fourier_pos_enc(x[..., :2], K=cfg.fpe_K, sigma_max=cfg.fpe_sigma_max)
+            x_input = torch.cat([x_norm, fpe], dim=-1)
+        else:
+            x_input = x_norm
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=cfg.use_bf16):
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_input})["preds"]
         # Loss computation in fp32: reductions on tiny Huber thresholds (0.25, 0.5)
         # benefit from full precision, and Lion only needs gradient signs anyway.
         pred = pred.float()
@@ -732,7 +791,10 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, use_bf16=cfg.use_bf16)
+        name: evaluate_split(
+            model, loader, stats, cfg.surf_weight, device,
+            use_bf16=cfg.use_bf16, fpe_K=cfg.fpe_K, fpe_sigma_max=cfg.fpe_sigma_max,
+        )
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -752,7 +814,10 @@ for epoch in range(MAX_EPOCHS):
 
     gate_stats = []
     if cfg.ffn_act in ("geglu", "swiglu"):
-        gate_stats = collect_gate_stats(model, val_loaders["val_single_in_dist"], stats, device, use_bf16=cfg.use_bf16)
+        gate_stats = collect_gate_stats(
+            model, val_loaders["val_single_in_dist"], stats, device,
+            use_bf16=cfg.use_bf16, fpe_K=cfg.fpe_K, fpe_sigma_max=cfg.fpe_sigma_max,
+        )
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     append_metrics_jsonl(metrics_jsonl_path, {
@@ -768,6 +833,8 @@ for epoch in range(MAX_EPOCHS):
         "ffn_act": cfg.ffn_act,
         "use_bf16": cfg.use_bf16,
         "T_max": cfg.T_max,
+        "fpe_K": cfg.fpe_K,
+        "fpe_sigma_max": cfg.fpe_sigma_max,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "gate_stats": gate_stats,
@@ -801,7 +868,10 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, use_bf16=cfg.use_bf16)
+            name: evaluate_split(
+                model, loader, stats, cfg.surf_weight, device,
+                use_bf16=cfg.use_bf16, fpe_K=cfg.fpe_K, fpe_sigma_max=cfg.fpe_sigma_max,
+            )
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
