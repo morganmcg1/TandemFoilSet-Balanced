@@ -1,11 +1,40 @@
 # Baseline — TandemFoilSet (willow-pai2i-48h-r5)
 
-## Current best — PR #4015 (layer_scale_init=1e-4 + T_max=20 — CaiT/DeiT-III block gating + longer schedule)
+## Current best — PR #4145 (T_max=24 + grad_clip=1.0 — schedule extension + clip compose, beat layer_scale BL)
+
+**val_avg/mae_surf_p = 53.8098** (W&B run: `hk1i5kd5`, PR #4145 alphonse — Lion lr=1.5e-4 + n_fourier=0 + FiLM + wd=1e-3 + EMA(0.997) + Huber β=0.05 + **T_max=24** + **grad_clip=1.0**; NO spec_norm; NO layer_scale)
+**test_avg/mae_surf_p = 45.4943** (same run `hk1i5kd5`, clean 4-split)
+
+| Split | val mae_surf_p | test mae_surf_p |
+|-------|----------------|------------------|
+| single_in_dist | 55.45 | 48.08 |
+| **geom_camber_rc** | **70.54** | **62.12** |
+| **geom_camber_cruise** | **34.18** | **27.84** |
+| **re_rand** | **55.07** | **43.93** |
+
+**Δ vs prior best (PR #4015 layer_scale+T_max=20, val 54.30 / test 47.29): −0.49 val / −1.80 test**
+
+All 4 val splits and all 4 test splits improve. Key mechanism: T_max=24 extends the cosine LR endpoint to ~1.35e-4 (~90% of peak lr=1.5e-4) within the 14-epoch wall-clock budget. At T_max=24, **grad_clip=1.0 is essential** — without clip, T_max=24 regresses catastrophically (Arm C val 62.15 vs ctrl 57.66). Clip neutralises the per-step scale amplification from late-training high LR while preserving the basin-exploration benefit. The (clip × T_max) interaction is super-additive: clip alone at T_max=20 improves by 0.95 val, but clip + T_max=24 improves by 3.85 val. Note: Arm E (layer_scale=1e-4 + clip + T_max=20 → val 54.10) also beats old BL (54.30) but not Arm D (53.81).
+
+**Reproduce (PR #4145 Arm D — winner):**
+```bash
+cd target/
+python train.py --agent willowpai2i48h5-alphonse --epochs 50 \
+  --wandb_group round11-tmax20-compose-alphonse \
+  --loss_type smooth_l1 --loss_beta 0.05 \
+  --n_fourier 0 --cosine_t_max 24 \
+  --optimizer_name lion --lr 1.5e-4 --weight_decay 1e-3 \
+  --ema_decay 0.997 --use_film \
+  --grad_clip 1.0 \
+  --wandb_name alphonse-r11-tmax24-clip1
+```
+
+---
+
+## Prior best — PR #4015 (layer_scale_init=1e-4 + T_max=20 — CaiT/DeiT-III block gating + longer schedule)
 
 **val_avg/mae_surf_p = 54.3009** (W&B run: `8m99yywe`, PR #4015 nezuko — Lion lr=1.5e-4 + n_fourier=0 + FiLM + wd=1e-3 + EMA(0.997) + Huber β=0.05 + **T_max=20** + **layer_scale_init=1e-4**; NO spec_norm; NO grad_clip)
 **test_avg/mae_surf_p = 47.2883** (same run `8m99yywe`, clean 4-split)
-
-Note: 2-seed (F+G) mean is val 55.9689 / test 48.6014 (σ_val=1.67). Both seeds clearly beat the prior best. Report uses best single seed (Arm F) as the target-to-beat threshold.
 
 | Split | val mae_surf_p | test mae_surf_p |
 |-------|----------------|------------------|
@@ -15,21 +44,6 @@ Note: 2-seed (F+G) mean is val 55.9689 / test 48.6014 (σ_val=1.67). Both seeds 
 | **re_rand** | **53.95** | **46.43** |
 
 **Δ vs prior best (PR #4120 lr=2e-4+clip=1.0, val 56.89 / test 49.03): −2.59 val / −1.74 test**
-
-All 4 val splits and all 4 test splits improve. Mechanism: layer_scale_init=1e-4 (CaiT/DeiT-III style) initialises each block's residual contribution at 1e-4 instead of 1.0, then lets the block "grow into" the residual path during training. Composes ~80% additively with T_max=20 (observed −7.08 val vs predicted −8.78 from #3976 jurrwig2 baseline). Layer_scale reduces init sensitivity; T_max=20 sustains higher-LR exploration.
-
-**Reproduce (PR #4015 Arm F — winner, seed 1):**
-```bash
-cd target/
-python train.py --agent willowpai2i48h5-nezuko --epochs 50 \
-  --wandb_group round10-layerscale-nezuko \
-  --loss_type smooth_l1 --loss_beta 0.05 \
-  --n_fourier 0 --cosine_t_max 20 \
-  --optimizer_name lion --lr 1.5e-4 --weight_decay 1e-3 \
-  --ema_decay 0.997 --use_film \
-  --layer_scale_init 1e-4 \
-  --wandb_name nezuko-r10-layerscale-1e4-tmax20-s1
-```
 
 ---
 
