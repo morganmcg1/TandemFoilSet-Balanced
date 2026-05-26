@@ -572,6 +572,8 @@ class Config:
     lion_b2: float = 0.99  # Lion beta2; default matches historical baseline
     lookahead_k: int = 5
     lookahead_alpha: float = 0.5
+    loss_type: str = "mae"  # "mae" or "huber"; controls the per-node training loss
+    huber_delta: float = 1.0  # delta for huber_loss when loss_type == "huber"
 
 
 cfg = sp.parse(Config)
@@ -704,6 +706,12 @@ run.summary["lion_b2"] = cfg.lion_b2
 run.summary["lookahead_k"] = cfg.lookahead_k
 run.summary["lookahead_alpha"] = cfg.lookahead_alpha
 run.summary["lookahead_on"] = _lookahead_on
+run.summary["loss_type"] = cfg.loss_type
+run.summary["huber_delta"] = cfg.huber_delta if cfg.loss_type == "huber" else None
+print(
+    f"Training loss: {cfg.loss_type}"
+    + (f" (delta={cfg.huber_delta})" if cfg.loss_type == "huber" else "")
+)
 
 # Rolling buffer for per-step train losses to compute volatility (window=100).
 _train_loss_window: deque[float] = deque(maxlen=100)
@@ -729,7 +737,12 @@ for epoch in range(MAX_EPOCHS):
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         with autocast(device_type="cuda", dtype=torch.bfloat16):
             pred = model({"x": x_norm})["preds"]
-            err = F.huber_loss(pred, y_norm, delta=0.1, reduction="none")  # [B, N, 3]
+            if cfg.loss_type == "mae":
+                err = (pred - y_norm).abs()  # [B, N, 3]
+            elif cfg.loss_type == "huber":
+                err = F.huber_loss(pred, y_norm, delta=cfg.huber_delta, reduction="none")  # [B, N, 3]
+            else:
+                raise ValueError(f"Unknown loss_type {cfg.loss_type!r}; expected 'mae' or 'huber'")
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
