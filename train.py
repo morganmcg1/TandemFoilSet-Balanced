@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 import time
@@ -238,13 +239,18 @@ def elementwise_loss(pred, y_norm, loss_type: str = "mse", delta: float = 1.0):
 
 
 def evaluate_split(model, loader, stats, surf_weight, device,
-                   loss_type: str = "mse", delta: float = 1.0) -> dict[str, float]:
+                   loss_type: str = "mse", delta: float = 1.0,
+                   use_amp: bool = False) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring (computed
     with the same ``loss_type``/``delta`` as training); the MAE channels are in
     the original target space and accumulated per organizer ``score.py``
     (float64, non-finite samples skipped).
+
+    ``use_amp`` runs the model forward + monitoring loss under bf16 autocast to
+    mirror the training numerics; predictions are cast back to fp32 before
+    denormalization and MAE accumulation so scoring stays full precision.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -260,22 +266,25 @@ def evaluate_split(model, loader, stats, surf_weight, device,
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
 
-            err_elem = elementwise_loss(pred, y_norm, loss_type, delta)
-            vol_mask = mask & ~is_surface
-            surf_mask = mask & is_surface
-            vol_loss_sum += (
-                (err_elem * vol_mask.unsqueeze(-1)).sum()
-                / vol_mask.sum().clamp(min=1)
-            ).item()
-            surf_loss_sum += (
-                (err_elem * surf_mask.unsqueeze(-1)).sum()
-                / surf_mask.sum().clamp(min=1)
-            ).item()
+            amp_ctx = (torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+                       if use_amp else contextlib.nullcontext())
+            with amp_ctx:
+                pred = model({"x": x_norm})["preds"]
+                err_elem = elementwise_loss(pred, y_norm, loss_type, delta)
+                vol_mask = mask & ~is_surface
+                surf_mask = mask & is_surface
+                vol_loss_sum += (
+                    (err_elem * vol_mask.unsqueeze(-1)).sum()
+                    / vol_mask.sum().clamp(min=1)
+                ).item()
+                surf_loss_sum += (
+                    (err_elem * surf_mask.unsqueeze(-1)).sum()
+                    / surf_mask.sum().clamp(min=1)
+                ).item()
             n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            pred_orig = pred.float() * stats["y_std"] + stats["y_mean"]
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -350,6 +359,7 @@ def save_model_artifact(
         "surf_weight": cfg.surf_weight,
         "loss": cfg.loss,
         "delta": cfg.delta,
+        "precision": cfg.precision,
         "epochs_configured": cfg.epochs,
     }
 
@@ -405,6 +415,7 @@ class Config:
     surf_weight: float = 10.0
     loss: str = "l1"  # {mse, l1, huber} — training loss in normalized target space (R2 winner: L1)
     delta: float = 1.0  # SmoothL1/Huber transition point (~std units); used only for huber
+    precision: str = "fp32"  # {fp32, tf32, bf16, bf16_compile} — training numerics (fp32 = baseline)
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
@@ -418,8 +429,19 @@ cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
+VALID_PRECISION = {"fp32", "tf32", "bf16", "bf16_compile"}
+if cfg.precision not in VALID_PRECISION:
+    raise ValueError(f"unknown precision: {cfg.precision!r} (expected {sorted(VALID_PRECISION)})")
+# fp32 = today's exact path (defaults untouched). tf32 keeps fp32 storage but
+# lets matmul/cudnn use TF32. bf16/bf16_compile run the forward + loss under
+# bf16 autocast (no GradScaler needed — bf16 keeps the fp32 exponent range).
+USE_AMP = cfg.precision in ("bf16", "bf16_compile")
+if cfg.precision == "tf32":
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+print(f"Device: {device}  precision={cfg.precision}" + (" [DEBUG]" if cfg.debug else ""))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -456,6 +478,15 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+# ``fwd_model`` is what we call for forward passes; ``model`` always holds the
+# raw parameters (used for the optimizer and for state_dict save/load, so the
+# checkpoint is portable regardless of precision). torch.compile wraps the same
+# params in place. Meshes have variable node count N -> dynamic shapes.
+if cfg.precision == "bf16_compile":
+    fwd_model = torch.compile(model, dynamic=True)
+else:
+    fwd_model = model
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
@@ -512,14 +543,17 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        err_elem = elementwise_loss(pred, y_norm, cfg.loss, cfg.delta)
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
-        vol_loss = (err_elem * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (err_elem * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+        amp_ctx = (torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+                   if USE_AMP else contextlib.nullcontext())
+        with amp_ctx:
+            pred = fwd_model({"x": x_norm})["preds"]
+            err_elem = elementwise_loss(pred, y_norm, cfg.loss, cfg.delta)
+            vol_mask = mask & ~is_surface
+            surf_mask = mask & is_surface
+            vol_loss = (err_elem * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (err_elem * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -538,8 +572,8 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
-                             cfg.loss, cfg.delta)
+        name: evaluate_split(fwd_model, loader, stats, cfg.surf_weight, device,
+                             cfg.loss, cfg.delta, use_amp=USE_AMP)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -608,7 +642,7 @@ if best_metrics:
         }
         test_metrics = {
             name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
-                                 cfg.loss, cfg.delta)
+                                 cfg.loss, cfg.delta, use_amp=USE_AMP)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
