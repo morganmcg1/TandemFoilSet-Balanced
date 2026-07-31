@@ -29,6 +29,23 @@ Reproduce: `python train.py --agent <name> --loss l1 --epochs 9`
 
 ## History (newest first)
 
+### R4 — Physics-informed pressure target normalization (Re-scaling) — ❌ closed decisive negative (#4608, tf6h-frieren)
+- **Change:** added `--pnorm_exp` (default 0.0). Per-sample `f=Re^(-exp)/ref` (unit-mean over train, inputs-only,
+  no leakage) rescales the **p-channel normalized target** for the L1 loss; inverts `pred/f` before scoring so
+  the tensor handed to scoring stays global-normalized. Ux/Uy untouched. `train.py`-only. exp=0 = exact identity.
+- **Physics fit (read-only):** regressed `log(p_surf_rms)` on `log(Re)` over 240 balanced-train samples →
+  **k=1.99** (R²=0.89; per-domain 1.95–2.07) → confirms `p ∝ Re²`. Swept exps {0,1,2,3} bracketing k.
+- **Result (E=9, ~131.5 s/ep, 42.2 GB):** `val_avg/mae_surf_p` — exp0 **115.61** · exp1 120.82 · exp2 173.75 ·
+  exp3 474.94. **Monotone degradation on ALL 4 val splits** (incl. the OOD splits the hypothesis predicted
+  would improve: re_rand 102→106→152→431; single 156→162→225→533). Decisive falsification.
+- **Plumbing verified:** offline unit tests (identity no-op, round-trip, unit-mean) pass; identity arm reproduces
+  baseline within seed variance (val 115.61; corrected test 104.30) → arms B–D trustworthy; nan-safe corrected-test
+  matches W&B exactly on the 3 clean splits.
+- **Decision:** keep `pnorm_exp=0.0` (no merge). **Banked lesson:** the *absolute global-normalized* pressure
+  target is the correct representation — down-weighting high-|p|/high-Re amplitude removes signal the equal-weighted
+  metric rewards. With R3 p_weight, this **rules out the relative/normalized-loss reparametrization class.**
+- W&B: **exp0 `xc9whgtt`** · exp1 `eljfwpfb` · exp2 `oj9st882` · exp3 `xjl40hrd`.
+
 ### R3 — slice_num at EQUAL WALL-CLOCK {64,96,128,160} on L1 — ❌ closed negative, KEPT 64 (#4607, tf6h-fern)
 - **Change:** re-added `--slice_num` (threaded into `model_config`), default 64. `train.py`-only.
 - **Question:** under the 30-min wall-clock cap, which slice_num minimizes `val_avg/mae_surf_p` when each
@@ -112,16 +129,18 @@ Model is **not optimizer-limited**.
   epoch for every arm) → **throughput and #epochs are first-class levers**: AMP/TF32/`torch.compile`,
   faster data paths, anything raising epochs-per-wall-clock. Capacity knobs (slice_num, and likely
   width/depth) do **not** pay at equal wall-clock — slice_num settled at 64. `train.py` is currently pure fp32.
-- **In flight:**
-  - #4608 (frieren, R4) — physics-informed pressure target normalization: per-sample Re-based
-    amplitude reweight on the p channel via `--pnorm_exp {0,1,2,3}` (exp=0 = identity self-check,
-    must reproduce ~112). Motivated by `p ∝ ½U² ∝ Re²`; win bar >1.5% robust across all 4 val
-    splits, watch OOD splits (`re_rand`, `single_in_dist`).
+- **Representation levers exhausted (mostly):** loss=L1 is the only representation change that helped (merged).
+  p_weight (channel) and pnorm (target Re-scaling) both fail → **absolute global-normalized target + L1 is the
+  right representation; relative/normalized-loss class is ruled out.** Next value is in throughput/optimization.
+- **In flight (both throughput/optimization levers — the compute-bound epochs lever):**
   - #4609 (fern, R4) — training throughput/precision `--precision {fp32,tf32,bf16,bf16_compile}` at
-    **equal wall-clock** (bf16 not fp16 for the ±29k dynamic range; cast preds→fp32 before metric).
-    Compute-bound ⇒ free speedup buys more epochs ⇒ lower val. Win >1.5% robust across 4 val splits
-    → **mergeable re-baseline** (unlike the null capacity results).
-- Round-5+ ideas: combine any merged winners (L1 + pnorm/precision winners); if throughput wins,
-  re-open longer-budget / #epochs sweeps; batch-size at equal wall-clock (throughput vs convergence);
-  revisit p_weight=2 multi-seed if the corrected-test signal recurs. Capacity knobs are **deprioritized**
-  (don't pay at equal wall-clock).
+    **equal wall-clock**. **Emerging DECISIVE WIN** (mid-run, ~885s): steps fp32 2522 / tf32 2895 / bf16 3375 /
+    **bf16_compile 6599 (2.6×)**; val fp32 138.7 → **bf16_compile 93.7** and dropping (below the ~103 fp32 ceiling).
+    If confirmed → **mergeable faster re-baseline**; verify fp32 arm ≈103 (no-op), bf16 numerically stable,
+    >1.5% robust across 4 val splits. Review-ready ~12:35.
+  - #4610 (frieren, R5) — **batch size** `{2,4,8,16}` at equal wall-clock (never swept; `--batch_size` already a flag).
+    Larger bs → more GPU utilization → more epochs, vs fewer steps/undertraining. bs=4 arm = reference (~112–116).
+    Win >1.5% robust across 4 val splits → re-baseline bs.
+- Round-5+ ideas: combine merged winners (L1 + precision + bs); **with a throughput win, revisit LR/schedule at
+  the now-affordable higher epoch counts** (R1's flat LR was at ~9 ep; likely different at ~25 ep); revisit
+  p_weight=2 multi-seed if the corrected-test signal recurs. Capacity/representation knobs **deprioritized**.
