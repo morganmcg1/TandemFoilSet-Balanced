@@ -29,6 +29,24 @@ Reproduce: `python train.py --agent <name> --loss l1 --epochs 9`
 
 ## History (newest first)
 
+### R3 — slice_num at EQUAL WALL-CLOCK {64,96,128,160} on L1 — ❌ closed negative, KEPT 64 (#4607, tf6h-fern)
+- **Change:** re-added `--slice_num` (threaded into `model_config`), default 64. `train.py`-only.
+- **Question:** under the 30-min wall-clock cap, which slice_num minimizes `val_avg/mae_surf_p` when each
+  config runs its max affordable epochs? (Resolves the #4605 equal-epoch confound.)
+- **Result (equal ~26-min wall-clock, L1; each at its own max E):**
+  slice64 E11 → **103.08 (WINNER, best on all 4 splits)** · slice128 E9 → 108.00 · slice96 E10 → 111.37 · slice160 E8 → 116.69.
+  Per-split single/rc/cruise/re_rand — slice64: 127.30/111.88/78.06/95.07 (wins every split; +4.56% avg over #128).
+- **Ranking FLIP confirmed:** at a common epoch (E=8) slice128 (111.02) beats slice64 (114.13) by 2.7% — the
+  per-epoch gain is real (reproduces #4605). But **all arms compute-bound (best@final epoch, none plateaued)**,
+  so the config affording the most epochs wins: slice64→E11 beats slice128→E9. Equal-epoch champion **loses** at equal wall-clock.
+- **Decision:** keep `slice_num=64` (no merge — winning config = incumbent). Larger slices don't earn their
+  permanent per-experiment compute tax. Retroactively validates closing #4605 unmerged.
+- **⚠️ Key programme insight (fern):** model is compute-bound & still descending at the cap → **the real lever at
+  fixed budget is training throughput / #epochs, not capacity.** Drives R4 #4609 (precision/throughput).
+- **Deployment ceiling:** slice64 at max-E-under-cap (E11) = **val≈103**, vs the E=9 screening reference ≈112
+  (~8% left on the table by the screening budget; E=9 stays the fair apples-to-apples sweep budget).
+- W&B: **slice64 `v9s9yyhp`** · slice96 `qh01r4se` · slice128 `37iheam0` · slice160 `t2t114gj`.
+
 ### R3 — Pressure-channel loss weight {1,2,4,8} on L1 — ❌ closed inconclusive (#4606, tf6h-frieren)
 - **Change:** added `--p_weight` (channel weight `[1,1,p_weight]` applied to the elementwise
   L1 term **before** the vol/surf masked-mean split → pure channel axis, orthogonal to
@@ -90,16 +108,20 @@ Model is **not optimizer-limited**.
 - Compute-bound: ~10 epochs max under the 30-min/process cap; ~6-hour cluster budget.
 - **Wall-clock discipline:** every compute-changing knob (slice_num, n_layers, n_hidden, bs…)
   must be judged at **equal wall-clock** under the 30-min cap, not equal epochs.
+- **Compute-bound regime (fern R3):** the model does **not plateau** within the cap (best val @ final
+  epoch for every arm) → **throughput and #epochs are first-class levers**: AMP/TF32/`torch.compile`,
+  faster data paths, anything raising epochs-per-wall-clock. Capacity knobs (slice_num, and likely
+  width/depth) do **not** pay at equal wall-clock — slice_num settled at 64. `train.py` is currently pure fp32.
 - **In flight:**
-  - #4607 (fern) — equal-wall-clock slice_num `{64,96,128,160}` on L1. **Preliminary (mid-run,
-    ~20 min in):** slice-64 leading (val ~114, still descending) vs 96/128/160 (~129/134/131) →
-    the epoch budget appears to dominate the per-epoch quality gain, so equal-wall-clock will
-    likely **keep slice_num=64** — the opposite of the equal-epoch #4605 ranking, exactly the
-    confound #4607 was built to expose. Awaiting final result + review.
   - #4608 (frieren, R4) — physics-informed pressure target normalization: per-sample Re-based
     amplitude reweight on the p channel via `--pnorm_exp {0,1,2,3}` (exp=0 = identity self-check,
     must reproduce ~112). Motivated by `p ∝ ½U² ∝ Re²`; win bar >1.5% robust across all 4 val
     splits, watch OOD splits (`re_rand`, `single_in_dist`).
-- Round-5+ ideas: combine merged winners (L1 + any slice/pnorm winner); model capacity
-  (n_hidden/n_layers) judged at **equal wall-clock**; longer budget (L1 still improving at E=9);
-  revisit p_weight=2 multi-seed if the corrected-test signal recurs.
+  - #4609 (fern, R4) — training throughput/precision `--precision {fp32,tf32,bf16,bf16_compile}` at
+    **equal wall-clock** (bf16 not fp16 for the ±29k dynamic range; cast preds→fp32 before metric).
+    Compute-bound ⇒ free speedup buys more epochs ⇒ lower val. Win >1.5% robust across 4 val splits
+    → **mergeable re-baseline** (unlike the null capacity results).
+- Round-5+ ideas: combine any merged winners (L1 + pnorm/precision winners); if throughput wins,
+  re-open longer-budget / #epochs sweeps; batch-size at equal wall-clock (throughput vs convergence);
+  revisit p_weight=2 multi-seed if the corrected-test signal recurs. Capacity knobs are **deprioritized**
+  (don't pay at equal wall-clock).
