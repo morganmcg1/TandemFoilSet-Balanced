@@ -417,6 +417,7 @@ class Config:
     delta: float = 1.0  # SmoothL1/Huber transition point (~std units); used only for huber
     precision: str = "bf16_compile"  # {fp32, tf32, bf16, bf16_compile} — R4 winner: 2.6x throughput -> more epochs -> lower val (fp32 = old baseline)
     epochs: int = 50
+    warmup_epochs: int = 0  # linear LR warmup epochs before cosine decay; 0 = plain CosineAnnealingLR (unchanged path)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -489,7 +490,18 @@ else:
     fwd_model = model
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+# Scheduler is stepped once per epoch. warmup_epochs=0 is a byte-for-byte no-op
+# (plain CosineAnnealingLR over MAX_EPOCHS); warmup_epochs>0 prepends a short
+# LinearLR ramp then cosine-decays over the remaining epochs.
+if cfg.warmup_epochs > 0:
+    warmup = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=1e-2, total_iters=cfg.warmup_epochs)
+    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=MAX_EPOCHS - cfg.warmup_epochs)
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup, cosine], milestones=[cfg.warmup_epochs])
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
