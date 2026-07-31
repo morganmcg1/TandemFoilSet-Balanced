@@ -415,7 +415,7 @@ class Config:
     surf_weight: float = 10.0
     loss: str = "l1"  # {mse, l1, huber} — training loss in normalized target space (R2 winner: L1)
     delta: float = 1.0  # SmoothL1/Huber transition point (~std units); used only for huber
-    precision: str = "fp32"  # {fp32, tf32, bf16, bf16_compile} — training numerics (fp32 = baseline)
+    precision: str = "bf16_compile"  # {fp32, tf32, bf16, bf16_compile} — R4 winner: 2.6x throughput -> more epochs -> lower val (fp32 = old baseline)
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
