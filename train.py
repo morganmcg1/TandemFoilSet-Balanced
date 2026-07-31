@@ -403,7 +403,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
-    loss: str = "mse"  # {mse, l1, huber} — training loss in normalized target space
+    loss: str = "l1"  # {mse, l1, huber} — training loss in normalized target space (R2 winner: L1)
     delta: float = 1.0  # SmoothL1/Huber transition point (~std units); used only for huber
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
