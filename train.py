@@ -238,15 +238,17 @@ def elementwise_loss(pred, y_norm, loss_type: str = "mse", delta: float = 1.0):
 
 
 def evaluate_split(model, loader, stats, surf_weight, device,
-                   loss_type: str = "mse", delta: float = 1.0) -> dict[str, float]:
+                   loss_type: str = "mse", delta: float = 1.0,
+                   p_weight: float = 1.0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring (computed
-    with the same ``loss_type``/``delta`` as training); the MAE channels are in
-    the original target space and accumulated per organizer ``score.py``
-    (float64, non-finite samples skipped).
+    with the same ``loss_type``/``delta``/``p_weight`` as training); the MAE
+    channels are in the original target space and accumulated per organizer
+    ``score.py`` (float64, non-finite samples skipped).
     """
     vol_loss_sum = surf_loss_sum = 0.0
+    chan_w = torch.tensor([1.0, 1.0, p_weight], device=device)
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
@@ -262,7 +264,7 @@ def evaluate_split(model, loader, stats, surf_weight, device,
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            err_elem = elementwise_loss(pred, y_norm, loss_type, delta)
+            err_elem = elementwise_loss(pred, y_norm, loss_type, delta) * chan_w
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
@@ -348,6 +350,7 @@ def save_model_artifact(
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
+        "p_weight": cfg.p_weight,
         "loss": cfg.loss,
         "delta": cfg.delta,
         "epochs_configured": cfg.epochs,
@@ -403,6 +406,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    p_weight: float = 1.0  # channel weight on the pressure term (index 2); Ux/Uy stay 1.0
     loss: str = "l1"  # {mse, l1, huber} — training loss in normalized target space (R2 winner: L1)
     delta: float = 1.0  # SmoothL1/Huber transition point (~std units); used only for huber
     epochs: int = 50
@@ -494,6 +498,11 @@ best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
 
+# Channel-weight vector on the elementwise loss (order: [Ux, Uy, p]); pressure
+# is index 2. Orthogonal to surf_weight (region axis) — applied before the
+# vol/surf masked-mean split so it scales the pressure gradient in both regions.
+chan_w = torch.tensor([1.0, 1.0, cfg.p_weight], device=device)
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -513,7 +522,7 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        err_elem = elementwise_loss(pred, y_norm, cfg.loss, cfg.delta)
+        err_elem = elementwise_loss(pred, y_norm, cfg.loss, cfg.delta) * chan_w
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
@@ -539,7 +548,7 @@ for epoch in range(MAX_EPOCHS):
     model.eval()
     split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
-                             cfg.loss, cfg.delta)
+                             cfg.loss, cfg.delta, cfg.p_weight)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -608,7 +617,7 @@ if best_metrics:
         }
         test_metrics = {
             name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
-                                 cfg.loss, cfg.delta)
+                                 cfg.loss, cfg.delta, cfg.p_weight)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
