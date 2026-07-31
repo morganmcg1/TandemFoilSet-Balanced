@@ -46,6 +46,19 @@ Reproduce: `python train.py --agent <name> --loss l1 --epochs 9`
 - W&B: mse `bakex6hg` · **l1 `3rjbrod5`** · huber-d1.0 `fo1jn4yz` · huber-d0.3 `jcwij9z5`
   (`wandb-applied-ai-team/senpai-v1`).
 
+### R2 — slice_num (physics-token count) {32,64,96,128} — ⏸️ closed, promoted (#4605, tf6h-fern)
+- **Finding (E=8, MSE base, equal-epoch):** clean **monotone** per-epoch win — 128 (139.17)
+  beats 64 (149.11) by **6.66%** robustly on all 4 val splits; 96 intermediate; 32 worse.
+  Cost/VRAM ~linear: sec/epoch 112/131/151/172; peak GB 37.2/42.2/47.6/54.6 (64→128 = +31% time, +29% VRAM).
+- **Not merged (2 reasons):** (a) ran on the *superseded MSE* baseline; (b) compared at **equal
+  epochs**, but our limit is a 30-min **wall-clock** cap — 128's +31%/epoch means ~31% fewer
+  epochs under the cap. Epochs are valuable (64: ~149@E8→~133.5@E10), and large-slice models
+  overtake only late (128 trailed 64 at ep5-6), so the equal-epoch win may not survive equal wall-clock.
+- **⚠️ Programme learning:** for the deployment decision under a fixed wall-clock cap, compare
+  slice_num / any compute-changing knob at **equal wall-clock** (each config at its own max E), not equal epochs.
+- **Promoted to R3 #4607** (fern): equal-wall-clock slice_num {64,96,128,160} under **L1** baseline.
+- W&B: sl32 `poqnbxcs` · sl64 `kpafdlke` · sl96 `67ymc395` · sl128 `154my62p`.
+
 ### R1 — Learning rate {3e-4,5e-4,1e-3,2e-3} — ❌ closed negative (#4602, tf6h-fern)
 Flat/split-inconsistent optimum; best (1e-3=131.50) only ~1.5% under baseline. Kept lr=5e-4.
 Model is **not optimizer-limited**.
@@ -56,7 +69,11 @@ Model is **not optimizer-limited**.
 ## Notes / open threads
 - **Screening noise floor ≈ 1.5%** (single-seed, E=9-10) → marginal gains need multi-seed confirm.
 - Compute-bound: ~10 epochs max under the 30-min/process cap; ~6-hour cluster budget.
-- **In flight:** slice_num sweep {32,64,96,128} (#4605, tf6h-fern) — ran on the *old MSE*
-  baseline; re-verify the best slice_num under L1 in round 3.
-- Round-3 ideas: combine winners (L1 + best slice_num); physics-informed target
-  normalization/scaling (Re / dynamic pressure); longer budget (L1 still improving at E=9).
+- **Wall-clock discipline:** every compute-changing knob (slice_num, n_layers, n_hidden, bs…)
+  must be judged at **equal wall-clock** under the 30-min cap, not equal epochs.
+- **In flight:**
+  - #4606 (frieren) — pressure-channel loss weight `{1,2,4,8}` on L1 (metric is surface-p only).
+  - #4607 (fern) — equal-wall-clock slice_num `{64,96,128,160}` on L1 (settles the R2 deployment question).
+- Round-4 ideas: combine merged winners (L1 + best p_weight + best slice_num); physics-informed
+  target normalization/scaling (Re / dynamic pressure; `single` split has highest error);
+  longer budget (L1 still improving at E=9).
