@@ -237,8 +237,50 @@ def elementwise_loss(pred, y_norm, loss_type: str = "mse", delta: float = 1.0):
     raise ValueError(f"unknown loss_type: {loss_type!r} (expected mse|l1|huber)")
 
 
+def pressure_scale_factor(x, mask, pnorm_exp: float, pnorm_ref: float):
+    """Per-sample pressure-amplitude factor ``f = Re**(-pnorm_exp) / pnorm_ref``.
+
+    Kinematic pressure scales with dynamic pressure (``p ~ U^2 ~ Re^2``), so its
+    magnitude varies by orders of magnitude with Reynolds number. Rescaling the
+    (globally-normalized) pressure target by ``f`` partially non-dimensionalizes
+    it, equalizing the per-sample learning signal across flow regimes.
+
+    Physical ``log(Re)`` is dim 13 of the *un-normalized* input, constant across
+    a sample's real nodes; it is recovered as the mask-mean so padding (zeros)
+    is ignored. ``pnorm_ref`` is a fixed training-set reference (see
+    ``compute_pnorm_ref``) chosen so the transform is a pure cross-Re
+    redistribution with unit mean amplitude — at ``pnorm_exp == 0`` (and
+    ``pnorm_ref == 1``) this returns exactly 1, recovering the baseline.
+    Returns shape ``[B, 1]`` for broadcasting over nodes.
+    """
+    log_re = (x[..., 13] * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)  # [B]
+    return (torch.exp(-pnorm_exp * log_re) / pnorm_ref).unsqueeze(1)
+
+
+def compute_pnorm_ref(train_ds, sample_weights, pnorm_exp: float) -> float:
+    """Reference constant so the amplitude factor has unit mean over training.
+
+    Returns the training-distribution (balanced-sampler weighted) mean of
+    ``Re**(-pnorm_exp)``. Dividing by it keeps the mean pressure-target
+    amplitude equal to the baseline, so ``pnorm_exp`` only *redistributes* the
+    signal across Reynolds number rather than reweighting the pressure channel
+    overall. Deterministic and identical at train/val/test. ``exp == 0`` needs
+    no scan (every factor is 1).
+    """
+    if pnorm_exp == 0.0:
+        return 1.0
+    log_res = torch.tensor(
+        [float(torch.load(f, weights_only=True)["x"][:, 13].median()) for f in train_ds.files],
+        dtype=torch.float64,
+    )
+    w = sample_weights.double()
+    w = w / w.sum()
+    return float((w * torch.exp(-pnorm_exp * log_res)).sum())
+
+
 def evaluate_split(model, loader, stats, surf_weight, device,
-                   loss_type: str = "mse", delta: float = 1.0) -> dict[str, float]:
+                   loss_type: str = "mse", delta: float = 1.0,
+                   pnorm_exp: float = 0.0, pnorm_ref: float = 1.0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring (computed
@@ -262,7 +304,13 @@ def evaluate_split(model, loader, stats, surf_weight, device,
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            err_elem = elementwise_loss(pred, y_norm, loss_type, delta)
+            # Pressure-target reparametrization (identity at pnorm_exp == 0):
+            # train/monitor the loss on the Re-rescaled p target, but invert
+            # the factor on the prediction so scoring sees global-normalized p.
+            f = pressure_scale_factor(x, mask, pnorm_exp, pnorm_ref)  # [B,1]
+            y_tgt = y_norm.clone()
+            y_tgt[..., 2] = y_norm[..., 2] * f
+            err_elem = elementwise_loss(pred, y_tgt, loss_type, delta)
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
@@ -275,7 +323,9 @@ def evaluate_split(model, loader, stats, surf_weight, device,
             ).item()
             n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            pred_gn = pred.clone()
+            pred_gn[..., 2] = pred[..., 2] / f
+            pred_orig = pred_gn * stats["y_std"] + stats["y_mean"]
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -350,6 +400,7 @@ def save_model_artifact(
         "surf_weight": cfg.surf_weight,
         "loss": cfg.loss,
         "delta": cfg.delta,
+        "pnorm_exp": cfg.pnorm_exp,
         "epochs_configured": cfg.epochs,
     }
 
@@ -405,6 +456,7 @@ class Config:
     surf_weight: float = 10.0
     loss: str = "l1"  # {mse, l1, huber} — training loss in normalized target space (R2 winner: L1)
     delta: float = 1.0  # SmoothL1/Huber transition point (~std units); used only for huber
+    pnorm_exp: float = 0.0  # Re-based pressure-target amplitude exponent; 0 = identity (global norm)
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
@@ -423,6 +475,10 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
+
+pnorm_ref = compute_pnorm_ref(train_ds, sample_weights, cfg.pnorm_exp)
+print(f"pnorm_exp={cfg.pnorm_exp} -> pnorm_ref={pnorm_ref:.6g} "
+      f"(pressure target amplitude {'identity' if cfg.pnorm_exp == 0.0 else 'Re-rescaled, unit-mean'})")
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
@@ -476,6 +532,8 @@ run = wandb.init(
     mode=os.environ.get("WANDB_MODE", "online"),
 )
 
+wandb.summary["pnorm_ref"] = pnorm_ref
+
 wandb.define_metric("global_step")
 wandb.define_metric("train/*", step_metric="global_step")
 wandb.define_metric("val/*", step_metric="global_step")
@@ -513,6 +571,10 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
+
+        # Re-rescale the pressure-channel target (identity at pnorm_exp == 0).
+        f = pressure_scale_factor(x, mask, cfg.pnorm_exp, pnorm_ref)  # [B,1]
+        y_norm[..., 2] = y_norm[..., 2] * f
         err_elem = elementwise_loss(pred, y_norm, cfg.loss, cfg.delta)
 
         vol_mask = mask & ~is_surface
@@ -539,7 +601,7 @@ for epoch in range(MAX_EPOCHS):
     model.eval()
     split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
-                             cfg.loss, cfg.delta)
+                             cfg.loss, cfg.delta, cfg.pnorm_exp, pnorm_ref)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -608,7 +670,7 @@ if best_metrics:
         }
         test_metrics = {
             name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
-                                 cfg.loss, cfg.delta)
+                                 cfg.loss, cfg.delta, cfg.pnorm_exp, pnorm_ref)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
