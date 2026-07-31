@@ -409,7 +409,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 @dataclass
 class Config:
-    lr: float = 2e-3  # R5 winner (with warmup_epochs=2): val 68.06 vs 71.26 @ old 5e-4, E26 bf16_compile
+    lr: float = 5e-4
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
@@ -417,7 +417,7 @@ class Config:
     delta: float = 1.0  # SmoothL1/Huber transition point (~std units); used only for huber
     precision: str = "bf16_compile"  # {fp32, tf32, bf16, bf16_compile} — R4 winner: 2.6x throughput -> more epochs -> lower val (fp32 = old baseline)
     epochs: int = 50
-    warmup_epochs: int = 2  # R5 winner: LinearLR warmup enables the higher peak LR; 0 = plain CosineAnnealingLR
+    warmup_epochs: int = 0  # optional LinearLR warmup before cosine; 0 = plain CosineAnnealingLR (unchanged path). R5 sweep: lr=2e-3,w=2 improved val_avg -4.5% but re_rand only -1.05% (<1.5% per-split gate) -> not adopted
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
