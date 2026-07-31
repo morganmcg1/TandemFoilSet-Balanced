@@ -417,7 +417,7 @@ class Config:
     delta: float = 1.0  # SmoothL1/Huber transition point (~std units); used only for huber
     precision: str = "bf16_compile"  # {fp32, tf32, bf16, bf16_compile} — R4 winner: 2.6x throughput -> more epochs -> lower val (fp32 = old baseline)
     epochs: int = 50
-    warmup_epochs: int = 0  # optional LinearLR warmup before cosine; 0 = plain CosineAnnealingLR (unchanged path). R5 sweep: lr=2e-3,w=2 improved val_avg -4.5% but re_rand only -1.05% (<1.5% per-split gate) -> not adopted
+    warmup_epochs: int = 0  # optional LinearLR warmup before cosine; 0 = plain CosineAnnealingLR (unchanged path). R5 4-seed confirm: warmup+higher-LR (lr=2e-3,w=2) beat lr=5e-4/w=0 in the mean on all 4 val + all 4 test splits, but the aggregate-val gain (2.31) < its own seed std (2.88) -> not separated from noise -> CONFIRMED-NULL, kept lr=5e-4/w=0
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
