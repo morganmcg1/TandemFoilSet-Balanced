@@ -21,13 +21,36 @@ over the 4 test splits; lower is better). Iteration/checkpoint metric:
 | model | Transolver (n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, ~0.66M params) |
 | optimizer | AdamW lr=5e-4, wd=1e-4, bs=4, CosineAnnealingLR(T_max=epochs) |
 | **loss** | **L1 (surf_weight=10, masked per-node mean, normalized target space)** ← R2 winner |
-| `val_avg/mae_surf_p` | **≈ 112** (111.98, E=9 screening) |
-| corrected `test_avg/mae_surf_p` | **≈ 102** (102.01) |
-| branch SHA | `75eb555` (after #4604) |
+| **precision** | **bf16_compile (bf16 autocast + `torch.compile(dynamic=True)`, 2.6× throughput)** ← R4 winner |
+| **deployment** `val_avg/mae_surf_p` | **≈ 72** (71.95 @ E26, max epochs under the 30-min cap) |
+| **deployment** corrected `test_avg/mae_surf_p` | **≈ 63** (62.88 @ E26) |
+| per-epoch quality | unchanged by precision (E11 common-epoch val flat ≈105 across fp32/bf16/compile) |
+| branch SHA | `7f1451d` (after #4609) |
 
-Reproduce: `python train.py --agent <name> --loss l1 --epochs 9`
+Reproduce (deployment): `python train.py --agent <name> --epochs 26` (loss=l1, precision=bf16_compile now defaults).
+**Screening note:** precision doesn't change per-epoch quality, so a fixed-E screen gives the same val as before at that E
+(E=9 ≈ 112); but each run is now ~2.6× cheaper (~8 min not ~20), so prefer **equal-wall-clock** or a higher common E.
 
 ## History (newest first)
+
+### R4 — Training precision/throughput at EQUAL WALL-CLOCK — ✅ MERGED (#4609, tf6h-fern) 🏆 biggest win yet
+- **Change:** added `--precision {fp32,tf32,bf16,bf16_compile}` (default **bf16_compile**). bf16 arms wrap only
+  model forward + loss in `torch.autocast(cuda, bfloat16)` (train loop + `evaluate_split`); preds cast to fp32
+  before denorm/MAE (metric stays float64). tf32 sets matmul/cudnn `allow_tf32`. bf16_compile adds
+  `torch.compile(model, dynamic=True)` (handles variable node count N); raw params retained → portable state_dict.
+  `train.py`-only; no `data/` change; no new packages; all else default.
+- **Hypothesis:** model is compute-bound (R3) → faster numerics buy more epochs/wall-clock → lower val.
+- **Result (equal ~27-min wall-clock; each arm at its own max E):** precision | s/ep | speedup | E | peak GB | val:
+  fp32 131s 1.00× E11 42GB **105.61** · tf32 116s 1.13× E12 42GB 102.36 · bf16 98s 1.34× E14 33GB 97.48 ·
+  **bf16_compile 50s 2.62× E26 24GB → 71.95 WINNER (−31.9%)**.
+- **Robust:** compile wins **all 4 val splits by 26–41%** (single 136.5→80.4, geom_rc 112.9→83.6, cruise 78.0→54.7,
+  re_rand 95.0→69.1) — far above the 1.5% bar. Corrected `test_avg/mae_surf_p` **62.88** (from ~102), nan-safe method
+  bit-exact vs W&B on the 3 clean splits.
+- **Mechanism verified = throughput→epochs, NOT precision quality:** at a common epoch (E11) val is flat
+  (fp32 105.61 / tf32 105.27 / bf16 104.00 / compile 105.55). bf16 doesn't degrade quality (±29k handled by exponent
+  range); the whole win is fitting 26 epochs vs 11. fp32 arm reproduces R3 ceiling (~103) → plumbing no-op confirmed.
+- **Impact:** re-baselines the whole programme ~2.6× faster + a huge accuracy jump. Also lowers peak GB (42→24), so
+  larger batch/model now fit. W&B: fp32 `1ilcr4m5` · tf32 `jwnnvope` · bf16 `oikll5u6` · **compile `kobyebgs`**.
 
 ### R4 — Physics-informed pressure target normalization (Re-scaling) — ❌ closed decisive negative (#4608, tf6h-frieren)
 - **Change:** added `--pnorm_exp` (default 0.0). Per-sample `f=Re^(-exp)/ref` (unit-mean over train, inputs-only,
@@ -128,19 +151,18 @@ Model is **not optimizer-limited**.
 - **Compute-bound regime (fern R3):** the model does **not plateau** within the cap (best val @ final
   epoch for every arm) → **throughput and #epochs are first-class levers**: AMP/TF32/`torch.compile`,
   faster data paths, anything raising epochs-per-wall-clock. Capacity knobs (slice_num, and likely
-  width/depth) do **not** pay at equal wall-clock — slice_num settled at 64. `train.py` is currently pure fp32.
+  width/depth) do **not** pay at equal wall-clock — slice_num settled at 64. **Throughput lever now cashed
+  in: bf16_compile merged (#4609), 2.62× → E26 under cap → val ≈72 / corrected test ≈63.**
 - **Representation levers exhausted (mostly):** loss=L1 is the only representation change that helped (merged).
   p_weight (channel) and pnorm (target Re-scaling) both fail → **absolute global-normalized target + L1 is the
   right representation; relative/normalized-loss class is ruled out.** Next value is in throughput/optimization.
-- **In flight (both throughput/optimization levers — the compute-bound epochs lever):**
-  - #4609 (fern, R4) — training throughput/precision `--precision {fp32,tf32,bf16,bf16_compile}` at
-    **equal wall-clock**. **Emerging DECISIVE WIN** (mid-run, ~885s): steps fp32 2522 / tf32 2895 / bf16 3375 /
-    **bf16_compile 6599 (2.6×)**; val fp32 138.7 → **bf16_compile 93.7** and dropping (below the ~103 fp32 ceiling).
-    If confirmed → **mergeable faster re-baseline**; verify fp32 arm ≈103 (no-op), bf16 numerically stable,
-    >1.5% robust across 4 val splits. Review-ready ~12:35.
+- **In flight:**
   - #4610 (frieren, R5) — **batch size** `{2,4,8,16}` at equal wall-clock (never swept; `--batch_size` already a flag).
     Larger bs → more GPU utilization → more epochs, vs fewer steps/undertraining. bs=4 arm = reference (~112–116).
-    Win >1.5% robust across 4 val splits → re-baseline bs.
-- Round-5+ ideas: combine merged winners (L1 + precision + bs); **with a throughput win, revisit LR/schedule at
-  the now-affordable higher epoch counts** (R1's flat LR was at ~9 ep; likely different at ~25 ep); revisit
+    Win >1.5% robust across 4 val splits → re-baseline bs. NOTE forked pre-precision (fp32 base); if bs shows
+    signal, re-confirm on bf16_compile baseline (peak GB now 24 → larger bs more feasible).
+  - #4611 (fern, R5) — **LR / schedule at the now-affordable E26** on the bf16_compile baseline. R1's flat LR
+    result was at ~9 ep and likely does not hold at E26; directly exploits the throughput headroom. Highest-EV
+    remaining lever.
+- Round-5+ ideas: combine merged winners (L1 + bf16_compile + best LR/schedule + bs); revisit
   p_weight=2 multi-seed if the corrected-test signal recurs. Capacity/representation knobs **deprioritized**.
