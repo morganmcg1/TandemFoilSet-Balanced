@@ -217,12 +217,34 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def elementwise_loss(pred, y_norm, loss_type: str = "mse", delta: float = 1.0):
+    """Per-element regression loss in normalized target space, shape ``[B, N, C]``.
+
+    The caller applies the existing mask-based per-node mean, so this only needs
+    to produce the unreduced elementwise term:
+      - ``mse``:   squared error (baseline)
+      - ``l1``:    absolute error (matches the MAE ranking metric)
+      - ``huber``: SmoothL1 with ``beta=delta`` — quadratic within ``|err|<delta``
+        (≈ delta std, since targets are unit-std normalized), linear beyond, so
+        it stays smooth near zero but is robust to high-Re outlier magnitudes.
+    """
+    if loss_type == "mse":
+        return (pred - y_norm) ** 2
+    if loss_type == "l1":
+        return (pred - y_norm).abs()
+    if loss_type == "huber":
+        return F.smooth_l1_loss(pred, y_norm, reduction="none", beta=delta)
+    raise ValueError(f"unknown loss_type: {loss_type!r} (expected mse|l1|huber)")
+
+
+def evaluate_split(model, loader, stats, surf_weight, device,
+                   loss_type: str = "mse", delta: float = 1.0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
-    ``loss`` is the normalized-space loss used for training monitoring; the MAE
-    channels are in the original target space and accumulated per organizer
-    ``score.py`` (float64, non-finite samples skipped).
+    ``loss`` is the normalized-space loss used for training monitoring (computed
+    with the same ``loss_type``/``delta`` as training); the MAE channels are in
+    the original target space and accumulated per organizer ``score.py``
+    (float64, non-finite samples skipped).
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -240,15 +262,15 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            sq_err = (pred - y_norm) ** 2
+            err_elem = elementwise_loss(pred, y_norm, loss_type, delta)
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
-                (sq_err * vol_mask.unsqueeze(-1)).sum()
+                (err_elem * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
+                (err_elem * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
@@ -326,6 +348,8 @@ def save_model_artifact(
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
+        "loss": cfg.loss,
+        "delta": cfg.delta,
         "epochs_configured": cfg.epochs,
     }
 
@@ -379,6 +403,8 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    loss: str = "mse"  # {mse, l1, huber} — training loss in normalized target space
+    delta: float = 1.0  # SmoothL1/Huber transition point (~std units); used only for huber
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
@@ -487,12 +513,12 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        err_elem = elementwise_loss(pred, y_norm, cfg.loss, cfg.delta)
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        vol_loss = (err_elem * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        surf_loss = (err_elem * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -512,7 +538,8 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                             cfg.loss, cfg.delta)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -580,7 +607,8 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                                 cfg.loss, cfg.delta)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
