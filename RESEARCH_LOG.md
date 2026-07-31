@@ -29,6 +29,25 @@ Reproduce: `python train.py --agent <name> --loss l1 --epochs 9`
 
 ## History (newest first)
 
+### R3 — Pressure-channel loss weight {1,2,4,8} on L1 — ❌ closed inconclusive (#4606, tf6h-frieren)
+- **Change:** added `--p_weight` (channel weight `[1,1,p_weight]` applied to the elementwise
+  L1 term **before** the vol/surf masked-mean split → pure channel axis, orthogonal to
+  `surf_weight`), identical in train + `evaluate_split`; checkpoint metric unchanged. `train.py`-only.
+- **Hypothesis:** metric is surface-**p** only, so up-weighting the p channel (vs Ux/Uy) is
+  metric-aligned and should lower `val_avg/mae_surf_p`. Competing: Ux/Uy + volume act as
+  beneficial multi-task auxiliaries.
+- **Result (E=9, L1 base, ~132 s/ep, 42.2 GB):** `val_avg/mae_surf_p` — p1 111.55 ·
+  **p2 109.94 (−1.44%)** · p4 112.32 · p8 122.23. Shallow minimum near p=1–2, then worse (not monotone).
+- **Verdict:** pre-registered bar (>1.5% robust across all 4 val splits) **NOT met** — p2's
+  −1.44% is below the ~1.5% noise floor AND `single_in_dist` regresses (+1.2%). Kept
+  `p_weight=1.0` (no flag merged; baseline stays simple).
+- **Confirms auxiliaries matter:** surface-Ux MAE degrades monotonically with p_weight
+  (1.27→1.37→1.65→2.05 for p=1/2/4/8) → velocity/volume channels are beneficial regularizers.
+- **⚠️ Low-priority thread:** on *corrected test* (the paper-facing metric) p2 beats baseline on
+  **all 4** splits (avg 98.98 vs 101.27, **−2.27%**) despite the sub-threshold/non-robust val.
+  Single 9-ep seed within ~6% seed noise → only revisit p=2 (2–3 seeds + longer training) if spare capacity.
+- W&B: p1 `0coijmec` · **p2 `usbpz9t4`** · p4 `5vjki9p6` · p8 `o55pxzfi`.
+
 ### R2 — Loss function: L1 vs Huber vs MSE — ✅ MERGED (#4604, tf6h-frieren)
 - **Change:** added `--loss {mse,l1,huber}` + `--delta` (SmoothL1 β) to `train.py`;
   applied elementwise to both vol+surf terms; set `Config.loss` default = `l1`.
@@ -72,8 +91,15 @@ Model is **not optimizer-limited**.
 - **Wall-clock discipline:** every compute-changing knob (slice_num, n_layers, n_hidden, bs…)
   must be judged at **equal wall-clock** under the 30-min cap, not equal epochs.
 - **In flight:**
-  - #4606 (frieren) — pressure-channel loss weight `{1,2,4,8}` on L1 (metric is surface-p only).
-  - #4607 (fern) — equal-wall-clock slice_num `{64,96,128,160}` on L1 (settles the R2 deployment question).
-- Round-4 ideas: combine merged winners (L1 + best p_weight + best slice_num); physics-informed
-  target normalization/scaling (Re / dynamic pressure; `single` split has highest error);
-  longer budget (L1 still improving at E=9).
+  - #4607 (fern) — equal-wall-clock slice_num `{64,96,128,160}` on L1. **Preliminary (mid-run,
+    ~20 min in):** slice-64 leading (val ~114, still descending) vs 96/128/160 (~129/134/131) →
+    the epoch budget appears to dominate the per-epoch quality gain, so equal-wall-clock will
+    likely **keep slice_num=64** — the opposite of the equal-epoch #4605 ranking, exactly the
+    confound #4607 was built to expose. Awaiting final result + review.
+  - #4608 (frieren, R4) — physics-informed pressure target normalization: per-sample Re-based
+    amplitude reweight on the p channel via `--pnorm_exp {0,1,2,3}` (exp=0 = identity self-check,
+    must reproduce ~112). Motivated by `p ∝ ½U² ∝ Re²`; win bar >1.5% robust across all 4 val
+    splits, watch OOD splits (`re_rand`, `single_in_dist`).
+- Round-5+ ideas: combine merged winners (L1 + any slice/pnorm winner); model capacity
+  (n_hidden/n_layers) judged at **equal wall-clock**; longer budget (L1 still improving at E=9);
+  revisit p_weight=2 multi-seed if the corrected-test signal recurs.
