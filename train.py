@@ -416,7 +416,7 @@ class Config:
     loss: str = "l1"  # {mse, l1, huber} — training loss in normalized target space (R2 winner: L1)
     delta: float = 1.0  # SmoothL1/Huber transition point (~std units); used only for huber
     precision: str = "bf16_compile"  # {fp32, tf32, bf16, bf16_compile} — R4 winner: 2.6x throughput -> more epochs -> lower val (fp32 = old baseline)
-    epochs: int = 50
+    epochs: int = 20  # matched to the 20-min / 20-epoch cap so a plain run budgets correctly and cosine T_max anneals within the cap
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
