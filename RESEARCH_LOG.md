@@ -7,31 +7,44 @@ Primary metric: **`test_avg/mae_surf_p`** (equal-weight mean surface-pressure MA
 over the 4 test splits; lower is better). Iteration/checkpoint metric:
 **`val_avg/mae_surf_p`**.
 
-> ⚠️ Track-wide scoring bug: cruise **test** GT sample `000020.pt` has non-finite
-> `p`, and read-only `data/scoring.py` does `err*mask` → `nan*0=nan`, so W&B
-> `test_avg/mae_surf_p` is **NaN for every run** (val + Ux/Uy clean). Rank on
-> clean `val_avg/mae_surf_p`; recover a test number by re-evaluating the best
-> checkpoint on the cruise test split with a `torch.where`-based skip of the
-> non-finite sample. **Do not patch `data/`.**
+> Scoring note: some hidden GT samples (e.g. a cruise test case) contain non-finite
+> `p`. `data/scoring.py` now skips such samples **per-sample** before MAE
+> accumulation (commit `38bd2b5`), so `val_avg/mae_surf_p` and `test_avg/mae_surf_p`
+> are finite for every run. This is expected behaviour — **do not patch `data/`** to
+> "fix" it. (The older NaN warning in the prior-programme history below is obsolete.)
 
-## Current baseline
+## Current launch — aws-tfoil4h-20260801-r2 (AWS / Docker acceptance, single GPU)
+
+Hard caps this launch: **20 min wall-clock and ≤20 epochs per training run**. W&B
+project `senpai-v1-aws-acceptance`, group `aws-tfoil4h-20260801-r2`; student
+aws4hr2-fern. The prior-programme history below (different W&B project and 30-min
+cap) is retained for context only and is **not** used for this launch's decisions.
+
+### Baseline config (train.py defaults = source of truth)
 
 | item | value |
 |------|-------|
 | model | Transolver (n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, ~0.66M params) |
-| optimizer | AdamW lr=5e-4, wd=1e-4, bs=4, CosineAnnealingLR(T_max=epochs) |
-| **loss** | **L1 (surf_weight=10, masked per-node mean, normalized target space)** ← R2 winner |
-| **precision** | **bf16_compile (bf16 autocast + `torch.compile(dynamic=True)`, 2.6× throughput)** ← R4 winner |
-| **deployment** `val_avg/mae_surf_p` | **≈ 72** (71.95 @ E26, max epochs under the 30-min cap) |
-| **deployment** corrected `test_avg/mae_surf_p` | **≈ 63** (62.88 @ E26) |
-| per-epoch quality | unchanged by precision (E11 common-epoch val flat ≈105 across fp32/bf16/compile) |
-| branch SHA | `7f1451d` (after #4609) |
+| optimizer | AdamW lr=5e-4, wd=1e-4, **batch_size=2**, CosineAnnealingLR(T_max=epochs) |
+| loss | L1, surf_weight=10 (masked per-node mean, normalized target space) |
+| precision | bf16_compile (bf16 autocast + `torch.compile(dynamic=True)`) |
 
-Reproduce (deployment): `python train.py --agent <name> --epochs 26` (loss=l1, precision=bf16_compile now defaults).
-**Screening note:** precision doesn't change per-epoch quality, so a fixed-E screen gives the same val as before at that E
-(E=9 ≈ 112); but each run is now ~2.6× cheaper (~8 min not ~20), so prefer **equal-wall-clock** or a higher common E.
+### Reference points (this launch)
 
-## History (newest first)
+| run | epochs | best val_avg/mae_surf_p | test_avg/mae_surf_p | W&B run | notes |
+|-----|--------|-------------------------|---------------------|---------|-------|
+| baseline control (#4614) | 12 | 96.54 (best=E12) | **85.52** | `kfiukk90` | val 222→96.5 monotone, **still descending**; 8.3 min total, ~32 s/ep after compile warmup, peak 12 GB |
+
+Per-split surface-p MAE (physical units), control run `kfiukk90`:
+- VAL E12: single 111.33 · geom_rc 107.55 · geom_cruise 76.66 · re_rand 90.63 → 96.54
+- TEST:    single  97.65 · geom_rc  92.87 · geom_cruise 64.26 · re_rand 87.29 → 85.52
+
+**Key finding:** at 12 epochs the run consumes only ~8 of the ~20 affordable minutes
+and val is still descending steeply → the immediate, decisive lever is **using the
+full epoch budget** (epochs 12→20, cosine `T_max` matched). Tested next in the R1
+assignment below.
+
+## Prior-programme history (different W&B project / 30-min cap — context only, not used for decisions)
 
 ### R4 — Training precision/throughput at EQUAL WALL-CLOCK — ✅ MERGED (#4609, tf6h-fern) 🏆 biggest win yet
 - **Change:** added `--precision {fp32,tf32,bf16,bf16_compile}` (default **bf16_compile**). bf16 arms wrap only
