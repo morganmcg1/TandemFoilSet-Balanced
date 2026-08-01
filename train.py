@@ -409,7 +409,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 @dataclass
 class Config:
-    lr: float = 1e-3  # R2-a3: 2x peak LR (was 5e-4) — cover more optimization distance under the fixed 20-epoch cosine budget
+    lr: float = 1.5e-3  # R4: peak LR for warmup->cosine schedule (was constant 1e-3); linear warmup enables this higher peak
     weight_decay: float = 1e-4
     batch_size: int = 2  # R6: 2x grad steps/epoch (fixed 1499 samples/epoch) -> lower val on all 4 splits at equal wall-clock
     surf_weight: float = 10.0
@@ -489,7 +489,17 @@ else:
     fwd_model = model
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+# R4: linear warmup (2 epochs, 0.1x->1x peak) then cosine anneal over the rest.
+# Warmup tames the early-step overshoot that diverged the constant lr=2e-3 run,
+# enabling a higher peak lr under the fixed 20-epoch budget. scheduler.step() stays per-epoch.
+WARMUP_EPOCHS = 2
+warmup = torch.optim.lr_scheduler.LinearLR(
+    optimizer, start_factor=0.1, end_factor=1.0, total_iters=WARMUP_EPOCHS
+)
+cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS - WARMUP_EPOCHS)
+scheduler = torch.optim.lr_scheduler.SequentialLR(
+    optimizer, schedulers=[warmup, cosine], milestones=[WARMUP_EPOCHS]
+)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
