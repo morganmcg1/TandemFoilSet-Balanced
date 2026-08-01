@@ -25,27 +25,41 @@ cap) is retained for context only and is **not** used for this launch's decision
 | item | value |
 |------|-------|
 | model | Transolver (n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, ~0.66M params) |
-| optimizer | AdamW lr=5e-4, wd=1e-4, **batch_size=2**, CosineAnnealingLR(T_max=epochs) |
+| optimizer | AdamW **lr=1e-3** ← R2 winner (#4616), wd=1e-4, **batch_size=2**, CosineAnnealingLR(T_max=epochs) |
 | loss | L1, surf_weight=10 (masked per-node mean, normalized target space) |
 | precision | bf16_compile (bf16 autocast + `torch.compile(dynamic=True)`) |
 | **epochs (default)** | **20** ← R1 winner (#4615); matched to the 20-min/20-epoch cap |
-| **current baseline** `val_avg/mae_surf_p` / `test_avg/mae_surf_p` | **79.14 / 69.46** (run `i5fg529t`, E20) |
-| branch SHA | `8a22031` (after #4615) |
+| **current baseline** `val_avg/mae_surf_p` / `test_avg/mae_surf_p` | **74.48 / 64.66** (run `u48x654k`, E20) |
+| branch SHA | `13e3164` (after #4616) |
 
-Reproduce baseline: `python train.py --agent <name> --epochs 20 --wandb_group aws-tfoil4h-20260801-r2 --wandb_name <name>/<slug>`
+Reproduce baseline: `python train.py --agent <name> --epochs 20 --wandb_group aws-tfoil4h-20260801-r2 --wandb_name <name>/<slug>` (lr=1e-3 is now the default)
 
 ### Reference points (this launch)
 
 | run | epochs | best val_avg/mae_surf_p | test_avg/mae_surf_p | W&B run | notes |
 |-----|--------|-------------------------|---------------------|---------|-------|
 | baseline control (#4614) | 12 | 96.54 (best=E12) | 85.52 | `kfiukk90` | val 222→96.5 monotone, still descending; 8.3 min, peak 12 GB |
-| **R1 full-budget (#4615) ✅ MERGED** | 20 | **79.14 (best=E20)** | **69.46** | `i5fg529t` | −18.0% val / −18.8% test vs control; **all 4 val splits down 14.5–23%**; 11.4 min, peak 12 GB |
+| R1 full-budget (#4615) ✅ MERGED | 20 | 79.14 (best=E20) | 69.46 | `i5fg529t` | −18.0% val / −18.8% test vs control; all 4 val splits down 14.5–23%; 11.4 min |
+| **R2 higher-LR (#4616) ✅ MERGED** | 20 | **74.48 (best=E20)** | **64.66** | `u48x654k` | lr 5e-4→1e-3; −5.9% val / −6.9% test vs R1; **all 4 val splits down 3.6–9.9%**; 11.1 min, peak 12 GB |
 
-Per-split surface-p MAE (physical units), **new baseline** run `i5fg529t` (E20):
-- VAL:  single 85.73 · geom_rc 91.90 · geom_cruise 62.36 · re_rand 76.56 → 79.14
-- TEST: single 75.21 · geom_rc 82.34 · geom_cruise 50.77 · re_rand 69.50 → 69.46
+Per-split surface-p MAE (physical units), **current baseline** run `u48x654k` (E20, lr=1e-3):
+- VAL:  single 77.21 · geom_rc 88.13 · geom_cruise 58.74 · re_rand 73.82 → 74.48
+- TEST: single 67.61 · geom_rc 78.65 · geom_cruise 47.21 · re_rand 65.19 → 64.66
 
 ## History (this launch, newest first)
+
+### R2 — Higher peak LR (5e-4 → 1e-3) at the 20-epoch budget — ✅ MERGED (#4616, aws4hr2-fern)
+- **Change:** one line — `Config.lr` default 5e-4→1e-3. `train.py` only, no `data/` change, no new packages.
+- **Hypothesis:** model is under-trained against the cap (R1 still descending at E20) → a 2× peak LR covers more
+  optimization distance while the cosine-to-zero tail still lands cleanly; ≥3% test win, no val-split regression.
+- **Result:** `test_avg/mae_surf_p` **64.66** vs R1 69.46 (**−6.9%**); best `val_avg/mae_surf_p` **74.48** vs 79.14
+  (**−5.9%**), best==E20. **All 4 val splits improved** (single −9.9%, geom_rc −4.1%, geom_cruise −5.8%,
+  re_rand −3.6%). W&B cross-checked vs run `u48x654k`.
+- **Curve:** two small early bounces (E3→E4, E7→E8) from the 2× LR, as predicted, but the cosine tail recovered
+  cleanly; still descending at E20 (75.5→74.5), no divergence. 20/20 epochs, 11.1 min, peak 12 GB.
+- **Decision:** MERGED → new baseline (lr=1e-3). Still budget-limited, not converged.
+- **Open levers (next):** LR still responsive → probe further (lr→2e-3) to find the edge; if it destabilizes,
+  a short warmup (+ optional grad-clip) is the way to tame the early bounces and possibly unlock a higher peak LR.
 
 ### R1 — Full epoch budget (epochs 12→20, cosine T_max matched) — ✅ MERGED (#4615, aws4hr2-fern) 🏆
 - **Change:** one line — `Config.epochs` default 50→20. `train.py` only, no `data/` change, no new packages.
