@@ -409,7 +409,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 @dataclass
 class Config:
-    lr: float = 1e-3  # R2-a3: 2x peak LR (was 5e-4) — cover more optimization distance under the fixed 20-epoch cosine budget
+    lr: float = 2e-3  # R2-a4: probe the LR edge, 2x peak LR (was 1e-3) under the fixed 20-epoch cosine budget
     weight_decay: float = 1e-4
     batch_size: int = 2  # R6: 2x grad steps/epoch (fixed 1499 samples/epoch) -> lower val on all 4 splits at equal wall-clock
     surf_weight: float = 10.0
