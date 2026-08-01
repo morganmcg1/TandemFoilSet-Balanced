@@ -25,14 +25,14 @@ cap) is retained for context only and is **not** used for this launch's decision
 | item | value |
 |------|-------|
 | model | Transolver (n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, ~0.66M params) |
-| optimizer | AdamW **lr=1e-3** ‚Üê R2 winner (#4616), wd=1e-4, **batch_size=2**, CosineAnnealingLR(T_max=epochs) |
+| optimizer | AdamW **lr=1.5e-3** (R4 winner #4618), wd=1e-4, **batch_size=2**, **LinearLR warmup (2 ep, 0.1→1.0) → CosineAnnealingLR(T_max=epochs−2)** |
 | loss | L1, surf_weight=10 (masked per-node mean, normalized target space) |
 | precision | bf16_compile (bf16 autocast + `torch.compile(dynamic=True)`) |
 | **epochs (default)** | **20** ‚Üê R1 winner (#4615); matched to the 20-min/20-epoch cap |
-| **current baseline** `val_avg/mae_surf_p` / `test_avg/mae_surf_p` | **74.48 / 64.66** (run `u48x654k`, E20) |
-| branch SHA | `13e3164` (after #4616) |
+| **current baseline** `val_avg/mae_surf_p` / `test_avg/mae_surf_p` | **66.52 / 58.66** (run `gylcu47i`, E20) |
+| branch SHA | `a596e11` (after #4618) |
 
-Reproduce baseline: `python train.py --agent <name> --epochs 20 --wandb_group aws-tfoil4h-20260801-r2 --wandb_name <name>/<slug>` (lr=1e-3 is now the default)
+Reproduce baseline: `python train.py --agent <name> --epochs 20 --wandb_group aws-tfoil4h-20260801-r2 --wandb_name <name>/<slug>` (lr=1.5e-3 with a 2-epoch warmup→cosine schedule is now the default)
 
 ### Reference points (this launch)
 
@@ -40,13 +40,36 @@ Reproduce baseline: `python train.py --agent <name> --epochs 20 --wandb_group aw
 |-----|--------|-------------------------|---------------------|---------|-------|
 | baseline control (#4614) | 12 | 96.54 (best=E12) | 85.52 | `kfiukk90` | val 222‚Üí96.5 monotone, still descending; 8.3 min, peak 12 GB |
 | R1 full-budget (#4615) ‚úÖ MERGED | 20 | 79.14 (best=E20) | 69.46 | `i5fg529t` | ‚àí18.0% val / ‚àí18.8% test vs control; all 4 val splits down 14.5‚Äì23%; 11.4 min |
-| **R2 higher-LR (#4616) ‚úÖ MERGED** | 20 | **74.48 (best=E20)** | **64.66** | `u48x654k` | lr 5e-4‚Üí1e-3; ‚àí5.9% val / ‚àí6.9% test vs R1; **all 4 val splits down 3.6‚Äì9.9%**; 11.1 min, peak 12 GB |
+| R2 higher-LR (#4616) ✅ MERGED | 20 | 74.48 (best=E20) | 64.66 | `u48x654k` | lr 5e-4→1e-3; −5.9% val / −6.9% test vs R1; all 4 val splits down 3.6–9.9%; 11.1 min, peak 12 GB |
+| **R4 warmup+cosine (#4618) ✅ MERGED** | 20 | **66.52 (best=E20)** | **58.66** | `gylcu47i` | peak lr=1.5e-3 w/ 2-ep linear warmup (0.1→1.0)→cosine; −10.7% val / −9.3% test vs R2; **all 4 val splits down 9.4–14.1%**; no divergence; 11.3 min, peak 12 GB |
 
-Per-split surface-p MAE (physical units), **current baseline** run `u48x654k` (E20, lr=1e-3):
-- VAL:  single 77.21 ¬∑ geom_rc 88.13 ¬∑ geom_cruise 58.74 ¬∑ re_rand 73.82 ‚Üí 74.48
-- TEST: single 67.61 ¬∑ geom_rc 78.65 ¬∑ geom_cruise 47.21 ¬∑ re_rand 65.19 ‚Üí 64.66
+Per-split surface-p MAE (physical units), **current baseline** run `gylcu47i` (E20, lr=1.5e-3, 2-ep warmup→cosine):
+- VAL:  single 69.05 · geom_rc 79.83 · geom_cruise 50.46 · re_rand 66.74 → 66.52
+- TEST: single 61.92 · geom_rc 73.10 · geom_cruise 41.25 · re_rand 58.37 → 58.66
 
 ## History (this launch, newest first)
+
+### R4 — Warmup + cosine LR schedule at peak lr=1.5e-3 — ✅ MERGED (#4618, aws4hr2-fern) 🏆
+- **Change:** `train.py` only (+12/−2) — `Config.lr` default 1e-3→1.5e-3, and replaced the single
+  `CosineAnnealingLR(T_max=epochs)` with `SequentialLR([LinearLR(start_factor=0.1, end_factor=1.0, total_iters=2),
+  CosineAnnealingLR(T_max=epochs−2)], milestones=[2])`. Per-epoch `scheduler.step()` unchanged. No arch/loss/bs/wd/
+  precision change; no `data/` change; no new packages.
+- **Hypothesis:** a short linear warmup tames the from-step-1 overshoot that diverged the constant-LR 2e-3 run (R3),
+  unlocking a higher usable peak LR (1.5e-3) than the constant schedule could tolerate → more optimization distance
+  per epoch under the fixed 20-epoch cap. Warmup+higher-peak tested together as one coherent schedule recipe.
+  Bar: ≥3% test win, no val-split regression, no divergence.
+- **Result:** `test_avg/mae_surf_p` **58.66** vs R2 64.66 (**−9.3%**); best `val_avg/mae_surf_p` **66.52** vs 74.48
+  (**−10.7%**), best==E20. **All 4 val splits improved** (single −10.6%, geom_rc −9.4%, geom_cruise −14.1%,
+  re_rand −9.6%). W&B cross-checked vs run `gylcu47i` (finished).
+- **Curve:** warmup runs E1–E2 (train-LR 0.15e-3→1.5e-3, peak at E3); val is bumpy while LR sits near the 1.5e-3
+  peak (E3–E8, e.g. E7 spikes to 179 then recovers) but **never diverges** — no NaN/Inf, no runaway — then descends
+  smoothly as cosine decays. Per-epoch val (E1..E20): 244.6, 190.2, 192.9, 169.9, 170.1, 139.6, 179.3, 147.8, 111.8,
+  111.5, 116.1, 102.7, 88.9, 87.1, 79.7, 78.5, 71.2, 72.7, 67.5, 66.5. Still descending at E20. 20/20 epochs, 11.3 min, peak 12 GB.
+- **Decision:** MERGED → new baseline (lr=1.5e-3, 2-ep warmup→cosine). Warmup provably buys stability at a peak LR
+  that killed the constant-LR R3 run at E2. Model remains optimization-limited within the cap (val still descending).
+- **Open levers (next):** (1) with warmup preventing the early blowup, push the peak higher (1.75–2e-3, same 2-ep
+  warmup); (2) tune warmup length (1 vs 3 ep) to trade early-noise vs peak-hold time. If the LR axis is exhausted,
+  pivot off it — surf_weight↑ (directly targets the surface-p metric) or batch_size=1 (2× steps/epoch, wall-clock permitting).
 
 ### R3 — LR edge probe (1e-3 → 2e-3) — ❌ closed, DIVERGES (#4617, aws4hr2-fern)
 - **Change:** one line — `Config.lr` 1e-3→2e-3 (no warmup/clip, single variable). `train.py` only.
