@@ -28,21 +28,38 @@ cap) is retained for context only and is **not** used for this launch's decision
 | optimizer | AdamW lr=5e-4, wd=1e-4, **batch_size=2**, CosineAnnealingLR(T_max=epochs) |
 | loss | L1, surf_weight=10 (masked per-node mean, normalized target space) |
 | precision | bf16_compile (bf16 autocast + `torch.compile(dynamic=True)`) |
+| **epochs (default)** | **20** ← R1 winner (#4615); matched to the 20-min/20-epoch cap |
+| **current baseline** `val_avg/mae_surf_p` / `test_avg/mae_surf_p` | **79.14 / 69.46** (run `i5fg529t`, E20) |
+| branch SHA | `8a22031` (after #4615) |
+
+Reproduce baseline: `python train.py --agent <name> --epochs 20 --wandb_group aws-tfoil4h-20260801-r2 --wandb_name <name>/<slug>`
 
 ### Reference points (this launch)
 
 | run | epochs | best val_avg/mae_surf_p | test_avg/mae_surf_p | W&B run | notes |
 |-----|--------|-------------------------|---------------------|---------|-------|
-| baseline control (#4614) | 12 | 96.54 (best=E12) | **85.52** | `kfiukk90` | val 222→96.5 monotone, **still descending**; 8.3 min total, ~32 s/ep after compile warmup, peak 12 GB |
+| baseline control (#4614) | 12 | 96.54 (best=E12) | 85.52 | `kfiukk90` | val 222→96.5 monotone, still descending; 8.3 min, peak 12 GB |
+| **R1 full-budget (#4615) ✅ MERGED** | 20 | **79.14 (best=E20)** | **69.46** | `i5fg529t` | −18.0% val / −18.8% test vs control; **all 4 val splits down 14.5–23%**; 11.4 min, peak 12 GB |
 
-Per-split surface-p MAE (physical units), control run `kfiukk90`:
-- VAL E12: single 111.33 · geom_rc 107.55 · geom_cruise 76.66 · re_rand 90.63 → 96.54
-- TEST:    single  97.65 · geom_rc  92.87 · geom_cruise 64.26 · re_rand 87.29 → 85.52
+Per-split surface-p MAE (physical units), **new baseline** run `i5fg529t` (E20):
+- VAL:  single 85.73 · geom_rc 91.90 · geom_cruise 62.36 · re_rand 76.56 → 79.14
+- TEST: single 75.21 · geom_rc 82.34 · geom_cruise 50.77 · re_rand 69.50 → 69.46
 
-**Key finding:** at 12 epochs the run consumes only ~8 of the ~20 affordable minutes
-and val is still descending steeply → the immediate, decisive lever is **using the
-full epoch budget** (epochs 12→20, cosine `T_max` matched). Tested next in the R1
-assignment below.
+## History (this launch, newest first)
+
+### R1 — Full epoch budget (epochs 12→20, cosine T_max matched) — ✅ MERGED (#4615, aws4hr2-fern) 🏆
+- **Change:** one line — `Config.epochs` default 50→20. `train.py` only, no `data/` change, no new packages.
+- **Hypothesis:** the 12-ep control used only ~8 of ~20 min and val was still descending → spending the full
+  20-epoch budget (with cosine `T_max=20` so the LR anneals within the cap) lowers `test_avg/mae_surf_p` ≥5%
+  robustly across all 4 val splits.
+- **Result:** `test_avg/mae_surf_p` **69.46** vs control 85.52 (**−18.8%**); best `val_avg/mae_surf_p` **79.14**
+  vs 96.54 (**−18.0%**), best==E20. **All 4 val splits improved** (single −23.0%, geom_rc −14.5%,
+  geom_cruise −18.7%, re_rand −15.5%). W&B numbers cross-checked against run `i5fg529t` (finished).
+- **Curve:** still descending at E20 (no plateau); the cosine tail E14→E20 dropped val 96.9→79.1 (~17.8 pts),
+  confirming the schedule-matching rationale. 20/20 epochs, 11.4 min total, peak 12 GB — well inside the cap.
+- **Decision:** MERGED → new baseline. **The binding constraint is the 20-epoch/20-min cap, not convergence.**
+- **Open lever (next):** at fixed budget, get more *effective optimization per step* — e.g. higher peak LR with the
+  same cosine anneal, warmup, or gradient accumulation for a larger effective batch. Capacity knobs stay deprioritized.
 
 ## Prior-programme history (different W&B project / 30-min cap — context only, not used for decisions)
 
