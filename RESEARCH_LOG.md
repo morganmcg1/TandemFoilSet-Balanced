@@ -49,6 +49,28 @@ Per-split surface-p MAE (physical units), **current baseline** run `gylcu47i` (E
 
 ## History (this launch, newest first)
 
+### R6 — Up-weight surface loss (surf_weight 10 → 20) — ❌ closed, worse (#4620, aws4hr2-fern)
+- **Change:** one line — `Config.surf_weight` default 10.0→20.0; all else unchanged. `train.py` only. First
+  experiment OFF the LR axis.
+- **Hypothesis:** the metric `mae_surf_p` is on surface nodes and the training loss is
+  `vol_loss + surf_weight*surf_loss`, so doubling surf_weight should spend more of the fixed 20-epoch budget on the
+  scored surface region and lower test surf-p.
+- **Result:** FALSIFIED. `test_avg/mae_surf_p` **60.72** vs R4 58.66 (**+3.5% WORSE**); best `val_avg/mae_surf_p`
+  **69.74** vs 66.52 (**+4.8% worse**); **all 4 per-split val regressed** (single 72.58, geom_rc 80.94,
+  geom_cruise 54.58, re_rand 70.85). No divergence. W&B run `wpuxdifp` (finished), cross-checked. 11.3 min, 12 GB.
+- **Rebalancing confirmed but unhelpful:** train surf/vol ratio shifted toward surface (E20 vol=0.443, surf=0.174)
+  as intended, yet the surface metric worsened. Still descending at E20 (optimization-limited, like every run).
+- **Mechanism (banked lesson):** AdamW is ~invariant to a *global* loss scale, so surf_weight is not a free
+  "spend budget on the scored region" lever — it only changes the **relative** gradient composition. Down-weighting
+  the **PDE-coupled volume-field term** (velocity/pressure are physically coupled) degrades the shared
+  representation that also supports surface-pressure prediction. Loss-reweighting toward surface hurts here.
+- **Decision:** closed, no merge; R4 (surf_weight=10) remains baseline. **Objective-reweighting axis is unpromising**
+  in the up direction (a modest *decrease* is an untested but lower-priority idea).
+- **Next:** attack the dominant, most-robust finding directly — the model is **step-limited** (val descending at
+  E20 in ALL runs). **R7: batch_size 2→1** gives ~2× optimizer steps/epoch at ~fixed samples/epoch (1499), so ~2×
+  updates under the same 20-epoch cosine schedule. Wall-clock should stay ~flat (fixed total samples/epoch → ~equal
+  compute, only more update overhead); watch the 20-min cap.
+
 ### R5 — Peak LR 1.5e-3 → 2e-3 (warmup schedule unchanged) — ❌ closed, worse (#4619, aws4hr2-fern)
 - **Change:** one line — `Config.lr` default 1.5e-3→2e-3; warmup→cosine schedule unchanged. `train.py` only.
 - **Hypothesis:** the 2-ep warmup that stabilised 1.5e-3 would also stabilise the 2e-3 peak that diverged as a
