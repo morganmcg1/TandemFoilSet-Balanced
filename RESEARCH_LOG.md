@@ -49,6 +49,25 @@ Per-split surface-p MAE (physical units), **current baseline** run `gylcu47i` (E
 
 ## History (this launch, newest first)
 
+### R5 — Peak LR 1.5e-3 → 2e-3 (warmup schedule unchanged) — ❌ closed, worse (#4619, aws4hr2-fern)
+- **Change:** one line — `Config.lr` default 1.5e-3→2e-3; warmup→cosine schedule unchanged. `train.py` only.
+- **Hypothesis:** the 2-ep warmup that stabilised 1.5e-3 would also stabilise the 2e-3 peak that diverged as a
+  constant (R3), and the higher effective LR would make more progress per epoch under the fixed 20-epoch cap.
+- **Result:** stability CONFIRMED but performance FALSIFIED. `test_avg/mae_surf_p` **59.72** vs R4 58.66 (**+1.8%
+  WORSE**); best `val_avg/mae_surf_p` **70.48** vs 66.52 (**+5.9% worse**); **all 4 per-split val regressed**
+  (single 75.17, geom_rc 83.47, geom_cruise 52.71, re_rand 70.56). W&B run `rvu5c4b1` (finished), cross-checked.
+- **Stability:** NO NaN/Inf, NO spike — the 2-ep warmup fully tamed the 2e-3 peak (contrast R4, which spiked to 179
+  at E7; contrast R3 constant-2e-3, which NaN'd at E2). Val descended smoothly/monotonically E1..E20 (218→70.5), but
+  the early/mid epochs sat much higher (E2 val 230 vs R4 ~190) and the optimization-limited model never caught up.
+- **Conclusion:** the 2-ep warmup fixes the from-step-1 overshoot (R3's NaN was purely an early-overshoot artifact),
+  but a **higher peak does not help** — the optimal warmup-enabled peak LR is **≤1.5e-3** for this 20-epoch budget.
+  LR-peak axis now bounded on both sides: 1e-3 (R2) < **1.5e-3 (R4, best)** < 2e-3 (R5, worse).
+- **Decision:** closed, no merge; lr=1.5e-3 (R4) remains baseline. **The LR-peak lever is exhausted.**
+- **Next:** pivot OFF the LR-peak axis. Since the model is optimization-limited under a fixed 20-epoch budget,
+  reallocate that fixed budget toward the scored quantity → **R6: surf_weight 10→20** (up-weight the surface-node
+  loss term `loss = vol_loss + surf_weight*surf_loss` that the primary metric `mae_surf_p` measures). Backup lever:
+  batch_size 2→1 (2× optimizer steps/epoch at ~fixed samples/epoch → attacks the step-limited constraint; watch wall-clock).
+
 ### R4 — Warmup + cosine LR schedule at peak lr=1.5e-3 — ✅ MERGED (#4618, aws4hr2-fern) 🏆
 - **Change:** `train.py` only (+12/−2) — `Config.lr` default 1e-3→1.5e-3, and replaced the single
   `CosineAnnealingLR(T_max=epochs)` with `SequentialLR([LinearLR(start_factor=0.1, end_factor=1.0, total_iters=2),
