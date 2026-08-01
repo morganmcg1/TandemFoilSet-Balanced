@@ -409,7 +409,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 @dataclass
 class Config:
-    lr: float = 1.5e-3  # R4: peak LR for warmup->cosine schedule (was constant 1e-3); linear warmup enables this higher peak
+    lr: float = 2e-3  # R5: push warmup->cosine peak LR to 2e-3 (was 1.5e-3); 2-epoch warmup should stabilise the peak that diverged as a constant LR
     weight_decay: float = 1e-4
     batch_size: int = 2  # R6: 2x grad steps/epoch (fixed 1499 samples/epoch) -> lower val on all 4 splits at equal wall-clock
     surf_weight: float = 10.0
