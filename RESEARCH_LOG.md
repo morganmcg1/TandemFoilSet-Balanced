@@ -50,6 +50,28 @@ Per-split surface-p MAE (physical units), **current baseline** run `azyt1isv` (E
 
 ## History (this launch, newest first)
 
+### R8 — Re-tune peak LR at bs=1 (1.5e-3 → 1.25e-3) — ❌ closed, worse (#4622, aws4hr2-fern)
+- **Change:** one line — `Config.lr` default 1.5e-3→1.25e-3; all else unchanged (bs=1, 2-ep warmup→cosine).
+  `train.py` only. A mild trim probe at the new bs=1 baseline.
+- **Hypothesis:** the R4-optimal peak 1.5e-3 was tuned at bs=2; the noisier bs=1 gradient regime (R7's bumpy curve)
+  may have a lower optimum, so 1.25e-3 could damp the bumps and lower test surf-p vs R7 56.83. Falsifiable either way.
+- **Result:** FALSIFIED. `test_avg/mae_surf_p` **57.29** vs R7 56.83 (**+0.8% WORSE**); best `val_avg/mae_surf_p`
+  **66.03** vs 65.72 (+0.5% worse). Fails the ≥2% merge bar. W&B run `qlg1k00o` (finished), cross-checked: lr=1.25e-3,
+  bs=1, epochs=20, global_step=29980 (=1499×20), best_epoch=20, 13.3 min, peak 6.1 GB. No divergence.
+- **Per-split (TEST vs R7):** single 58.54 (55.23, **+6.0% worse**), geom_rc 72.30 (71.18, +1.6%), geom_cruise 40.10
+  (41.68, −3.8% better), re_rand 58.24 (59.22, −1.7% better). Splits DIVERGE: cruise/re_rand improved but single
+  (R7's big winner) regressed most, netting the small overall loss.
+- **Smoothness:** NOT clearly smoother — R8 bumps at E2/E4/E10/E13 vs R7's E6/E10/E16 (comparable, just shifted).
+  The LR trim did not damp the single-sample noise as hypothesized.
+- **Mechanism:** the lower peak shrank effective step size across the whole cosine schedule, so under the fixed
+  20-epoch budget (step-limited) the model traversed slightly less loss landscape and finished marginally behind.
+- **Decision:** closed, no merge; R7 (lr=1.5e-3, bs=1, test 56.83) remains baseline. **Pre-registered conclusion:
+  the LR-peak axis is EXHAUSTED across both batch regimes** — bs=2: 1e-3<1.5e-3<2e-3 (2e-3-const diverges);
+  bs=1: 1.25e-3 ties-worse vs 1.5e-3. Peak lr=1.5e-3 with 2-ep warmup is robust; R7 bumpiness is benign.
+- **Next (R9):** pivot OFF the LR-peak axis. Attack the dominant step-limited finding via **schedule shape**:
+  **shorten warmup 2→1 epoch** (`WARMUP_EPOCHS`) → 1 more near-peak epoch AND cosine T_max 18→19 (slower decay =
+  higher LR every epoch) → more productive descent in the fixed budget. Falsifiable (risk: early overshoot at 1.5e-3).
+
 ### R7 — Halve batch size (2 → 1): ~2× optimizer steps/epoch — ✅ MERGED (#4621, aws4hr2-fern) 🏆
 - **Change:** one line — `Config.batch_size` default 2→1; all else unchanged. `train.py` only. First win OFF the
   LR/loss axes; attacks the step-limited constraint directly.
