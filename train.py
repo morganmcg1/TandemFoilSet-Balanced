@@ -489,10 +489,11 @@ else:
     fwd_model = model
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-# R4: linear warmup (2 epochs, 0.1x->1x peak) then cosine anneal over the rest.
+# R4: linear warmup (0.1x->1x peak) then cosine anneal over the rest.
 # Warmup tames the early-step overshoot that diverged the constant lr=2e-3 run,
 # enabling a higher peak lr under the fixed 20-epoch budget. scheduler.step() stays per-epoch.
-WARMUP_EPOCHS = 2
+# R9: warmup shortened 2->1 epoch to add one near-peak epoch and stretch cosine T_max for a step-limited model.
+WARMUP_EPOCHS = 1
 warmup = torch.optim.lr_scheduler.LinearLR(
     optimizer, start_factor=0.1, end_factor=1.0, total_iters=WARMUP_EPOCHS
 )
