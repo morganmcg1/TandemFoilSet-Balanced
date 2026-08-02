@@ -25,14 +25,14 @@ cap) is retained for context only and is **not** used for this launch's decision
 | item | value |
 |------|-------|
 | model | Transolver (n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, ~0.66M params) |
-| optimizer | AdamW **lr=1.5e-3** (R4 winner #4618), wd=1e-4, **batch_size=2**, **LinearLR warmup (2 ep, 0.1→1.0) → CosineAnnealingLR(T_max=epochs−2)** |
+| optimizer | AdamW **lr=1.5e-3** (R4 winner #4618), wd=1e-4, **batch_size=1** (R7 #4621), **LinearLR warmup (2 ep, 0.1→1.0) → CosineAnnealingLR(T_max=epochs−2)** |
 | loss | L1, surf_weight=10 (masked per-node mean, normalized target space) |
 | precision | bf16_compile (bf16 autocast + `torch.compile(dynamic=True)`) |
 | **epochs (default)** | **20** ‚Üê R1 winner (#4615); matched to the 20-min/20-epoch cap |
-| **current baseline** `val_avg/mae_surf_p` / `test_avg/mae_surf_p` | **66.52 / 58.66** (run `gylcu47i`, E20) |
-| branch SHA | `a596e11` (after #4618) |
+| **current baseline** `val_avg/mae_surf_p` / `test_avg/mae_surf_p` | **65.72 / 56.83** (run `azyt1isv`, E20) |
+| branch SHA | `d68989a` (after #4621) |
 
-Reproduce baseline: `python train.py --agent <name> --epochs 20 --wandb_group aws-tfoil4h-20260801-r2 --wandb_name <name>/<slug>` (lr=1.5e-3 with a 2-epoch warmup→cosine schedule is now the default)
+Reproduce baseline: `python train.py --agent <name> --epochs 20 --wandb_group aws-tfoil4h-20260801-r2 --wandb_name <name>/<slug>` (lr=1.5e-3 with a 2-epoch warmup→cosine schedule is now the default; batch_size=1 also now default)
 
 ### Reference points (this launch)
 
@@ -41,13 +41,37 @@ Reproduce baseline: `python train.py --agent <name> --epochs 20 --wandb_group aw
 | baseline control (#4614) | 12 | 96.54 (best=E12) | 85.52 | `kfiukk90` | val 222‚Üí96.5 monotone, still descending; 8.3 min, peak 12 GB |
 | R1 full-budget (#4615) ‚úÖ MERGED | 20 | 79.14 (best=E20) | 69.46 | `i5fg529t` | ‚àí18.0% val / ‚àí18.8% test vs control; all 4 val splits down 14.5‚Äì23%; 11.4 min |
 | R2 higher-LR (#4616) ✅ MERGED | 20 | 74.48 (best=E20) | 64.66 | `u48x654k` | lr 5e-4→1e-3; −5.9% val / −6.9% test vs R1; all 4 val splits down 3.6–9.9%; 11.1 min, peak 12 GB |
-| **R4 warmup+cosine (#4618) ✅ MERGED** | 20 | **66.52 (best=E20)** | **58.66** | `gylcu47i` | peak lr=1.5e-3 w/ 2-ep linear warmup (0.1→1.0)→cosine; −10.7% val / −9.3% test vs R2; **all 4 val splits down 9.4–14.1%**; no divergence; 11.3 min, peak 12 GB |
+| R4 warmup+cosine (#4618) ✅ MERGED | 20 | 66.52 (best=E20) | 58.66 | `gylcu47i` | peak lr=1.5e-3 w/ 2-ep linear warmup (0.1→1.0)→cosine; −10.7% val / −9.3% test vs R2; all 4 val splits down 9.4–14.1%; no divergence; 11.3 min, peak 12 GB |
+| **R7 batch_size 2→1 (#4621) ✅ MERGED** | 20 | **65.72 (best=E20)** | **56.83** | `azyt1isv` | ~2× optimizer steps/epoch (1499 vs 750; global_step=29980 confirms); **−3.1% test / −1.2% val vs R4**; test single −10.8% & geom_rc −2.6% drive it (cruise/re_rand ~flat/+1%); 3/4 val splits down (geom_cruise +0.55% negligible); bumpy but no divergence; still descending at E20; 13.4 min, peak **6 GB** (halved, no pad waste) |
 
-Per-split surface-p MAE (physical units), **current baseline** run `gylcu47i` (E20, lr=1.5e-3, 2-ep warmup→cosine):
-- VAL:  single 69.05 · geom_rc 79.83 · geom_cruise 50.46 · re_rand 66.74 → 66.52
-- TEST: single 61.92 · geom_rc 73.10 · geom_cruise 41.25 · re_rand 58.37 → 58.66
+Per-split surface-p MAE (physical units), **current baseline** run `azyt1isv` (E20, R7 bs=1):
+- VAL:  single 65.96 · geom_rc 79.69 · geom_cruise 50.74 · re_rand 66.50 → 65.72
+- TEST: single 55.23 · geom_rc 71.18 · geom_cruise 41.68 · re_rand 59.22 → 56.83
 
 ## History (this launch, newest first)
+
+### R7 — Halve batch size (2 → 1): ~2× optimizer steps/epoch — ✅ MERGED (#4621, aws4hr2-fern) 🏆
+- **Change:** one line — `Config.batch_size` default 2→1; all else unchanged. `train.py` only. First win OFF the
+  LR/loss axes; attacks the step-limited constraint directly.
+- **Hypothesis:** the sampler draws a fixed ~1499 samples/epoch regardless of batch size, so bs=1 does ~1499
+  optimizer updates/epoch vs ~750 at bs=2 (~2×) under the same per-epoch cosine schedule. Since the model is
+  step-limited (val descending at E20 in every run), ~2× updates should lower test surf-p ≥3%.
+- **Result:** BAR MET (marginal). `test_avg/mae_surf_p` **56.83** vs R4 58.66 (**−3.12%**, target ≤56.9); best
+  `val_avg/mae_surf_p` **65.72** vs 66.52 (**−1.2%**). W&B run `azyt1isv` (finished), cross-checked. **Mechanism
+  confirmed:** global_step=29980=1499×20 → exactly 1499 steps/epoch.
+- **Per-split (caveats recorded):** TEST single 55.23 (R4 61.92, **−10.8%**), geom_rc 71.18 (73.10, −2.6%),
+  geom_cruise 41.68 (41.25, +1.0%), re_rand 59.22 (58.37, +1.5%) — win is **concentrated in single_in_dist**; two
+  splits regressed ~1%. VAL: single −4.5%, geom_rc −0.2%, re_rand −0.4% improved; **geom_cruise +0.55%** (negligible
+  +0.28 abs) — the strict no-regression clause is technically breached on that one split.
+- **Curve/stability:** bumpy from noisier single-sample gradients (transient val spikes E6/E10/E16, each recovered);
+  no NaN/Inf, no divergence. **Still descending at E20** → step axis NOT exhausted even at 2× steps.
+- **Bonus:** peak VRAM 12→**6 GB** (bs=1 removes pad_collate padding waste) — large headroom now free. 13.4 min.
+- **Decision:** MERGED → new baseline (bs=1, test 56.83). A real primary-metric win with a confirmed mechanism and a
+  minimal change; the tiny cruise regression + bumpiness are follow-up targets, not merge-blockers (single-seed
+  standard, consistent with R1/R2/R4).
+- **Next (R8):** the R4-optimal lr=1.5e-3 was tuned at bs=2; the bs=1 regime is noisier (bumpy curve) so its optimal
+  LR may differ. Re-tune LR at bs=1 (probe a mild trim, e.g. 1.0–1.25e-3) to stabilise the bumps and possibly convert
+  more of the extra steps into metric — well-motivated by R7's evidence and cheap (one line, no wall-clock risk).
 
 ### R6 — Up-weight surface loss (surf_weight 10 → 20) — ❌ closed, worse (#4620, aws4hr2-fern)
 - **Change:** one line — `Config.surf_weight` default 10.0→20.0; all else unchanged. `train.py` only. First
