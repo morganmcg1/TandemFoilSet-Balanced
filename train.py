@@ -496,7 +496,7 @@ WARMUP_EPOCHS = 2
 warmup = torch.optim.lr_scheduler.LinearLR(
     optimizer, start_factor=0.1, end_factor=1.0, total_iters=WARMUP_EPOCHS
 )
-cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS - WARMUP_EPOCHS)
+cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS - WARMUP_EPOCHS, eta_min=cfg.lr * 0.1)
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer, schedulers=[warmup, cosine], milestones=[WARMUP_EPOCHS]
 )
