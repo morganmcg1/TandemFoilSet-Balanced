@@ -50,6 +50,28 @@ Per-split surface-p MAE (physical units), **current baseline** run `azyt1isv` (E
 
 ## History (this launch, newest first)
 
+### R10 — Cosine `eta_min` floor (0.1×peak = 1.5e-4) at bs=1 — ❌ closed, worse (#4624, aws4hr2-fern)
+- **Change:** one line — added `eta_min=cfg.lr * 0.1` to `CosineAnnealingLR` (`train.py` L499); `WARMUP_EPOCHS=2`,
+  lr=1.5e-3, bs=1, epochs=20 all unchanged. Second schedule-**shape** probe.
+- **Hypothesis:** step-limited model + cosine→~0 tail (≈1e-5 at E19) ⇒ the last ~2 epochs are near-frozen/wasted;
+  a 0.1×peak floor keeps them productive and lowers test surf-p vs R7 56.83.
+- **Result:** FALSIFIED. `test_avg/mae_surf_p` **58.58** vs R7 56.83 (**+3.08% WORSE**); best `val_avg/mae_surf_p`
+  **65.70** vs 65.72 (~TIED). W&B run `w7jvb1h2` (finished), cross-checked: floor confirmed (E18 lr=1.907e-4,
+  E19 1.603e-4, E20 1.500e-4), best_epoch=**19**, global_step=29980, 13.2 min, 6.1 GB, no divergence.
+- **Per-split (TEST vs R7):** single 61.67 (55.23, **+11.7% worse**), geom_rc 72.65 (71.18, +2.1%), geom_cruise
+  41.50 (41.68, −0.4%), re_rand 58.50 (59.22, −1.2%). Regression driven by single + geom_rc; cruise/re_rand flat.
+- **KEY INSIGHT (hypothesis refuted the informative way):** the floored tail made **E20 wobble UP** (E19 65.70 best,
+  E20 66.38), so checkpoint selection fell back to E19 — which tests worse than R7's E20 checkpoint. val_avg was a
+  wash but composition shifted (single worse, others better) and **test generalization got worse**. ⇒ the cosine→0
+  fine-tuning tail is **NOT wasted budget**; it is a productive, necessary final-convergence phase. The prior
+  "near-zero tail wastes steps" reading is wrong.
+- **Decision:** closed, no merge; R7 remains baseline. **eta_min-floor sub-axis closed** (keep eta_min=0).
+- **PROGRAMME STATE:** the **LR/schedule family is now comprehensively mapped and exhausted** — LR-peak (R2/R4/R5/R8:
+  1.5e-3 optimal), warmup-length (R9: 2 optimal), tail floor (R10: 0 optimal). Peak 1.5e-3 + 2-ep warmup + cosine→0
+  is robust. **Non-improving streak = 3** (R8/R9/R10, all schedule-family). Next work should pivot to a **different
+  tier** — optimizer family (betas/weight_decay/optimizer), capacity/architecture (risky under step-limit), or
+  data/target normalization — NOT further schedule shape.
+
 ### R9 — Shorten LR warmup (2 → 1 epoch) at bs=1 — ❌ closed, worse (#4623, aws4hr2-fern)
 - **Change:** one line — `WARMUP_EPOCHS` 2→1 (single constant driving LinearLR `total_iters`, cosine
   `T_max=epochs−WARMUP`, and `milestones`); lr=1.5e-3, bs=1, epochs=20 unchanged. `train.py` only. First
