@@ -50,6 +50,30 @@ Per-split surface-p MAE (physical units), **current baseline** run `azyt1isv` (E
 
 ## History (this launch, newest first)
 
+### R9 — Shorten LR warmup (2 → 1 epoch) at bs=1 — ❌ closed, worse (#4623, aws4hr2-fern)
+- **Change:** one line — `WARMUP_EPOCHS` 2→1 (single constant driving LinearLR `total_iters`, cosine
+  `T_max=epochs−WARMUP`, and `milestones`); lr=1.5e-3, bs=1, epochs=20 unchanged. `train.py` only. First
+  schedule-**shape** probe (pivot off the exhausted LR-peak axis).
+- **Hypothesis:** step-limited model → a 1-epoch warmup adds 1 near-peak epoch AND stretches cosine `T_max` 18→19
+  (slower decay, higher LR every epoch), converting the extra budget into more descent vs R7 56.83.
+- **Result:** FALSIFIED, decisively. `test_avg/mae_surf_p` **60.56** vs R7 56.83 (**+6.6% WORSE**); best
+  `val_avg/mae_surf_p` **69.12** vs 65.72 (+5.2%). **ALL 8 val+test splits regressed.** W&B run `6zsug8no`
+  (finished), cross-checked: lr=1.5e-3, bs=1, epochs=20, global_step=29980 (=1499×20), best_epoch=20, 13.1 min, 6.1 GB.
+- **Per-split (TEST vs R7):** single 61.25 (55.23, +10.9%), geom_rc 72.93 (71.18, +2.5%), geom_cruise 45.10 (41.68,
+  +8.2%), re_rand 62.95 (59.22, +6.3%) — uniform regression.
+- **Stability:** NO divergence/NaN despite the abrupt 0.1×→1.0× jump at E1 (E1 val 230.97, smooth descent after);
+  same-character transient bumps as R7 (E6/E11/E13), all recovered. The short warmup was stable — it simply
+  converged to a **worse basin**.
+- **Mechanism (banked lesson):** the broad, uniform regression (not a single-split instability) shows the 2nd
+  sub-peak warmup epoch genuinely **improves the optimization trajectory**, not merely protects one split. Warmup is
+  not wasted budget; it conditions the whole descent.
+- **Decision:** closed, no merge; R7 remains baseline. **Warmup-length sub-axis closed** (shorter is worse; longer
+  would eat even more budget from a step-limited model → not worth a scarce run). The LR/schedule family is now
+  well-mapped: peak lr=1.5e-3 + 2-ep warmup + cosine is robust.
+- **Next (R10):** the reinforced step-limited finding (val still descending at E20, cosine LR→~0 so the last ~2
+  epochs are near-frozen) motivates a **cosine `eta_min` floor** (e.g. 0.1×peak) to keep the tail productive —
+  a genuinely different schedule sub-lever.
+
 ### R8 — Re-tune peak LR at bs=1 (1.5e-3 → 1.25e-3) — ❌ closed, worse (#4622, aws4hr2-fern)
 - **Change:** one line — `Config.lr` default 1.5e-3→1.25e-3; all else unchanged (bs=1, 2-ep warmup→cosine).
   `train.py` only. A mild trim probe at the new bs=1 baseline.
