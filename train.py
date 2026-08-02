@@ -409,7 +409,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 @dataclass
 class Config:
-    lr: float = 1.5e-3  # R4: peak LR for warmup->cosine schedule (was constant 1e-3); linear warmup enables this higher peak
+    lr: float = 1.25e-3  # R8: mild trim from 1.5e-3 (R4-optimal at bs=2) for the noisier bs=1 gradient regime
     weight_decay: float = 1e-4
     batch_size: int = 1  # R7: bs=1 -> ~1499 optimizer steps/epoch (2x vs bs=2) under fixed 1499 samples/epoch; attacks the step-limited constraint
     surf_weight: float = 10.0
