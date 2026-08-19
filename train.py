@@ -381,7 +381,7 @@ class Config:
     surf_weight: float = 10.0
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
-    wandb_group: str | None = None
+    wandb_group: str | None = os.environ.get("WANDB_RUN_GROUP")
     wandb_name: str | None = None
     agent: str | None = None
     debug: bool = False
