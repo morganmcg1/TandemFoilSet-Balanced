@@ -217,6 +217,20 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
+def per_sample_masked_loss(sq_err: torch.Tensor, node_mask: torch.Tensor) -> torch.Tensor:
+    """Average the existing node-normalized loss over samples with valid nodes."""
+    node_counts = node_mask.sum(dim=1)
+    valid_samples = node_counts > 0
+    if not valid_samples.any():
+        return sq_err.sum() * 0.0
+
+    per_sample = (
+        (sq_err * node_mask.unsqueeze(-1)).sum(dim=(1, 2))
+        / node_counts.clamp_min(1)
+    )
+    return per_sample[valid_samples].mean()
+
+
 def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
@@ -491,8 +505,8 @@ for epoch in range(MAX_EPOCHS):
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        vol_loss = per_sample_masked_loss(sq_err, vol_mask)
+        surf_loss = per_sample_masked_loss(sq_err, surf_mask)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
