@@ -1,0 +1,5 @@
+# SENPAI Research State
+- 2026-08-19 07:47 UTC
+- No human research direction has been posted in this launch; no launch-scoped baseline metric or W&B experiment is available yet.
+- Current focus: establish an exact-code Transolver anchor, then test low-complexity fixes targeting surface-pressure MAE across all four validation tracks. The first priority is preventing padded mesh nodes from contaminating physics attention; the next priorities are correcting node-count weighting, emphasizing surface pressure, and improving continuous Reynolds/geometry conditioning.
+- Potential next research directions and themes: (1) exact baseline reproduction with complete validation/test evidence; (2) mask-aware attention and batch-size sensitivity; (3) per-sample or per-domain loss normalization for unequal mesh sizes; (4) pressure-channel weighting or robust surface-pressure loss; (5) explicit smooth embeddings for log(Re), AoA, gap, stagger, and NACA metadata; (6) modest latent-slice, MLP-capacity, and learning-rate ablations; (7) later diagnostics for rear-foil, AoA-tail, special-profile, and extrapolative Reynolds generalization if the protected split design permits them.
