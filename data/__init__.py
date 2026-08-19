@@ -1,3 +1,4 @@
+from .contract import manifest_sha256, require_materialized_manifest
 from .loader import (
     SPLITS_DIR,
     TEST_SPLIT_NAMES,
@@ -23,5 +24,7 @@ __all__ = [
     "finalize_split",
     "load_data",
     "load_test_data",
+    "manifest_sha256",
     "pad_collate",
+    "require_materialized_manifest",
 ]

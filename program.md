@@ -206,6 +206,8 @@ Lower is better. For paper-facing numbers, the decision-driving quantity is `tes
 
 - **VRAM**: GPUs have 96 GB. Don't OOM — meshes can reach 242K nodes.
 - **Timeout**: each training run is capped by `SENPAI_TIMEOUT_MINUTES` (wall clock) and `--epochs`. These are hard upper bounds, not target durations; choose debug, screening, or longer confirmation runs according to the evidence needed. Do not override these limits.
+- **Evaluation identity**: when set, `WANDB_RUN_GROUP` is the authoritative W&B group and `SENPAI_TRIAL_SEED` is the authoritative random seed. Keep the logged group, trial index, seed, source hash, split-manifest hash, and full held-out test metrics intact. A scored run must execute from a clean committed worktree, and the submitted result commit must equal its W&B `git_commit`. Put any later cleanup in a separate PR.
+- **Materialized-data identity**: `data/prepare_splits.py` records the exact checked-in split-manifest SHA-256 in the PVC `meta.json`. Training must fail before loading data when that digest or a materialized split count differs. Rerun the preparation script after any manifest change.
 - **Simplicity**: all else being equal, simpler is better. A small improvement that adds ugly complexity is not worth it.
 - **Data loaders are read-only.** Don't change the interface in `data/`. If you need a different sampler or feature transform, do it in `train.py`.
 - **No new packages** outside of `pyproject.toml`. If you need one, add it in the same PR that uses it.

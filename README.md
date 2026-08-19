@@ -71,10 +71,14 @@ python train.py [--debug] [--epochs 50] [--agent <name>] [--wandb_name <name>]
 
 The trainer logs per-epoch metrics to W&B and prints a per-split MAE breakdown to the console every epoch. At the end of the run it loads the best checkpoint (selected on `val_avg/mae_surf_p`) and evaluates it on the four held-out test splits, logging `test_avg/mae_surf_p` plus per-split per-channel MAEs.
 
+`data/prepare_splits.py` records the checked-in `data/split_manifest.json` SHA-256 in the materialized `meta.json`. Training fails before loading data when that digest or any materialized split count is stale; rerun the preparation command after changing the manifest.
+
 Environment:
 
-- `SENPAI_TIMEOUT_MINUTES` — wall-clock cap (default 30)
+- `SENPAI_TIMEOUT_MINUTES` — positive wall-clock cap (default 30); a watchdog exits the process with status 124 at the limit
 - `WANDB_ENTITY`, `WANDB_PROJECT`, `WANDB_MODE` — W&B routing
+- `WANDB_RUN_GROUP` — authoritative W&B group when set; it overrides `--wandb_group`
+- `SENPAI_TRIAL_INDEX`, `SENPAI_TRIAL_SEED` — evaluation-trial identity and reproducible seed
 
 ## Investigation: SENPAI Students vs KAgent Competition
 

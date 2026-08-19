@@ -17,11 +17,24 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
+
+from eval_runtime import (
+    apply_torch_seed,
+    arm_hard_timeout,
+    is_complete_test_result,
+    resolve_trial_seed,
+    resolve_wandb_group,
+    timeout_minutes_from_env,
+)
+
+MAX_TIMEOUT_MIN = timeout_minutes_from_env()
+hard_timeout = arm_hard_timeout(MAX_TIMEOUT_MIN)
 
 import simple_parsing as sp
 import torch
@@ -44,6 +57,7 @@ from data import (
     load_data,
     load_test_data,
     pad_collate,
+    require_materialized_manifest,
 )
 
 # ---------------------------------------------------------------------------
@@ -272,14 +286,28 @@ def _sanitize_artifact_token(s: str) -> str:
     return out.strip("-_.") or "run"
 
 
-def _git_commit_short() -> str:
+def _git_commit() -> str:
     try:
         return subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
+            ["git", "rev-parse", "HEAD"],
             stderr=subprocess.DEVNULL, text=True,
         ).strip() or "unknown"
     except (subprocess.CalledProcessError, FileNotFoundError):
         return "unknown"
+
+
+def _git_is_dirty() -> bool | None:
+    try:
+        return bool(subprocess.check_output(
+            ["git", "status", "--porcelain"],
+            stderr=subprocess.DEVNULL, text=True,
+        ).strip())
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+
+def _file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def save_model_artifact(
@@ -317,7 +345,7 @@ def save_model_artifact(
         "agent": cfg.agent,
         "wandb_name": cfg.wandb_name,
         "wandb_group": cfg.wandb_group,
-        "git_commit": _git_commit_short(),
+        "git_commit": _git_commit(),
         "n_params": n_params,
         "model_config": model_config,
         "best_epoch": best_metrics["epoch"],
@@ -370,9 +398,6 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 # Training
 # ---------------------------------------------------------------------------
 
-DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
-
-
 @dataclass
 class Config:
     lr: float = 5e-4
@@ -381,7 +406,8 @@ class Config:
     surf_weight: float = 10.0
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
-    wandb_group: str | None = os.environ.get("WANDB_RUN_GROUP")
+    seed: int = 1337
+    wandb_group: str | None = None
     wandb_name: str | None = None
     agent: str | None = None
     debug: bool = False
@@ -389,12 +415,17 @@ class Config:
 
 
 cfg = sp.parse(Config)
+cfg.wandb_group = resolve_wandb_group(cfg.wandb_group)
+cfg.seed = resolve_trial_seed(cfg.seed)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
-MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
+
+apply_torch_seed(torch, cfg.seed)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
+split_manifest = Path(__file__).parent / "data" / "split_manifest.json"
+materialized_manifest_sha256 = require_materialized_manifest(cfg.splits_dir, split_manifest)
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
@@ -434,15 +465,59 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
+wandb_entity = os.environ.get("WANDB_ENTITY")
+wandb_project = os.environ.get("WANDB_PROJECT")
+scoring_source = Path(__file__).parent / "data" / "scoring.py"
+loader_source = Path(__file__).parent / "data" / "loader.py"
 run = wandb.init(
-    entity=os.environ.get("WANDB_ENTITY"),
-    project=os.environ.get("WANDB_PROJECT"),
+    entity=wandb_entity,
+    project=wandb_project,
     group=cfg.wandb_group,
     name=cfg.wandb_name,
-    tags=[cfg.agent] if cfg.agent else [],
+    tags=[
+        *([cfg.agent] if cfg.agent else []),
+        "debug" if cfg.debug else "full-training",
+        "test-skipped" if cfg.skip_test else "held-out-test",
+    ],
     config={
         **asdict(cfg),
+        "wandb_entity": wandb_entity,
+        "wandb_project": wandb_project,
+        "wandb_run_group": cfg.wandb_group,
+        "senpai_timeout_minutes": MAX_TIMEOUT_MIN,
+        "senpai_trial_index": int(os.environ.get("SENPAI_TRIAL_INDEX", "0")),
+        "senpai_trial_seed": cfg.seed,
+        "git_commit": _git_commit(),
+        "git_dirty": _git_is_dirty(),
+        "training_source_sha256": _file_sha256(Path(__file__)),
+        "split_manifest_sha256": _file_sha256(split_manifest),
+        "materialized_split_manifest_sha256": materialized_manifest_sha256,
+        "data_contract_satisfied": True,
+        "scoring_source_sha256": _file_sha256(scoring_source),
+        "loader_source_sha256": _file_sha256(loader_source),
+        "torch_version": torch.__version__,
+        "cuda_version": torch.version.cuda,
+        "device": str(device),
+        "device_name": torch.cuda.get_device_name(device) if device.type == "cuda" else "cpu",
+        "metric_contract": {
+            "primary": "test_avg/mae_surf_p",
+            "selection": "val_avg/mae_surf_p",
+            "direction": "minimize",
+            "test_splits": list(TEST_SPLIT_NAMES),
+        },
         "model_config": model_config,
+        "optimizer_config": {
+            "name": type(optimizer).__name__,
+            "lr": optimizer.defaults["lr"],
+            "betas": list(optimizer.defaults["betas"]),
+            "eps": optimizer.defaults["eps"],
+            "weight_decay": optimizer.defaults["weight_decay"],
+        },
+        "scheduler_config": {
+            "name": type(scheduler).__name__,
+            "t_max": scheduler.T_max,
+            "eta_min": scheduler.eta_min,
+        },
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
@@ -499,7 +574,15 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         optimizer.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/vol_loss": vol_loss.item(),
+            "train/surf_loss": surf_loss.item(),
+            "train/epoch": epoch + 1,
+            "runtime/elapsed_seconds": time.time() - train_start,
+            "lr": scheduler.get_last_lr()[0],
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -559,6 +642,8 @@ total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
 # --- Test evaluation + artifact upload ---
+test_metrics = None
+test_avg = None
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
     wandb.summary.update({
@@ -570,8 +655,6 @@ if best_metrics:
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
 
-    test_metrics = None
-    test_avg = None
     if not cfg.skip_test:
         print("\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
@@ -596,6 +679,12 @@ if best_metrics:
             test_log[f"test_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
+        wandb.summary.update({
+            "eval/primary_metric": test_avg["avg/mae_surf_p"],
+            "eval/primary_metric_name": "test_avg/mae_surf_p",
+            "eval/primary_metric_direction": "minimize",
+            "eval/full_test_splits": len(test_metrics),
+        })
 
     save_model_artifact(
         run=run,
@@ -612,4 +701,14 @@ if best_metrics:
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping artifact upload.")
 
+complete_test_result = is_complete_test_result(test_metrics, test_avg, TEST_SPLIT_NAMES)
+wandb.summary.update({
+    "eval/completed": complete_test_result,
+    "eval/data_contract_satisfied": True,
+    "eval/ranking_eligible": complete_test_result and not cfg.debug and not cfg.skip_test,
+    "eval/full_test_splits": len(test_metrics or {}),
+    "runtime/total_minutes": total_time,
+    "runtime/timeout_minutes": MAX_TIMEOUT_MIN,
+})
 wandb.finish()
+hard_timeout.cancel()

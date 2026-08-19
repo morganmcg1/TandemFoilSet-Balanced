@@ -22,6 +22,7 @@ Output on PVC:
   └── meta.json
 """
 
+import hashlib
 import json
 import math
 from dataclasses import dataclass
@@ -201,9 +202,11 @@ def compute_stats(train_dir: Path) -> dict:
 args = sp.parse(Args)
 data_root = Path(args.data_root)
 out_dir = Path(args.out_dir)
+manifest_path = Path(args.manifest)
+manifest_digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
 
 console.rule("Loading manifest")
-with open(args.manifest) as f:
+with open(manifest_path) as f:
     manifest = json.load(f)
 
 pickle_paths = [data_root / f for f in manifest["pickle_files"]]
@@ -235,6 +238,7 @@ console.print(f"  Wrote stats.json ({stats['n_train_nodes']} total nodes)")
 
 console.rule("Phase 4: Write meta.json for kagglers")
 meta = {
+    "split_manifest_sha256": manifest_digest,
     "x_dim": X_DIM,
     "val_splits": val_splits,
     "test_splits": test_splits,
